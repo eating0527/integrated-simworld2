@@ -736,6 +736,20 @@ async def run_scene_task(task_id: str):
 # Sionna 無線模擬 API
 # ──────────────────────────────────────────────
 
+from app.sionna_service import SionnaLLVMError
+
+
+def _sionna_llvm_error_response(context: str, exc: Exception) -> JSONResponse:
+    logger.error(f"Sionna LLVM error ({context}): {exc}")
+    return JSONResponse(
+        {
+            "error": str(exc),
+            "error_type": "llvm_missing",
+        },
+        status_code=503,
+    )
+
+
 @app.get("/api/sionna/status")
 async def sionna_status():
     """Check if Sionna is installed and usable."""
@@ -746,6 +760,15 @@ async def sionna_status():
         from app.sionna_service import _load_sionna
         _load_sionna()
         return {"available": True, "version": getattr(sionna, "__version__", "unknown"), "llvm_path": llvm_path}
+    except SionnaLLVMError as e:
+        return {
+            "available": False,
+            "version": getattr(sionna, "__version__", None) if "sionna" in locals() else None,
+            "llvm_path": llvm_path,
+            "error": str(e),
+            "error_type": "llvm_missing",
+            "trace": traceback.format_exc(),
+        }
     except ImportError as e:
         return {"available": False, "version": None, "llvm_path": llvm_path, "error": str(e), "trace": traceback.format_exc()}
 
@@ -769,6 +792,8 @@ async def sionna_sinr_map(
         if not os.path.isfile(SINR_MAP_PATH):
             return JSONResponse({"error": "圖檔生成失敗，請查看後端 log"}, status_code=500)
         return FileResponse(SINR_MAP_PATH, media_type="image/png", filename="sinr_map.png")
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("sinr-map", e)
     except ImportError as e:
         logger.error(f"Sionna ImportError (sinr-map): {e}")
         return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
@@ -783,6 +808,8 @@ async def sionna_cfr_plot():
         if not os.path.isfile(CFR_PLOT_PATH):
             return JSONResponse({"error": "圖檔生成失敗，請查看後端 log"}, status_code=500)
         return FileResponse(CFR_PLOT_PATH, media_type="image/png", filename="cfr_plot.png")
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("cfr-plot", e)
     except ImportError:
         return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
     except Exception as e:
@@ -799,6 +826,8 @@ async def sionna_doppler():
         if not os.path.isfile(DOPPLER_PLOT_PATH):
             return JSONResponse({"error": "圖檔生成失敗，請查看後端 log"}, status_code=500)
         return FileResponse(DOPPLER_PLOT_PATH, media_type="image/png", filename="doppler_plot.png")
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("doppler", e)
     except ImportError:
         return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
     except Exception as e:
@@ -815,6 +844,8 @@ async def sionna_channel_response():
         if not os.path.isfile(CHANNEL_RESP_PATH):
             return JSONResponse({"error": "圖檔生成失敗，請查看後端 log"}, status_code=500)
         return FileResponse(CHANNEL_RESP_PATH, media_type="image/png", filename="channel_response.png")
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("channel-response", e)
     except ImportError:
         return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
     except Exception as e:

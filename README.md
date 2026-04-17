@@ -87,6 +87,20 @@ if (Test-Path .env.example) { Copy-Item .env.example .env -Force }
 cd ..
 ```
 
+### 5) 安裝 LLVM（Sionna RT / Dr.Jit 需要）
+
+Windows 執行 Sionna RT 時需要 `LLVM-C.dll`。建議用 winget 安裝：
+
+```powershell
+winget install --id LLVM.LLVM --exact --accept-package-agreements --accept-source-agreements
+```
+
+安裝後確認 DLL 存在：
+
+```powershell
+Test-Path "C:\Program Files\LLVM\bin\LLVM-C.dll"
+```
+
 ## 啟動方式
 
 ### Windows（建議）

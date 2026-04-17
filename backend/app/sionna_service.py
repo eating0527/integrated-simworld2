@@ -20,6 +20,34 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+class SionnaLLVMError(ImportError):
+    """Raised when Sionna RT cannot initialize the Dr.Jit LLVM backend."""
+
+
+def _is_llvm_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "llvm-c.dll",
+            "drjit_libllvm_path",
+            "llvm backend",
+            "llvm shared library",
+            "jitc_llvm_init",
+            "jit_init_thread_state",
+        )
+    )
+
+
+def _format_llvm_error(exc: BaseException) -> str:
+    return (
+        "Sionna RT 需要 LLVM，但找不到 LLVM-C.dll。"
+        "請安裝 LLVM，或設定 DRJIT_LIBLLVM_PATH 指向完整 DLL 路徑，"
+        r"例如 C:\Program Files\LLVM\bin\LLVM-C.dll。"
+        f"原始錯誤：{exc}"
+    )
+
 # ── 路徑設定 ────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).parent
 SCENE_DIR   = _HERE / "static" / "scenes"
@@ -106,6 +134,8 @@ def _load_sionna():
         )
         return load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, RadioMapSolver
     except ImportError as e:
+        if _is_llvm_error(e):
+            raise SionnaLLVMError(_format_llvm_error(e)) from e
         raise ImportError(
             f"sionna 套件未安裝: {e}\n"
             "請在 backend/.venv 中執行：pip install sionna sionna-rt"
@@ -239,6 +269,9 @@ async def generate_sinr_map(
         plt.close(fig)
         return _verify(output_path)
 
+    except SionnaLLVMError:
+        plt.close("all")
+        raise
     except Exception as e:
         logger.exception(f"生成 SINR Map 時出錯: {e}")
         plt.close("all")
@@ -389,6 +422,9 @@ async def generate_cfr_plot(
         plt.close(fig)
         return _verify(output_path)
 
+    except SionnaLLVMError:
+        plt.close("all")
+        raise
     except Exception as e:
         logger.exception(f"生成 CFR Plot 時出錯: {e}")
         plt.close("all")
@@ -478,6 +514,9 @@ async def generate_doppler_plot(
         plt.close(fig)
         return _verify(output_path)
 
+    except SionnaLLVMError:
+        plt.close("all")
+        raise
     except Exception as e:
         logger.exception(f"生成 Doppler Plot 時出錯: {e}")
         plt.close("all")
@@ -545,6 +584,9 @@ async def generate_channel_response(
         plt.close(fig)
         return _verify(output_path)
 
+    except SionnaLLVMError:
+        plt.close("all")
+        raise
     except Exception as e:
         logger.exception(f"生成 Channel Response Plot 時出錯: {e}")
         plt.close("all")
