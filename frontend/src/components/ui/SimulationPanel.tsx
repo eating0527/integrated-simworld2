@@ -33,6 +33,8 @@ function buildSinrUrl(params: SINRParams): string {
 export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
+  const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
+  const [overlayScene, setOverlayScene] = useState(false);
   const [status, setStatus] = useState<Record<TabKey, SimStatus>>({
     sinr:    { ...EMPTY },
     cfr:     { ...EMPTY },
@@ -66,6 +68,7 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
             map_type: key,
             cell_size: sinrParams.cell_size,
             samples_per_tx: sinrParams.samples_per_tx,
+            overlay_scene: overlayScene,
             devices: devices.map(d => ({
               name: d.name,
               role: d.role,
@@ -98,7 +101,7 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg } }));
     }
-  }, [sinrParams, sceneId, devices]);
+  }, [sinrParams, sceneId, devices, overlayScene]);
 
   const cur = status[tab];
 
@@ -237,6 +240,12 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
                     <option value={500000}>500K (~10min)</option>
                     <option value={1000000}>1M (~20min)</option>
                   </select>
+                  {tab !== 'sinr' && (
+                    <>
+                      <Label>場景輪廓</Label>
+                      <ToggleSwitch checked={overlayScene} onChange={setOverlayScene} />
+                    </>
+                  )}
                 </ParamGrid>
               </div>
             )}
@@ -272,8 +281,14 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
             )}
 
             {cur.imageUrl && (
-              <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(0,255,255,.15)', boxShadow: '0 4px 20px rgba(0,0,0,.4)' }}>
-                <img src={cur.imageUrl} alt={tab} style={{ width: '100%', display: 'block' }} onClick={() => window.open(cur.imageUrl!, '_blank')} title="點擊在新分頁開啟" />
+              <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(0,255,255,.15)', boxShadow: '0 4px 20px rgba(0,0,0,.4)' }}>
+                <img
+                  src={cur.imageUrl}
+                  alt={tab}
+                  style={{ width: '100%', display: 'block', cursor: 'zoom-in' }}
+                  onClick={() => setPreview({ url: cur.imageUrl!, title: tab.toUpperCase() })}
+                  title="點擊查看完整圖片"
+                />
               </div>
             )}
 
@@ -282,6 +297,28 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
                 按下「開始計算」以產生模擬圖
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {preview && (
+        <div className="sim-modal__overlay" onClick={() => setPreview(null)}>
+          <div className="sim-modal__content" onClick={e => e.stopPropagation()}>
+            <div className="sim-modal__header">
+              <span className="sim-modal__title">{preview.title}</span>
+              <button className="sim-modal__close" onClick={() => setPreview(null)}>×</button>
+            </div>
+            <div className="sim-modal__body">
+              <img className="sim-modal__image" src={preview.url} alt={preview.title} />
+            </div>
+            <div className="sim-modal__footer">
+              <a className="sim-modal__download" href={preview.url} download={`${preview.title.toLowerCase()}_map.png`}>
+                下載圖片
+              </a>
+              <button className="sim-modal__btn-close" onClick={() => setPreview(null)}>
+                關閉
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -313,6 +350,41 @@ function NumberInput({ value, step, min, max, onChange }: { value: number, step:
         color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12, width: '100%'
       }}
     />
+  );
+}
+
+function ToggleSwitch({ checked, onChange }: { checked: boolean, onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      aria-pressed={checked}
+      style={{
+        width: 40,
+        height: 20,
+        border: checked ? '1px solid rgba(0,255,255,.55)' : '1px solid rgba(255,255,255,.16)',
+        borderRadius: 12,
+        background: checked ? 'rgba(0, 255, 0, 0.22)' : 'rgba(255, 0, 0, 0.25)',
+        padding: 2,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: checked ? 'flex-end' : 'flex-start',
+        transition: 'all .15s',
+      }}
+      title={checked ? 'On' : 'Off'}
+    >
+      <span
+        style={{
+          width: 15,
+          height: 15,
+          borderRadius: 12,
+          background: checked ? '#0ff' : 'rgba(255,255,255,.45)',
+          boxShadow: checked ? '0 0 10px rgba(0,255,255,.45)' : 'none',
+          display: 'block',
+        }}
+      />
+    </button>
   );
 }
 

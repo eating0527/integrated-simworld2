@@ -22,12 +22,14 @@ The RadioMapSolver computes a 2D horizontal map at a given altitude (sionna_z).
 import logging
 import os
 import pathlib
+import xml.etree.ElementTree as ET
 from typing import List, Optional
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend, must be set before pyplot import
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.collections import LineCollection
 import numpy as np
 from scipy.ndimage import gaussian_filter, maximum_filter
 
@@ -66,6 +68,139 @@ def threejs_to_sionna(x: float, y: float, z: float):
     return [x, -z, y]
 
 
+def _load_scene_footprints(scene_xml_path: str) -> tuple[list[dict], Optional[tuple[float, float, float, float]]]:
+    """Load 2D mesh outlines from the PLY files referenced by the Sionna scene XML."""
+    scene_dir = pathlib.Path(scene_xml_path).resolve().parent
+    footprints: list[dict] = []
+    bounds: Optional[list[float]] = None
+
+    try:
+        import trimesh  # type: ignore
+
+        root = ET.parse(scene_xml_path).getroot()
+        for shape in root.iter("shape"):
+            if shape.attrib.get("type") != "ply":
+                continue
+
+            filename = None
+            for child in shape:
+                if child.tag == "string" and child.attrib.get("name") == "filename":
+                    filename = child.attrib.get("value")
+                    break
+            if not filename:
+                continue
+
+            mesh_path = (scene_dir / filename).resolve()
+            if not mesh_path.exists():
+                logger.warning("Scene mesh referenced by XML was not found: %s", mesh_path)
+                continue
+
+            loaded = trimesh.load_mesh(str(mesh_path), process=False)
+            meshes = list(loaded.geometry.values()) if hasattr(loaded, "geometry") else [loaded]
+            for mesh in meshes:
+                vertices = np.asarray(getattr(mesh, "vertices", []), dtype=float)
+                if vertices.ndim != 2 or vertices.shape[0] == 0 or vertices.shape[1] < 3:
+                    continue
+
+                min_x, min_y, min_z = np.min(vertices[:, :3], axis=0)
+                max_x, max_y, max_z = np.max(vertices[:, :3], axis=0)
+                if bounds is None:
+                    bounds = [min_x, max_x, min_y, max_y]
+                else:
+                    bounds[0] = min(bounds[0], min_x)
+                    bounds[1] = max(bounds[1], max_x)
+                    bounds[2] = min(bounds[2], min_y)
+                    bounds[3] = max(bounds[3], max_y)
+
+                lines = np.empty((0, 2, 2), dtype=float)
+                edges = np.asarray(getattr(mesh, "edges_unique", []), dtype=int)
+                if edges.ndim == 2 and edges.shape[1] == 2 and edges.shape[0] > 0:
+                    lines = vertices[edges, :2]
+
+                footprints.append(
+                    {
+                        "filename": str(mesh_path.relative_to(scene_dir)),
+                        "bounds": (float(min_x), float(max_x), float(min_y), float(max_y)),
+                        "height": float(max_z - min_z),
+                        "lines": lines,
+                    }
+                )
+    except Exception:
+        logger.exception("Failed to load scene footprints for map overlay")
+
+    if bounds is None:
+        return footprints, None
+    return footprints, (float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3]))
+
+
+def _coord_edges(coords: np.ndarray, fallback_step: float) -> tuple[float, float]:
+    """Convert sorted cell-center coordinates into image-edge coordinates."""
+    coords = np.asarray(coords, dtype=float)
+    if coords.size == 0:
+        return 0.0, float(fallback_step)
+    if coords.size == 1:
+        half = max(float(fallback_step), 1.0) / 2.0
+        return float(coords[0] - half), float(coords[0] + half)
+
+    diffs = np.abs(np.diff(coords))
+    diffs = diffs[diffs > 0]
+    step = float(np.median(diffs)) if diffs.size else max(float(fallback_step), 1.0)
+    half = step / 2.0
+    return float(coords[0] - half), float(coords[-1] + half)
+
+
+def _expand_bounds(bounds: tuple[float, float, float, float], padding_ratio: float = 0.02) -> tuple[float, float, float, float]:
+    min_x, max_x, min_y, max_y = bounds
+    span = max(max_x - min_x, max_y - min_y, 1.0)
+    pad = span * padding_ratio
+    return min_x - pad, max_x + pad, min_y - pad, max_y + pad
+
+
+def _draw_scene_footprints(ax, footprints: list[dict]) -> None:
+    """Overlay ground/building outlines so the generated map shows full scene context."""
+    for footprint in sorted(footprints, key=lambda item: item["height"] > 0.25):
+        min_x, max_x, min_y, max_y = footprint["bounds"]
+        is_ground = footprint["height"] <= 0.25
+
+        if is_ground:
+            rect = mpatches.Rectangle(
+                (min_x, min_y),
+                max_x - min_x,
+                max_y - min_y,
+                fill=False,
+                edgecolor="white",
+                linewidth=1.2,
+                alpha=0.65,
+                zorder=2,
+            )
+            ax.add_patch(rect)
+            continue
+
+        lines = footprint["lines"]
+        if isinstance(lines, np.ndarray) and lines.size:
+            ax.add_collection(
+                LineCollection(
+                    lines,
+                    colors="white",
+                    linewidths=0.35,
+                    alpha=0.55,
+                    zorder=3,
+                )
+            )
+        else:
+            rect = mpatches.Rectangle(
+                (min_x, min_y),
+                max_x - min_x,
+                max_y - min_y,
+                fill=False,
+                edgecolor="white",
+                linewidth=0.5,
+                alpha=0.55,
+                zorder=3,
+            )
+            ax.add_patch(rect)
+
+
 # ---------------------------------------------------------------------------
 # Core map generation
 # ---------------------------------------------------------------------------
@@ -95,6 +230,7 @@ def generate_maps(
     cfar_min_distance: int = 3,
     cfar_threshold_percentile: float = 99.5,
     frequency_hz: float = 1.5e9,
+    overlay_scene: bool = False,
 ) -> str:
     """
     Run Sionna RadioMapSolver and generate the requested map type.
@@ -125,6 +261,20 @@ def generate_maps(
     ) = _import_sionna()
 
     os.makedirs(output_dir, exist_ok=True)
+    scene_footprints: list[dict] = []
+    scene_bounds = None
+    if overlay_scene:
+        scene_footprints, scene_bounds = _load_scene_footprints(scene_xml_path)
+
+    if overlay_scene and scene_bounds is not None:
+        logger.info(
+            "Loaded %d scene footprint mesh(es), scene bounds x=[%.1f, %.1f], y=[%.1f, %.1f]",
+            len(scene_footprints),
+            scene_bounds[0],
+            scene_bounds[1],
+            scene_bounds[2],
+            scene_bounds[3],
+        )
 
     # -----------------------------------------------------------------------
     # Separate devices by role
@@ -285,34 +435,65 @@ def generate_maps(
     # -----------------------------------------------------------------------
     # Plot
     # -----------------------------------------------------------------------
-    # Compute aspect ratio from actual data extent to avoid matplotlib
-    # cropping to half the figure when map is not square
-    x_range = abs(x_coords[-1] - x_coords[0]) or 1
-    y_range = abs(y_coords[-1] - y_coords[0]) or 1
+    # Use cell edges, not cell centers, so the outer half-cell is not clipped.
+    heatmap_x_min, heatmap_x_max = _coord_edges(x_coords, cell_size)
+    heatmap_y_min, heatmap_y_max = _coord_edges(y_coords, cell_size)
+
+    # Use the union of the radio-map extent, optional scene footprint, and device points.
+    plot_min_x, plot_max_x = heatmap_x_min, heatmap_x_max
+    plot_min_y, plot_max_y = heatmap_y_min, heatmap_y_max
+    if overlay_scene and scene_bounds is not None:
+        plot_min_x = min(plot_min_x, scene_bounds[0])
+        plot_max_x = max(plot_max_x, scene_bounds[1])
+        plot_min_y = min(plot_min_y, scene_bounds[2])
+        plot_max_y = max(plot_max_y, scene_bounds[3])
+
+    device_xy = [
+        threejs_to_sionna(d["x"], d["y"], d["z"])[:2]
+        for d in [*tx_devices, *jam_devices, rx]
+    ]
+    for x_val, y_val in device_xy:
+        plot_min_x = min(plot_min_x, x_val)
+        plot_max_x = max(plot_max_x, x_val)
+        plot_min_y = min(plot_min_y, y_val)
+        plot_max_y = max(plot_max_y, y_val)
+
+    plot_min_x, plot_max_x, plot_min_y, plot_max_y = _expand_bounds(
+        (plot_min_x, plot_max_x, plot_min_y, plot_max_y)
+    )
+    x_range = abs(plot_max_x - plot_min_x) or 1
+    y_range = abs(plot_max_y - plot_min_y) or 1
     fig_w = 9
     fig_h = max(6, fig_w * y_range / x_range)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     im = ax.imshow(
         data,
         origin="lower",
-        aspect="auto",
+        aspect="equal",
         cmap=cmap,
-        extent=[x_coords[0], x_coords[-1], y_coords[0], y_coords[-1]],
+        alpha=0.88,
+        zorder=1,
+        extent=[heatmap_x_min, heatmap_x_max, heatmap_y_min, heatmap_y_max],
     )
+    if overlay_scene:
+        _draw_scene_footprints(ax, scene_footprints)
     plt.colorbar(im, ax=ax, label=cbar_label)
     ax.set_title(title, fontsize=13)
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
+    ax.set_xlim(plot_min_x, plot_max_x)
+    ax.set_ylim(plot_min_y, plot_max_y)
+    ax.set_aspect("equal", adjustable="box")
 
     # Mark TX, Jammer, RX positions on the map
     for d in tx_devices:
         ps = threejs_to_sionna(d["x"], d["y"], d["z"])
-        ax.plot(ps[0], ps[1], "b^", markersize=10, label="TX")
+        ax.plot(ps[0], ps[1], "b^", markersize=10, label="TX", zorder=5)
     for d in jam_devices:
         ps = threejs_to_sionna(d["x"], d["y"], d["z"])
-        ax.plot(ps[0], ps[1], "rs", markersize=10, label="Jammer")
+        ax.plot(ps[0], ps[1], "rs", markersize=10, label="Jammer", zorder=5)
     rx_ps = threejs_to_sionna(rx["x"], rx["y"], rx["z"])
-    ax.plot(rx_ps[0], rx_ps[1], "g*", markersize=12, label="RX (UAV)")
+    ax.plot(rx_ps[0], rx_ps[1], "g*", markersize=12, label="RX (UAV)", zorder=5)
 
     # Overlay CFAR peaks
     if map_type == "cfar" and peak_coords_list:
@@ -324,6 +505,7 @@ def generate_maps(
                     "cx",
                     markersize=12,
                     markeredgewidth=2,
+                    zorder=6,
                     label="CFAR Peak",
                 )
 

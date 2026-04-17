@@ -868,6 +868,7 @@ class SimulateRequest(BaseModel):
     map_type: str
     cell_size: float = Field(default=4.0, gt=0)
     samples_per_tx: int = Field(default=1000000, ge=10000)
+    overlay_scene: bool = Field(default=False)
     devices: List[DeviceIn]
 
 @app.post("/api/simulate")
@@ -898,8 +899,8 @@ async def simulate(req: SimulateRequest):
     ]
 
     logger.info(
-        "Simulation request: scene=%s, map_type=%s, devices=%d",
-        req.scene, req.map_type, len(devices_dicts),
+        "Simulation request: scene=%s, map_type=%s, devices=%d, overlay_scene=%s",
+        req.scene, req.map_type, len(devices_dicts), req.overlay_scene,
     )
 
     try:
@@ -915,6 +916,7 @@ async def simulate(req: SimulateRequest):
             req.map_type,
             req.cell_size,
             req.samples_per_tx,
+            req.overlay_scene,
         )
     except Exception as exc:
         logger.exception("Simulation failed")
@@ -934,6 +936,7 @@ def _run_generate_maps(
     map_type: str,
     cell_size: float,
     samples_per_tx: int,
+    overlay_scene: bool,
 ) -> bytes:
     from app.sionna_service_lite import generate_maps
     return generate_maps(
@@ -944,4 +947,5 @@ def _run_generate_maps(
         map_type=map_type,
         cell_size=cell_size,
         samples_per_tx=samples_per_tx,
+        overlay_scene=overlay_scene,
     )
