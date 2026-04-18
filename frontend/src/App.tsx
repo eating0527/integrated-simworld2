@@ -164,7 +164,7 @@ export function App() {
   }, [allDevices, selectedDeviceId]);
 
   // ── UAV 位置 + 軌跡 ──────────────────────────────────────────────
-  const [uavPosition, setUavPosition] = useState<[number, number, number]>([0, 10, 0]);
+  const [uavPosition, setUavPosition] = useState<[number, number, number]>([-170, 10, 200]);
   const [uavPath, setUavPath] = useState<Array<{ x: number; y: number; z: number }>>([]);
 
   // ── 同步 UAV 位置 → DeviceStore rx（讓 ISS/SINR 模擬使用即時座標）────

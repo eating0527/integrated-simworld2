@@ -40,7 +40,7 @@ const DEFAULT_DEVICES: Device[] = [
     id: 'dev-rx-0',
     name: 'rx-0',
     role: 'rx',
-    x: -175,
+    x: -170,
     y: 10,
     z: 200,
   },

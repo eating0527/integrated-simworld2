@@ -48,8 +48,8 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
   const [sinrParams, setSinrParams] = useState<SINRParams>({
     sinr_vmin: -20,
     sinr_vmax: 40,
-    cell_size: 5.0,
-    samples_per_tx: 100000,
+    cell_size: 3.0,
+    samples_per_tx: 100000000,
   });
 
   const devices = useDeviceStore(state => state.devices);
@@ -235,10 +235,10 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
                     onChange={e => setSinrParams(p => ({ ...p, samples_per_tx: Number(e.target.value) }))}
                     style={selectStyle}
                   >
-                    <option value={10000}>10K (~30s)</option>
-                    <option value={100000}>100K (~2min)</option>
-                    <option value={500000}>500K (~10min)</option>
-                    <option value={1000000}>1M (~20min)</option>
+                    <option value={500000}>500K (less)</option>
+                    <option value={1000000}>1M (medium)</option>
+                    <option value={100000000}>100M (recommend)</option>
+                    <option value={1000000000}>1B (more)</option>
                   </select>
                   {tab !== 'sinr' && (
                     <>

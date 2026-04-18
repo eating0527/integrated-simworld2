@@ -778,7 +778,7 @@ async def sionna_sinr_map(
     sinr_vmin: float = Query(default=-20.0, description="SINR 色階下限 (dB)"),
     sinr_vmax: float = Query(default=40.0,  description="SINR 色階上限 (dB)"),
     cell_size: float = Query(default=2.0,   description="採樣格子大小 (m)"),
-    samples_per_tx: int = Query(default=1000000, description="每個 TX 的採樣數"),
+    samples_per_tx: int = Query(default=100000000, description="每個 TX 的採樣數"),
 ):
     """Generate SINR coverage map and return the PNG."""
     try:
@@ -878,7 +878,7 @@ class SimulateRequest(BaseModel):
     scene: str
     map_type: str
     cell_size: float = Field(default=4.0, gt=0)
-    samples_per_tx: int = Field(default=1000000, ge=10000)
+    samples_per_tx: int = Field(default=100000000, ge=10000)
     overlay_scene: bool = Field(default=False)
     devices: List[DeviceIn]
 
