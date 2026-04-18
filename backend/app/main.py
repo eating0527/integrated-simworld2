@@ -855,6 +855,11 @@ import asyncio
 from fastapi import HTTPException
 from fastapi.responses import Response
 
+DEFAULT_POWER_DBM_BY_ROLE = {
+    "tx": 80.0,
+    "jammer": 80.0,
+}
+
 class DeviceIn(BaseModel):
     name: str
     role: str
@@ -862,6 +867,12 @@ class DeviceIn(BaseModel):
     y: float
     z: float
     power_dbm: Optional[float] = Field(default=None)
+
+
+def _device_power_dbm(device: DeviceIn) -> Optional[float]:
+    if device.power_dbm is not None:
+        return device.power_dbm
+    return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
 
 class SimulateRequest(BaseModel):
     scene: str
@@ -886,17 +897,19 @@ async def simulate(req: SimulateRequest):
     output_dir = str(BASE_DIR / "static" / "maps" / req.scene.lower())
     os.makedirs(output_dir, exist_ok=True)
 
-    devices_dicts = [
-        {
+    devices_dicts = []
+    for d in req.devices:
+        power_dbm = _device_power_dbm(d)
+        device_payload = {
             "name": d.name,
             "role": d.role,
             "x": d.x,
             "y": d.y,
             "z": d.z,
-            **({"power_dbm": d.power_dbm} if d.power_dbm is not None else {}),
         }
-        for d in req.devices
-    ]
+        if power_dbm is not None:
+            device_payload["power_dbm"] = power_dbm
+        devices_dicts.append(device_payload)
 
     logger.info(
         "Simulation request: scene=%s, map_type=%s, devices=%d, overlay_scene=%s",

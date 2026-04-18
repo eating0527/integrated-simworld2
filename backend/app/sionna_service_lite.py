@@ -35,6 +35,9 @@ from scipy.ndimage import gaussian_filter, maximum_filter
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TX_POWER_DBM = 80.0
+DEFAULT_JAM_POWER_DBM = 80.0
+
 # ---------------------------------------------------------------------------
 # Optional heavy imports — deferred so the module can still be imported for
 # type-checking even when Sionna / TF are not installed.
@@ -313,7 +316,7 @@ def generate_maps(
 
     for i, d in enumerate(tx_devices):
         pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
-        power = d.get("power_dbm", 20)
+        power = d.get("power_dbm", DEFAULT_TX_POWER_DBM)
         tx = SionnaTransmitter(
             name=d["name"],
             position=pos_sionna,
@@ -328,7 +331,7 @@ def generate_maps(
 
     for i, d in enumerate(jam_devices):
         pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
-        power = d.get("power_dbm", 10)
+        power = d.get("power_dbm", DEFAULT_JAM_POWER_DBM)
         jammer = SionnaTransmitter(
             name=d["name"],
             position=pos_sionna,

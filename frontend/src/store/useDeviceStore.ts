@@ -17,32 +17,41 @@ function countByRole(devices: Device[], role: DeviceRole): number {
   return devices.filter((d) => d.role === role).length;
 }
 
+const DEFAULT_TX_POWER_DBM = 80;
+const DEFAULT_JAM_POWER_DBM = 80;
+
+function defaultPowerDbm(role: DeviceRole): number | undefined {
+  if (role === 'tx') return DEFAULT_TX_POWER_DBM;
+  if (role === 'jammer') return DEFAULT_JAM_POWER_DBM;
+  return undefined;
+}
+
 const DEFAULT_DEVICES: Device[] = [
   {
     id: 'dev-tx-0',
     name: 'tx-0',
     role: 'tx',
-    x: 150,
+    x: -190,
     y: 0,
-    z: 150,
-    powerDbm: 20,
+    z: 130,
+    powerDbm: DEFAULT_TX_POWER_DBM,
   },
   {
     id: 'dev-rx-0',
     name: 'rx-0',
     role: 'rx',
-    x: 0,
-    y: 40,
-    z: 0,
+    x: -175,
+    y: 10,
+    z: 200,
   },
   {
     id: 'dev-jam-0',
     name: 'jam-0',
     role: 'jammer',
-    x: -150,
+    x: -275,
     y: 0,
-    z: -150,
-    powerDbm: 10,
+    z: 185,
+    powerDbm: DEFAULT_JAM_POWER_DBM,
   },
 ];
 
@@ -53,6 +62,7 @@ export const useDeviceStore = create<DeviceStore>((set) => ({
     set((state) => {
       const count = countByRole(state.devices, role);
       const prefix = role === 'tx' ? 'tx' : role === 'rx' ? 'rx' : 'jam';
+      const powerDbm = defaultPowerDbm(role);
       const newDevice: Device = {
         id: genId(),
         name: `${prefix}-${count}`,
@@ -60,7 +70,7 @@ export const useDeviceStore = create<DeviceStore>((set) => ({
         x: 0,
         y: 0,
         z: 0,
-        powerDbm: role === 'tx' ? 20 : 10,
+        ...(powerDbm !== undefined ? { powerDbm } : {}),
       };
       return { devices: [...state.devices, newDevice] };
     });

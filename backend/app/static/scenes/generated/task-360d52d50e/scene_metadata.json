@@ -1,0 +1,98 @@
+{
+  "scene_name": "picked_2026-04-18_05_49_20",
+  "lat": 24.973609735832184,
+  "lon": 121.40441894531251,
+  "zoom": 17,
+  "status": "completed",
+  "blosm_layers": {
+    "buildings": true,
+    "highways": true,
+    "railways": true,
+    "water": false,
+    "forests": false,
+    "vegetation": false
+  },
+  "blosm_mode": "3Dsimple",
+  "osm_server_used": "private.coffee",
+  "bbox_mode": "strict_zoom_tiles",
+  "bbox_span_tiles": 2.6,
+  "bbox_min_lat_used": 24.970373153686523,
+  "bbox_max_lat_used": 24.97684669494629,
+  "bbox_min_lon_used": 121.40084838867188,
+  "bbox_max_lon_used": 121.40798950195312,
+  "osm_server_attempts": [
+    "private.coffee",
+    "overpass-api.de",
+    "vk maps"
+  ],
+  "excluded_layer_detected": {
+    "water": 0,
+    "forests": 0,
+    "vegetation": 0
+  },
+  "excluded_layer_removed": {
+    "water": 0,
+    "forests": 0,
+    "vegetation": 0
+  },
+  "basemap_fit_mode": "geo_bbox_single_image",
+  "basemap_scale_mode": "geo_bbox_meters",
+  "imported_bounds_xy": {
+    "min_x": -367.5309753417969,
+    "max_x": 310.56597900390625,
+    "min_y": -357.29010009765625,
+    "max_y": 547.8341064453125,
+    "width": 678.0969543457031,
+    "height": 905.1242065429688
+  },
+  "basemap_applied_size": [
+    1585.370356427053,
+    1585.3961486816409
+  ],
+  "basemap_cover_padding": 2.2,
+  "basemap_tile_strategy": "single_image_bbox",
+  "geo_bbox_world_size": [
+    720.622889285024,
+    720.6346130371094
+  ],
+  "generation_quality": "quality",
+  "basemap_tile_count": 1,
+  "basemap_size_mode": "strict_zoom_bbox",
+  "basemap_tiles": [
+    {
+      "x": 109738,
+      "y": 56141,
+      "zoom": 17,
+      "source": "satellite_export",
+      "url": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=121.40084838867188,24.970373153686523,121.40798950195312,24.97684669494629&bboxSR=4326&imageSR=4326&size=1280,1280&format=png32&f=image",
+      "file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\generated\\task-360d52d50e\\osm_basemap_bbox_17.png",
+      "geo_bounds": {
+        "min_lat": 24.970373153686523,
+        "max_lat": 24.97684669494629,
+        "min_lon": 121.40084838867188,
+        "max_lon": 121.40798950195312
+      }
+    }
+  ],
+  "basemap_tile_url": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=121.40084838867188,24.970373153686523,121.40798950195312,24.97684669494629&bboxSR=4326&imageSR=4326&size=1280,1280&format=png32&f=image",
+  "basemap_tile_source": "satellite_export",
+  "basemap_tile_zoom": 17,
+  "basemap_tile_x": 109738,
+  "basemap_tile_y": 56141,
+  "basemap_tile_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\generated\\task-360d52d50e\\osm_basemap_bbox_17.png",
+  "glb_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\generated\\task-360d52d50e\\scene.glb",
+  "blend_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\generated\\task-360d52d50e\\scene.blend",
+  "blosm_enabled": true,
+  "import_result": [
+    "FINISHED"
+  ],
+  "import_error": null,
+  "objects_before": 2,
+  "objects_after": 22,
+  "objects_imported": 20,
+  "meshes_before": 0,
+  "meshes_after": 2,
+  "meshes_imported": 2,
+  "basemap_added": true,
+  "note": "Blosm enabled and OSM import finished."
+}

@@ -12,6 +12,46 @@ interface DeviceRowProps {
   onApplyPosition?: () => void;
 }
 
+type CoordAxis = 'x' | 'y' | 'z';
+
+function isCompleteNumber(value: string): boolean {
+  return /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim());
+}
+
+function CoordinateInput({
+  axis,
+  value,
+  onChange,
+}: {
+  axis: CoordAxis;
+  value: number;
+  onChange: (axis: CoordAxis, value: number) => void;
+}) {
+  const [draft, setDraft] = React.useState(String(value));
+
+  React.useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = (next: string) => {
+    setDraft(next);
+    if (isCompleteNumber(next)) {
+      onChange(axis, Number(next));
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className="dp-input dp-input-sm"
+      value={draft}
+      onChange={(e) => commit(e.target.value)}
+      onBlur={() => setDraft(String(value))}
+    />
+  );
+}
+
 function DeviceRow({ device, onUpdate, onRemove, showPower, onApplyPosition }: DeviceRowProps) {
   return (
     <div className="dp-device-row">
@@ -35,11 +75,10 @@ function DeviceRow({ device, onUpdate, onRemove, showPower, onApplyPosition }: D
         {(['x', 'y', 'z'] as const).map((axis) => (
           <label key={axis} className="dp-coord-label">
             {axis.toUpperCase()}
-            <input
-              type="number"
-              className="dp-input dp-input-sm"
+            <CoordinateInput
+              axis={axis}
               value={device[axis]}
-              onChange={(e) => onUpdate({ [axis]: parseFloat(e.target.value) || 0 })}
+              onChange={(nextAxis, value) => onUpdate({ [nextAxis]: value })}
             />
           </label>
         ))}
