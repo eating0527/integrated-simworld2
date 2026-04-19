@@ -310,6 +310,8 @@ export function App() {
 
   // ── 目前 GPS（供 HUD 顯示）────────────────────────────────────────
   const currentGPS = isMobile && localGPS.lat !== 0 ? localGPS : null;
+  const simulationSceneId = usePickedScene ? generatedScene.sceneKey : sceneId;
+  const simulationUsesGeneratedScene = usePickedScene;
 
   // ── Render ────────────────────────────────────────────────────────
   return (
@@ -379,7 +381,12 @@ export function App() {
       />
 
       {/* Sionna 無線模擬面板（電腦端） */}
-      {!isMobile && <SimulationPanel sceneId={sceneId} />}
+      {!isMobile && (
+        <SimulationPanel
+          sceneId={simulationSceneId}
+          generatedScene={simulationUsesGeneratedScene}
+        />
+      )}
 
       {/* 場景切換器 */}
       {!isMobile && (

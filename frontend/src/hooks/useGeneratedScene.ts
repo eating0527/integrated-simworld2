@@ -6,6 +6,7 @@ interface GeneratedSceneState {
   taskId: string | null;
   status: 'idle' | 'polling' | 'completed' | 'failed';
   modelPath: string | null;
+  sceneKey: string | null;
   sceneMetadata: Record<string, any> | null;
   pickedPlaceName: string | null;
   error: string | null;
@@ -22,6 +23,7 @@ export function useGeneratedScene() {
     taskId: null,
     status: 'idle',
     modelPath: null,
+    sceneKey: null,
     sceneMetadata: null,
     pickedPlaceName: null,
     error: null,
@@ -43,6 +45,7 @@ export function useGeneratedScene() {
       taskId: null,
       status: 'idle',
       modelPath: null,
+      sceneKey: null,
       sceneMetadata: null,
       pickedPlaceName: null,
       error: null,
@@ -117,13 +120,20 @@ export function useGeneratedScene() {
           if (metadataRes.ok) {
             const metadataPayload = await metadataRes.json();
             const metadata = metadataPayload?.metadata ?? null;
-            // Construct GLB path: /generated-scenes/{taskId}/scene.glb
-            const modelPath = `/generated-scenes/${state.taskId}/scene.glb`;
+            const sceneKey = task?.sceneKey ?? metadata?.scene_key ?? metadata?.sceneKey ?? null;
+            const modelPath =
+              task?.modelUrl ??
+              metadata?.model_url ??
+              metadata?.modelUrl ??
+              (sceneKey
+                ? `/generated-scenes/${sceneKey}/${sceneKey}.glb`
+                : `/generated-scenes/generated/${state.taskId}/scene.glb`);
 
             setState(prev => ({
               ...prev,
               status: 'completed',
               modelPath,
+              sceneKey,
               sceneMetadata: metadata,
               pickedPlaceName: taskPlaceName ?? prev.pickedPlaceName,
             }));

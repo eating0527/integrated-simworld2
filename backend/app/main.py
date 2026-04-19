@@ -39,7 +39,8 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
-GENERATED_SCENES_DIR = BASE_DIR / "static" / "scenes" / "generated"
+SCENE_DIR = BASE_DIR / "static" / "scenes"
+GENERATED_SCENES_DIR = SCENE_DIR / "generated"
 GENERATED_SCENES_DIR.mkdir(parents=True, exist_ok=True)
 SCENE_TASKS_LOCK = threading.Lock()
 FIXED_GENERATION_ZOOM = 17
@@ -67,7 +68,7 @@ SIMULATION_OUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/simulations", StaticFiles(directory=str(SIMULATION_OUT_DIR)), name="simulations")
 
 # 靜態檔案：動態生成場景（Blender/blosm）
-app.mount("/generated-scenes", StaticFiles(directory=str(GENERATED_SCENES_DIR)), name="generated-scenes")
+app.mount("/generated-scenes", StaticFiles(directory=str(SCENE_DIR)), name="generated-scenes")
 
 
 # ──────────────────────────────────────────────
@@ -403,11 +404,87 @@ def _update_task(task_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, An
     return None
 
 
+def _is_generated_scene_key(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    key = value.upper()
+    return (
+        len(key) == 12
+        and key.startswith("T-")
+        and all(ch in "0123456789ABCDEF" for ch in key[2:])
+    )
+
+
+def _normalize_scene_key(value: Any) -> Optional[str]:
+    if not _is_generated_scene_key(value):
+        return None
+    return str(value).upper()
+
+
+def _generate_scene_key_locked(tasks: List[Dict[str, Any]]) -> str:
+    existing = {
+        key
+        for key in (_normalize_scene_key(task.get("sceneKey")) for task in tasks)
+        if key
+    }
+    if SCENE_DIR.exists():
+        for scene_dir in SCENE_DIR.iterdir():
+            key = _normalize_scene_key(scene_dir.name)
+            if key:
+                existing.add(key)
+
+    for _ in range(20):
+        scene_key = f"T-{uuid.uuid4().hex[:10].upper()}"
+        if scene_key not in existing and not (SCENE_DIR / scene_key).exists():
+            return scene_key
+
+    raise RuntimeError("Unable to allocate a unique generated scene key after 20 attempts")
+
+
+def _task_scene_key(task: Dict[str, Any]) -> Optional[str]:
+    key = _normalize_scene_key(task.get("sceneKey"))
+    if key:
+        return key
+
+    # New metadata uses snake_case. This lets old in-memory task payloads recover
+    # after Blender succeeds but before task JSON is updated.
+    key = _normalize_scene_key(task.get("scene_key"))
+    if key:
+        return key
+    return None
+
+
 def _infer_output_dir(task: Dict[str, Any]) -> Path:
     configured = task.get("outputDir")
     if configured:
         return Path(configured)
+    scene_key = _task_scene_key(task)
+    if scene_key:
+        return SCENE_DIR / scene_key
     return GENERATED_SCENES_DIR / str(task.get("id", ""))
+
+
+def _scene_artifact_paths(task: Dict[str, Any], output_dir: Path) -> Dict[str, Path]:
+    scene_key = _task_scene_key(task)
+    if scene_key:
+        return {
+            "glb": output_dir / f"{scene_key}.glb",
+            "blend": output_dir / f"{scene_key}.blend",
+            "xml": output_dir / f"{scene_key}.xml",
+        }
+    return {
+        "glb": output_dir / "scene.glb",
+        "blend": output_dir / "scene.blend",
+        "xml": output_dir / "scene.xml",
+    }
+
+
+def _artifact_url(path: Path) -> Optional[str]:
+    try:
+        rel = path.resolve().relative_to(SCENE_DIR.resolve())
+        return f"/generated-scenes/{rel.as_posix()}"
+    except Exception:
+        return None
 
 
 def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -418,7 +495,9 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
 
     output_dir = _infer_output_dir(task)
     metadata_path = output_dir / "scene_metadata.json"
-    glb_path = output_dir / "scene.glb"
+    artifact_paths = _scene_artifact_paths(task, output_dir)
+    glb_path = artifact_paths["glb"]
+    xml_path = artifact_paths["xml"]
 
     # Nothing to reconcile.
     if not metadata_path.exists() and not glb_path.exists():
@@ -440,6 +519,9 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
     if metadata.get("status") == "failed":
         inferred_status = "failed"
         inferred_error = metadata.get("import_error") or metadata.get("error")
+    elif _task_scene_key(task):
+        if metadata.get("status") == "completed" and glb_path.exists() and xml_path.exists():
+            inferred_status = "completed"
     elif glb_path.exists() or metadata.get("status") == "completed":
         inferred_status = "completed"
 
@@ -453,6 +535,11 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
         "outputDir": str(output_dir),
         "finishedAt": datetime.now().isoformat(),
     }
+    scene_key = _task_scene_key(task) or _normalize_scene_key(metadata.get("scene_key"))
+    if scene_key:
+        updates["sceneKey"] = scene_key
+        updates["modelUrl"] = _artifact_url(glb_path)
+        updates["sionnaSceneXml"] = str(xml_path)
     if inferred_status == "failed":
         updates["error"] = inferred_error or "Recovered failure from scene metadata"
     else:
@@ -467,11 +554,22 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     if not task:
         return {"success": False, "error": f"task not found: {task_id}"}
 
+    scene_key = _task_scene_key(task)
+    if not scene_key:
+        return {"success": False, "error": f"task sceneKey missing: {task_id}"}
+
+    out_dir = _infer_output_dir(task)
+    artifact_paths = _scene_artifact_paths(task, out_dir)
+
     blender_exe = _find_blender_executable()
     if not blender_exe:
         return {
             "success": False,
             "error": "Blender not found. Set BLENDER_PATH or install Blender in default path.",
+            "outputDir": str(out_dir),
+            "sceneKey": scene_key,
+            "modelUrl": _artifact_url(artifact_paths["glb"]),
+            "sionnaSceneXml": str(artifact_paths["xml"]),
         }
 
     loc = task.get("location", {})
@@ -481,7 +579,6 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     if lat is None or lon is None:
         return {"success": False, "error": "task location lat/lon missing"}
 
-    out_dir = GENERATED_SCENES_DIR / task_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     script_path = BASE_DIR / "blender_generate_scene.py"
@@ -499,6 +596,8 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
         str(zoom if zoom is not None else 16),
         "--scene-name",
         str(task.get("sceneName", "custom_scene")),
+        "--scene-key",
+        scene_key,
         "--output-dir",
         str(out_dir),
     ]
@@ -514,6 +613,9 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
             "error": f"Blender failed (exit={run.returncode}): {err[:600]}",
             "outputDir": str(out_dir),
             "blenderPath": blender_exe,
+            "sceneKey": scene_key,
+            "modelUrl": _artifact_url(artifact_paths["glb"]),
+            "sionnaSceneXml": str(artifact_paths["xml"]),
         }
 
     metadata_path = out_dir / "scene_metadata.json"
@@ -526,15 +628,37 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
                     "error": metadata.get("import_error") or metadata.get("error") or "Scene metadata reports failure",
                     "outputDir": str(out_dir),
                     "blenderPath": blender_exe,
+                    "sceneKey": scene_key,
+                    "modelUrl": _artifact_url(artifact_paths["glb"]),
+                    "sionnaSceneXml": str(artifact_paths["xml"]),
                 }
         except Exception:
             # If metadata can't be parsed, keep subprocess success result.
             pass
 
+    missing_artifacts = [
+        str(path)
+        for path in [artifact_paths["glb"], artifact_paths["xml"]]
+        if not path.exists()
+    ]
+    if missing_artifacts:
+        return {
+            "success": False,
+            "error": f"Blender completed but required scene artifact(s) are missing: {', '.join(missing_artifacts)}",
+            "outputDir": str(out_dir),
+            "blenderPath": blender_exe,
+            "sceneKey": scene_key,
+            "modelUrl": _artifact_url(artifact_paths["glb"]),
+            "sionnaSceneXml": str(artifact_paths["xml"]),
+        }
+
     return {
         "success": True,
         "outputDir": str(out_dir),
         "blenderPath": blender_exe,
+        "sceneKey": scene_key,
+        "modelUrl": _artifact_url(artifact_paths["glb"]),
+        "sionnaSceneXml": str(artifact_paths["xml"]),
     }
 
 
@@ -555,31 +679,31 @@ async def _process_scene_task(task_id: str):
         result = {"success": False, "error": str(exc)}
 
     if result.get("success"):
-        _update_task(
-            task_id,
-            {
-                "status": "completed",
-                "stage": "blender_generated",
-                "note": "Blender stage completed",
-                "error": None,
-                "blenderPath": result.get("blenderPath"),
-                "outputDir": result.get("outputDir"),
-                "finishedAt": datetime.now().isoformat(),
-            },
-        )
+        updates = {
+            "status": "completed",
+            "stage": "blender_generated",
+            "note": "Blender stage completed",
+            "error": None,
+            "blenderPath": result.get("blenderPath"),
+            "finishedAt": datetime.now().isoformat(),
+        }
+        for key in ("outputDir", "sceneKey", "modelUrl", "sionnaSceneXml"):
+            if result.get(key) is not None:
+                updates[key] = result.get(key)
+        _update_task(task_id, updates)
     else:
-        _update_task(
-            task_id,
-            {
-                "status": "failed",
-                "stage": "blender_generation_failed",
-                "note": "Blender stage failed",
-                "error": result.get("error"),
-                "blenderPath": result.get("blenderPath"),
-                "outputDir": result.get("outputDir"),
-                "finishedAt": datetime.now().isoformat(),
-            },
-        )
+        updates = {
+            "status": "failed",
+            "stage": "blender_generation_failed",
+            "note": "Blender stage failed",
+            "error": result.get("error"),
+            "blenderPath": result.get("blenderPath"),
+            "finishedAt": datetime.now().isoformat(),
+        }
+        for key in ("outputDir", "sceneKey", "modelUrl", "sionnaSceneXml"):
+            if result.get(key) is not None:
+                updates[key] = result.get(key)
+        _update_task(task_id, updates)
 
 
 @app.post("/api/location/select")
@@ -644,8 +768,15 @@ async def create_scene_task(req: SceneTaskCreateRequest):
     with SCENE_TASKS_LOCK:
         tasks = _read_json_list(SCENE_TASKS_JSON)
         task_id = f"task-{uuid.uuid4().hex[:10]}"
+        try:
+            scene_key = _generate_scene_key_locked(tasks)
+        except RuntimeError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        output_dir = SCENE_DIR / scene_key
+        model_url = f"/generated-scenes/{scene_key}/{scene_key}.glb"
         task = {
             "id": task_id,
+            "sceneKey": scene_key,
             "sceneName": req.scene_name,
             "status": "queued",
             "stage": "pending_blender_generation",
@@ -657,6 +788,9 @@ async def create_scene_task(req: SceneTaskCreateRequest):
                 "place_name": place_name,
                 "location_id": req.location_id,
             },
+            "outputDir": str(output_dir),
+            "modelUrl": model_url,
+            "sionnaSceneXml": str(output_dir / f"{scene_key}.xml"),
             "createdAt": datetime.now().isoformat(),
             "updatedAt": datetime.now().isoformat(),
             "note": "Task created and waiting for Blender generation.",

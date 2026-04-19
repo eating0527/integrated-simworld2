@@ -48,3 +48,6 @@ Thumbs.db
 
 # Generated simulation map images
 backend/app/static/maps/
+
+# Genrated simulation scenes
+backend/app/static/scenes/T-*

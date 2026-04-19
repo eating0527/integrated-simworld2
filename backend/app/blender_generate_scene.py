@@ -4,6 +4,7 @@ import math
 import sys
 import urllib.request
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 
 def _clamp(value, low, high):
@@ -151,12 +152,91 @@ def _world_bounds_xy(objects) -> tuple[float, float, float, float, float]:
     return min_x, max_x, min_y, max_y, min_z
 
 
+def _write_sionna_xml(scene_key: str, xml_path: Path, mesh_entries: list[dict]) -> None:
+    """Write a Mitsuba/Sionna scene XML using NTPU-compatible ITU materials."""
+    lines = [
+        '<?xml version="1.0" ?>',
+        '<scene version="2.1.0">',
+        '    <default name="spp" value="4096"/>',
+        '    <default name="resx" value="1024"/>',
+        '    <default name="resy" value="768"/>',
+        '    <integrator type="path">',
+        '        <integer name="max_depth" value="12"/>',
+        '    </integrator>',
+        '    <bsdf type="twosided" id="mat-itu_concrete">',
+        '        <bsdf type="diffuse">',
+        '            <rgb value="0.539479 0.539479 0.53948" name="reflectance"/>',
+        '        </bsdf>',
+        '    </bsdf>',
+        '    <bsdf type="twosided" id="mat-itu_marble">',
+        '        <bsdf type="diffuse">',
+        '            <rgb value="0.701101 0.644479 0.48515" name="reflectance"/>',
+        '        </bsdf>',
+        '    </bsdf>',
+        '    <bsdf type="twosided" id="mat-itu_metal">',
+        '        <bsdf type="diffuse">',
+        '            <rgb value="0.219526 0.219526 0.254152" name="reflectance"/>',
+        '        </bsdf>',
+        '    </bsdf>',
+        '    <bsdf type="twosided" id="mat-itu_wood">',
+        '        <bsdf type="diffuse">',
+        '            <rgb value="0.043 0.58 0.184" name="reflectance"/>',
+        '        </bsdf>',
+        '    </bsdf>',
+        '    <bsdf type="twosided" id="mat-itu_wet_ground">',
+        '        <bsdf type="diffuse">',
+        '            <rgb value="0.91 0.569 0.055" name="reflectance"/>',
+        '        </bsdf>',
+        '    </bsdf>',
+        '    <emitter type="constant" id="World">',
+        '        <rgb value="1.000000 1.000000 1.000000" name="radiance"/>',
+        '    </emitter>',
+        '    <sensor type="perspective" id="Camera">',
+        '        <string name="fov_axis" value="x"/>',
+        '        <float name="fov" value="42.854885"/>',
+        '        <float name="near_clip" value="0.100000"/>',
+        '        <float name="far_clip" value="10000.000000"/>',
+        '        <transform name="to_world">',
+        '            <rotate x="1" angle="0"/>',
+        '            <rotate y="1" angle="0"/>',
+        '            <rotate z="1" angle="-90"/>',
+        '            <translate value="0 0 100"/>',
+        '        </transform>',
+        '        <sampler type="independent">',
+        '            <integer name="sample_count" value="$spp"/>',
+        '        </sampler>',
+        '        <film type="hdrfilm">',
+        '            <integer name="width" value="$resx"/>',
+        '            <integer name="height" value="$resy"/>',
+        '        </film>',
+        '    </sensor>',
+    ]
+
+    for entry in mesh_entries:
+        shape_id = escape(entry["id"])
+        filename = escape(entry["filename"])
+        material = escape(entry["material"])
+        lines.extend(
+            [
+                f'    <shape type="ply" id="{shape_id}">',
+                f'        <string name="filename" value="{filename}"/>',
+                f'        <ref id="{material}" name="bsdf"/>',
+                '        <boolean name="face_normals" value="true"/>',
+                '    </shape>',
+            ]
+        )
+
+    lines.append("</scene>")
+    xml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Blender scene generation entry for map-picked tasks")
     parser.add_argument("--lat", type=float, required=True)
     parser.add_argument("--lon", type=float, required=True)
     parser.add_argument("--zoom", type=int, default=16)
     parser.add_argument("--scene-name", type=str, default="custom_scene")
+    parser.add_argument("--scene-key", type=str, default="CUSTOM")
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--basemap-style", type=str, default="satellite", choices=["satellite", "osm"])
     return parser.parse_args(argv)
@@ -166,9 +246,12 @@ def main():
     args = parse_args(sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else [])
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    scene_key = args.scene_key.upper()
 
     metadata = {
         "scene_name": args.scene_name,
+        "scene_key": scene_key,
+        "model_url": f"/generated-scenes/{scene_key}/{scene_key}.glb",
         "lat": args.lat,
         "lon": args.lon,
         "zoom": args.zoom,
@@ -223,13 +306,143 @@ def main():
         def _mesh_count() -> int:
             return sum(1 for obj in bpy.data.objects if getattr(obj, "type", None) == "MESH")
 
+        def _mesh_face_components(obj) -> list[list[int]]:
+            mesh = obj.data
+            face_indices = [poly.index for poly in mesh.polygons if len(poly.vertices) >= 3]
+            if not face_indices:
+                return []
+
+            vertex_to_faces = {}
+            for face_idx in face_indices:
+                for vertex_idx in mesh.polygons[face_idx].vertices:
+                    vertex_to_faces.setdefault(vertex_idx, set()).add(face_idx)
+
+            remaining = set(face_indices)
+            components = []
+            while remaining:
+                start = remaining.pop()
+                stack = [start]
+                component = [start]
+                while stack:
+                    current = stack.pop()
+                    for vertex_idx in mesh.polygons[current].vertices:
+                        connected = vertex_to_faces.get(vertex_idx, set())
+                        for next_face in list(connected & remaining):
+                            remaining.remove(next_face)
+                            stack.append(next_face)
+                            component.append(next_face)
+                components.append(component)
+
+            return components
+
+        def _copy_mesh_component(src_obj, face_indices: list[int], name: str):
+            mesh = src_obj.data
+            vertex_map = {}
+            vertices = []
+            faces = []
+            material_indices = []
+
+            for face_idx in face_indices:
+                poly = mesh.polygons[face_idx]
+                new_face = []
+                for old_idx in poly.vertices:
+                    if old_idx not in vertex_map:
+                        vertex_map[old_idx] = len(vertices)
+                        vertices.append(tuple(mesh.vertices[old_idx].co))
+                    new_face.append(vertex_map[old_idx])
+                if len(new_face) >= 3:
+                    faces.append(new_face)
+                    material_indices.append(poly.material_index)
+
+            if not faces:
+                return None
+
+            new_mesh = bpy.data.meshes.new(f"{name}_Mesh")
+            new_mesh.from_pydata(vertices, [], faces)
+            new_mesh.update()
+            for mat in mesh.materials:
+                new_mesh.materials.append(mat)
+            for idx, material_index in enumerate(material_indices):
+                if idx < len(new_mesh.polygons):
+                    new_mesh.polygons[idx].material_index = material_index
+
+            new_obj = bpy.data.objects.new(name, new_mesh)
+            new_obj.matrix_world = src_obj.matrix_world.copy()
+            bpy.context.collection.objects.link(new_obj)
+            return new_obj
+
+        def _building_source_objects(objects) -> list:
+            sources = [
+                obj for obj in objects
+                if getattr(obj, "type", None) == "MESH" and "building" in getattr(obj, "name", "").lower()
+            ]
+            if sources:
+                return sources
+            return [
+                obj for obj in objects
+                if getattr(obj, "type", None) == "MESH" and getattr(obj, "dimensions", None) and obj.dimensions.z > 0.5
+            ]
+
+        def _split_building_objects(objects) -> list:
+            buildings = []
+            source_objects = _building_source_objects(objects)
+            for src_obj in source_objects:
+                components = _mesh_face_components(src_obj)
+                for component in components:
+                    building = _copy_mesh_component(src_obj, component, f"Sionna_Building_{len(buildings):04d}")
+                    if building is not None:
+                        buildings.append(building)
+                try:
+                    bpy.data.objects.remove(src_obj, do_unlink=True)
+                except Exception:
+                    pass
+            return buildings
+
+        def _triangulated_faces(mesh) -> list[list[int]]:
+            triangles = []
+            for poly in mesh.polygons:
+                verts = list(poly.vertices)
+                if len(verts) == 3:
+                    triangles.append(verts)
+                elif len(verts) > 3:
+                    for idx in range(1, len(verts) - 1):
+                        triangles.append([verts[0], verts[idx], verts[idx + 1]])
+            return triangles
+
+        def _export_ascii_ply(obj, ply_path: Path) -> tuple[int, int]:
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            eval_obj = obj.evaluated_get(depsgraph)
+            mesh = eval_obj.to_mesh()
+            try:
+                vertices = [eval_obj.matrix_world @ vertex.co for vertex in mesh.vertices]
+                faces = _triangulated_faces(mesh)
+                ply_path.parent.mkdir(parents=True, exist_ok=True)
+                with ply_path.open("w", encoding="ascii", newline="\n") as fh:
+                    fh.write("ply\n")
+                    fh.write("format ascii 1.0\n")
+                    fh.write("comment Created by integrated-simworld2\n")
+                    fh.write(f"element vertex {len(vertices)}\n")
+                    fh.write("property float x\n")
+                    fh.write("property float y\n")
+                    fh.write("property float z\n")
+                    fh.write(f"element face {len(faces)}\n")
+                    fh.write("property list uchar uint vertex_indices\n")
+                    fh.write("end_header\n")
+                    for vertex in vertices:
+                        fh.write(f"{vertex.x:.9g} {vertex.y:.9g} {vertex.z:.9g}\n")
+                    for face in faces:
+                        fh.write(f"3 {face[0]} {face[1]} {face[2]}\n")
+                return len(vertices), len(faces)
+            finally:
+                eval_obj.to_mesh_clear()
+
         # Remove the default startup cube so exported scene reflects imported OSM content.
         default_cube = bpy.data.objects.get("Cube")
         if default_cube is not None:
             bpy.data.objects.remove(default_cube, do_unlink=True)
 
         # Save a basic blend file so the pipeline has a concrete artifact.
-        blend_path = out_dir / "scene.blend"
+        blend_path = out_dir / f"{scene_key}.blend"
 
         # Best-effort: enable blosm addon if available.
         blosm_enabled = False
@@ -244,6 +457,8 @@ def main():
         import_error = None
         basemap_error = None
         basemap_added = False
+        ground_object = None
+        sionna_export_error = None
         imported_mesh_objects = []
         used_min_lat = None
         used_max_lat = None
@@ -501,6 +716,7 @@ def main():
                 mat = _create_tile_material("OSM_BaseMap_Mat", tile_path)
                 ground.data.materials.clear()
                 ground.data.materials.append(mat)
+                ground_object = ground
 
                 basemap_added = True
                 metadata["basemap_fit_mode"] = "geo_bbox_single_image"
@@ -551,6 +767,7 @@ def main():
                 mat = _create_tile_material("OSM_BaseMap_Mat", tile_path)
                 ground.data.materials.clear()
                 ground.data.materials.append(mat)
+                ground_object = ground
 
                 basemap_added = True
                 metadata["basemap_fit_mode"] = "fixed_size_auto_by_zoom_fallback"
@@ -577,6 +794,56 @@ def main():
         except Exception as exc:
             basemap_error = str(exc)
 
+        sionna_mesh_entries = []
+        building_objects = []
+        try:
+            mesh_dir = out_dir / "mesh"
+            mesh_dir.mkdir(parents=True, exist_ok=True)
+
+            building_objects = _split_building_objects(imported_mesh_objects)
+
+            if ground_object is not None:
+                ground_path = mesh_dir / "ground.ply"
+                ground_vertices, ground_faces = _export_ascii_ply(ground_object, ground_path)
+                sionna_mesh_entries.append(
+                    {
+                        "id": "mesh-ground",
+                        "filename": "mesh/ground.ply",
+                        "material": "mat-itu_wet_ground",
+                        "vertices": ground_vertices,
+                        "faces": ground_faces,
+                    }
+                )
+
+            for idx, building in enumerate(building_objects):
+                building_path = mesh_dir / f"building_{idx}.ply"
+                vertex_count, face_count = _export_ascii_ply(building, building_path)
+                sionna_mesh_entries.append(
+                    {
+                        "id": f"mesh-building_{idx}",
+                        "filename": f"mesh/building_{idx}.ply",
+                        "material": "mat-itu_marble",
+                        "vertices": vertex_count,
+                        "faces": face_count,
+                    }
+                )
+
+            if ground_object is None:
+                sionna_export_error = "No ground object was available for Sionna export"
+            elif not building_objects:
+                sionna_export_error = "No building mesh objects were available for Sionna export"
+            else:
+                xml_path = out_dir / f"{scene_key}.xml"
+                _write_sionna_xml(scene_key, xml_path, sionna_mesh_entries)
+                metadata["xml_file"] = str(xml_path)
+
+            metadata["mesh_dir"] = str(mesh_dir)
+            metadata["building_count"] = len(building_objects)
+            metadata["sionna_mesh_count"] = len(sionna_mesh_entries)
+            metadata["sionna_meshes"] = sionna_mesh_entries
+        except Exception as exc:
+            sionna_export_error = str(exc)
+
         object_count_after = len(bpy.data.objects)
         mesh_count_after = _mesh_count()
 
@@ -586,7 +853,7 @@ def main():
 
         # Export to GLB format for web viewing
         try:
-            glb_path = out_dir / "scene.glb"
+            glb_path = out_dir / f"{scene_key}.glb"
             bpy.ops.export_scene.gltf(
                 filepath=str(glb_path),
                 export_format='GLB',
@@ -611,12 +878,18 @@ def main():
         metadata["basemap_added"] = basemap_added
         if basemap_error:
             metadata["basemap_error"] = basemap_error
+        if sionna_export_error:
+            metadata["sionna_export_error"] = sionna_export_error
         if blosm_error:
+            metadata["status"] = "failed"
             metadata["blosm_error"] = blosm_error
             metadata["note"] = "Blender executed, but blosm addon is unavailable or failed to enable."
         elif import_error:
             metadata["status"] = "failed"
             metadata["note"] = "Blosm enabled, but OSM import failed."
+        elif sionna_export_error:
+            metadata["status"] = "failed"
+            metadata["note"] = "Sionna scene export failed."
         elif import_result and "FINISHED" in import_result:
             metadata["note"] = "Blosm enabled and OSM import finished."
         else:
