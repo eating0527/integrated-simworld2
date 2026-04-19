@@ -80,7 +80,7 @@ if $USE_TUNNEL; then
     info "Starting Cloudflare Tunnel..."
     TOKEN="$(grep '^CLOUDFLARED_TOKEN=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2-)"
     if [[ -n "$TOKEN" ]]; then
-      "$CF_BIN" tunnel run --token "$TOKEN" \
+      "$CF_BIN" tunnel --protocol http2 run --token "$TOKEN" \
         > "$LOG_DIR/tunnel.log" 2>&1 &
     else
       "$CF_BIN" tunnel run simworld2 \

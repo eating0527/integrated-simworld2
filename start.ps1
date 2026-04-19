@@ -140,7 +140,7 @@ ingress:
 
         if ($token) {
             $tunnelJob = Start-Process -FilePath $cfBin.Source `
-                -ArgumentList "tunnel","run","--token",$token `
+                -ArgumentList "tunnel","--protocol","http2","run","--token",$token `
                 -RedirectStandardOutput $tunnelLog `
                 -RedirectStandardError  ($tunnelLog + ".err") `
                 -NoNewWindow -PassThru
