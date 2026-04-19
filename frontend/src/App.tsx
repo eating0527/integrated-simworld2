@@ -52,6 +52,11 @@ interface Photo {
   deviceId?: string | null;
 }
 
+function getInitialRxPosition(): [number, number, number] {
+  const rx = useDeviceStore.getState().devices.find((d) => d.id === 'dev-rx-0');
+  return rx ? [rx.x, rx.y, rx.z] : [0, 0, 0];
+}
+
 // ── App ─────────────────────────────────────────────────────────────
 export function App() {
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -164,7 +169,7 @@ export function App() {
   }, [allDevices, selectedDeviceId]);
 
   // ── UAV 位置 + 軌跡 ──────────────────────────────────────────────
-  const [uavPosition, setUavPosition] = useState<[number, number, number]>([-170, 10, 200]);
+  const [uavPosition, setUavPosition] = useState<[number, number, number]>(() => getInitialRxPosition());
   const [uavPath, setUavPath] = useState<Array<{ x: number; y: number; z: number }>>([]);
 
   // ── 同步 UAV 位置 → DeviceStore rx（讓 ISS/SINR 模擬使用即時座標）────
