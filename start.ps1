@@ -1,14 +1,16 @@
 # GPS Tracker startup script for Windows PowerShell
 # Usage: .\start.ps1
 #        .\start.ps1 --no-tunnel
+#        .\start.ps1 -NoAP3
 
-param([switch]$NoTunnel)
+param([switch]$NoTunnel, [switch]$NoAP3)
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir  = Join-Path $ScriptDir "backend"
 $FrontendDir = Join-Path $ScriptDir "frontend"
 $LogDir      = Join-Path $ScriptDir ".logs"
 $EnvFile     = Join-Path $ScriptDir ".env"
+$ToolsDir    = Join-Path $ScriptDir "tools"
 
 # Reload PATH so winget-installed tools are visible
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
@@ -18,6 +20,21 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 $LlvmDll = "C:\Program Files\LLVM\bin\LLVM-C.dll"
 if (-not $env:DRJIT_LIBLLVM_PATH -and (Test-Path $LlvmDll)) {
     $env:DRJIT_LIBLLVM_PATH = $LlvmDll
+}
+if (-not $env:BLENDER_PATH) {
+    foreach ($BlenderCandidate in @(
+        "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
+        "C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
+        "C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
+        "C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
+        "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe",
+        "C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"
+    )) {
+        if (Test-Path $BlenderCandidate) {
+            $env:BLENDER_PATH = $BlenderCandidate
+            break
+        }
+    }
 }
 
 function Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
@@ -58,9 +75,9 @@ if (Test-Path $EnvFile) {
 }
 
 # Preflight checks
-$uvicorn = Join-Path $BackendDir ".venv\Scripts\uvicorn.exe"
-if (-not (Test-Path $uvicorn)) {
-    Err "Missing .venv, run: cd backend; python -m venv .venv; .venv\Scripts\pip install -r requirements.txt"
+$pythonExe = Join-Path $BackendDir ".venv\Scripts\python.exe"
+if (-not (Test-Path $pythonExe)) {
+    Err "Missing .venv, run: cd backend; python -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
 }
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
@@ -88,7 +105,6 @@ if ($NoTunnel) {
 # --- Backend ---
 Info "Starting backend (port 8888)..."
 $backendLog = Join-Path $LogDir "backend.log"
-$pythonExe = Join-Path $BackendDir ".venv\Scripts\python.exe"
 # Pass DRJIT_LIBLLVM_PATH explicitly so sionna can find LLVM-C.dll
 $drjitEnv = if ($env:DRJIT_LIBLLVM_PATH) { "set `"DRJIT_LIBLLVM_PATH=$env:DRJIT_LIBLLVM_PATH`" && " } else { "" }
 $backendCmd = "`"$pythonExe`" -m uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload"
@@ -158,11 +174,44 @@ ingress:
     }
 }
 
+# --- ALIGN AP3 MAVLink bridge ---
+if (-not $NoAP3) {
+    $adbExe = Join-Path $ToolsDir "platform-tools\adb.exe"
+    $bridgeScript = Join-Path $ToolsDir "ap3_to_simulator.py"
+    if ((Test-Path $adbExe) -and (Test-Path $bridgeScript)) {
+        $adbDevices = & $adbExe devices 2>$null
+        $hasDevice = $adbDevices | Where-Object { $_ -match "`tdevice$" }
+        if ($hasDevice) {
+            Info "Starting ALIGN AP3 telemetry bridge..."
+            & $adbExe forward tcp:15760 tcp:5760 | Out-Null
+            Info "   AP3 MAVLink via USB ADB forward: tcp:127.0.0.1:15760"
+
+            $ap3Log = Join-Path $LogDir "ap3_bridge.log"
+            $ap3Args = @("-u", $bridgeScript, "--websocket-url", "ws://127.0.0.1:8888/ws/gps")
+            $ap3Job = Start-Process -FilePath $pythonExe `
+                -ArgumentList $ap3Args `
+                -WorkingDirectory $ScriptDir `
+                -RedirectStandardOutput $ap3Log `
+                -RedirectStandardError  ($ap3Log + ".err") `
+                -NoNewWindow -PassThru
+            $jobs += $ap3Job
+            Info "   AP3 bridge PID: $($ap3Job.Id)  log: .logs\ap3_bridge.log"
+        } else {
+            Warn "No authorized ADB device found, skipping AP3 bridge"
+        }
+    } else {
+        Warn "ADB or AP3 bridge script not found, skipping AP3 bridge"
+    }
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Frontend : http://localhost:5173"
 if (-not $NoTunnel) {
     Write-Host "  Public   : https://frontend.simworld.website"
+}
+if (-not $NoAP3) {
+    Write-Host "  AP3 GPS  : bridge auto-start enabled"
 }
 Write-Host "  Press Ctrl+C to stop all services"
 Write-Host "============================================" -ForegroundColor Cyan

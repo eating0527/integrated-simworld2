@@ -9,7 +9,7 @@
  *  5. 渲染 3D 場景、GPS HUD、拍照按鈕、照片歷史
  *  6. 支援動態場景加載（使用者點選地圖生成）
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MainScene } from './components/scene/MainScene';
 import { CameraUpload } from './components/ui/CameraUpload';
 import { PhotoViewer } from './components/ui/PhotoViewer';
@@ -22,6 +22,7 @@ import { SceneSwitcher } from './components/ui/SceneSwitcher';
 import { type SceneId, DEFAULT_SCENE_ID, getSceneById } from './config/scenes.config';
 import { DevicePanel } from './components/ui/DevicePanel';
 import { UAVControlPanel } from './components/ui/UAVControlPanel';
+import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 
@@ -155,13 +156,20 @@ export function App() {
 
   // ── 選定追蹤的裝置（電腦端）──────────────────────────────────────
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const aircraftEntry = useMemo(() => {
+    const entries = [...allDevices.entries()];
+    return (
+      entries.find(([id, d]) => d.deviceType === 'uav' || id.includes('m4p') || id.includes('align')) ??
+      null
+    );
+  }, [allDevices]);
 
   // 當第一個裝置上線時自動選取
   useEffect(() => {
-    if (selectedDeviceId) return;
-    const first = allDevices.keys().next().value;
+    if (selectedDeviceId && allDevices.has(selectedDeviceId)) return;
+    const first = aircraftEntry?.[0] ?? allDevices.keys().next().value;
     if (first) setSelectedDeviceId(first);
-  }, [allDevices, selectedDeviceId]);
+  }, [aircraftEntry, allDevices, selectedDeviceId]);
 
   // ── UAV 位置 + 軌跡 ──────────────────────────────────────────────
   const [uavPosition, setUavPosition] = useState<[number, number, number]>([0, 10, 0]);
@@ -349,6 +357,17 @@ export function App() {
       )}
 
       {/* GPS 狀態 HUD */}
+      {!isMobile && (
+        <AircraftTelemetry
+          deviceId={aircraftEntry?.[0] ?? null}
+          device={aircraftEntry?.[1] ?? null}
+          isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
+          onTrack={() => {
+            if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
+          }}
+        />
+      )}
+
       <GPSStatus
         myDeviceId={myDeviceId}
         deviceName={deviceName}

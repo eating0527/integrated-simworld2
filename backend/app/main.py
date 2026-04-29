@@ -374,10 +374,12 @@ def _find_blender_executable() -> Optional[str]:
 
     for candidate in [
         shutil.which("blender"),
-        r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe",
     ]:
         if candidate and Path(candidate).exists():
             return str(candidate)

@@ -15,6 +15,7 @@
   - 成功後回到 React 主頁
 - 照片上傳與歷史查看
 - Sionna 視覺化圖層查看
+- ALIGN AP3 / M4P TOP 無人機即時定位顯示
 
 ### 後端
 - FastAPI REST + WebSocket (`/ws/gps`)
@@ -27,6 +28,7 @@
   - `POST /api/scene-tasks/{task_id}/run`
 - Blender 任務狀態自動校正（避免 artifact 已生成但狀態仍 running）
 - zoom 固定策略：建立任務時後端強制 `zoom=17`
+- AP3 MAVLink bridge：透過 USB ADB forward 接無人機資料到 `/ws/gps`
 
 ### Blender / blosm 生成策略（目前）
 - 以地圖點選座標為中心建模
@@ -35,12 +37,16 @@
 - 單張 bbox 底圖輸出，避免分塊拼接痕跡
 - 可偵測並清除自然圖層殘留（如 water/lake/forest/vegetation）
 - 生成 metadata 供檢查：`basemap_*`、`bbox_*`、`excluded_layer_*`
+- 已修正 Blender 5.0 與 blosm 相容性問題，優先使用 Blender 4.2 LTS
+- 目前預設採用 blosm `3Dsimple`，穩定輸出含建築幾何的 OSM 場景
 
 ## 專案結構
 
 - `frontend/`: Vite + React + Three.js
 - `backend/`: FastAPI + Blender 任務調度
 - `backend/app/blender_generate_scene.py`: Blender 建模與底圖生成腳本
+- `tools/ap3_to_simulator.py`: ALIGN AP3 MAVLink -> 模擬器 WebSocket bridge
+- `tools/platform-tools/`: Android platform-tools / adb，本機安裝後使用
 - `start.ps1`: Windows 一鍵啟動
 - `start.sh`: Linux/macOS 啟動
 
@@ -48,9 +54,10 @@
 
 - Python 3.12+
 - Node.js 18+（建議 20+）
-- Blender（Windows 預設搜尋 5.1/4.1/4.0/3.6）
+- Blender 4.2 LTS，或能相容 blosm 的版本
 - （選用）LLVM：Sionna 在 Windows 可能需要 `LLVM-C.dll`
 - （選用）cloudflared：若要開外網 tunnel
+- Android platform-tools / ADB：若要啟用 AP3 telemetry bridge
 
 ## 安裝步驟
 
@@ -121,6 +128,8 @@ Test-Path "C:\Program Files\LLVM\bin\LLVM-C.dll"
 - Frontend: http://localhost:5173
 - Backend: http://localhost:8888
 - Backend docs: http://localhost:8888/docs
+- Public frontend: https://frontend.simworld.website
+- Public backend: https://backend.simworld.website
 
 ### Linux / macOS
 
@@ -128,6 +137,58 @@ Test-Path "C:\Program Files\LLVM\bin\LLVM-C.dll"
 bash start.sh --no-tunnel
 # 或
 bash start.sh
+```
+
+### 不啟動 AP3 bridge
+
+```powershell
+.\start.ps1 -NoAP3
+```
+
+## AP3 / M4P TOP USB 連線流程
+
+1. 遙控器用 USB 接到電腦。
+2. 遙控器上允許 USB debugging / ADB 授權。
+3. 確認 ADB 看得到裝置：
+
+```powershell
+.\tools\platform-tools\adb.exe devices
+```
+
+應該要看到類似：
+
+```text
+xxxxxxxx	device
+```
+
+4. 啟動專案：
+
+```powershell
+.\start.ps1
+```
+
+5. 檢查後端是否收到無人機資料：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8888/api/gps/devices | ConvertTo-Json -Depth 5
+```
+
+## 手動重啟 AP3 bridge
+
+如果 backend 重啟後無人機資料消失，可以手動重建 ADB forward 並重啟 bridge：
+
+```powershell
+.\tools\platform-tools\adb.exe forward tcp:15760 tcp:5760
+
+$py = (Resolve-Path backend\.venv\Scripts\python.exe).Path
+$script = (Resolve-Path tools\ap3_to_simulator.py).Path
+$logDir = (Resolve-Path .logs).Path
+
+Start-Process -FilePath $py `
+  -ArgumentList @("-u", $script, "--websocket-url", "ws://127.0.0.1:8888/ws/gps") `
+  -WorkingDirectory (Resolve-Path .).Path `
+  -RedirectStandardOutput ($logDir + "\ap3_bridge.log") `
+  -RedirectStandardError ($logDir + "\ap3_bridge.log.err")
 ```
 
 ## 實際操作流程（地圖建模）
@@ -177,6 +238,12 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | Con
   - `bbox_span_tiles`
   - `basemap_cover_padding`
   - `basemap_applied_size`
+
+### 4) blosm 沒有建築物
+- 優先確認是否使用 Blender 4.2 LTS
+- Blender 5.0 可能因為 `bgl` 缺失導致 blosm addon 失敗
+- 目前專案使用 `3Dsimple`，會有 OSM 建築幾何，但不是 realistic 材質建築
+- 如果要 realistic，需要另外安裝 blosm assets pack
 
 ## 目前開發重點
 
