@@ -23,6 +23,28 @@ def run_adb_forward(local_port: int, remote_port: int) -> None:
     )
 
 
+def has_authorized_device() -> bool:
+    if not ADB.exists():
+        return False
+
+    proc = subprocess.run(
+        [str(ADB), "devices"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    for line in proc.stdout.splitlines()[1:]:
+        if line.strip().endswith("\tdevice"):
+            return True
+    return False
+
+
+async def wait_for_device(poll_interval: float = 2.0) -> None:
+    while not has_authorized_device():
+        print("waiting for authorized ADB device...")
+        await asyncio.sleep(poll_interval)
+
+
 def gps_payload(msg, altitude_mode: str, device_id: str, device_name: str) -> dict:
     lat = msg.lat / 1e7
     lon = msg.lon / 1e7
@@ -43,52 +65,60 @@ def gps_payload(msg, altitude_mode: str, device_id: str, device_name: str) -> di
 
 
 async def bridge(args: argparse.Namespace) -> None:
-    if args.mavlink_url:
-        mav_url = args.mavlink_url
-    else:
-        run_adb_forward(args.local_port, args.remote_port)
-        mav_url = f"tcp:127.0.0.1:{args.local_port}"
-
-    mav = mavutil.mavlink_connection(mav_url, source_system=255)
-
     sent = 0
-    async with websockets.connect(args.websocket_url) as ws:
-        drain_task = asyncio.create_task(drain_incoming(ws))
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "register-device",
-                    "deviceId": args.device_id,
-                    "deviceName": args.device_name,
-                    "deviceType": "uav",
-                }
-            )
-        )
-        print(f"registered {args.device_name} -> {args.websocket_url}")
-        print(f"reading AP3 MAVLink from {mav_url}")
+    while True:
+        try:
+            if args.mavlink_url:
+                mav_url = args.mavlink_url
+            else:
+                await wait_for_device()
+                run_adb_forward(args.local_port, args.remote_port)
+                mav_url = f"tcp:127.0.0.1:{args.local_port}"
 
-        while True:
-            msg = await asyncio.to_thread(
-                mav.recv_match,
-                type="GLOBAL_POSITION_INT",
-                blocking=True,
-                timeout=2,
-            )
-            if msg is None:
-                continue
+            mav = mavutil.mavlink_connection(mav_url, source_system=255)
 
-            payload = gps_payload(msg, args.altitude, args.device_id, args.device_name)
-            await ws.send(json.dumps(payload))
-            sent += 1
+            async with websockets.connect(args.websocket_url) as ws:
+                drain_task = asyncio.create_task(drain_incoming(ws))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "register-device",
+                            "deviceId": args.device_id,
+                            "deviceName": args.device_name,
+                            "deviceType": "uav",
+                        }
+                    )
+                )
+                print(f"registered {args.device_name} -> {args.websocket_url}")
+                print(f"reading AP3 MAVLink from {mav_url}")
 
-            print(
-                f"sent #{sent}: lat={payload['lat']:.7f} "
-                f"lon={payload['lon']:.7f} alt={payload['alt']:.2f}m"
-            )
+                while True:
+                    msg = await asyncio.to_thread(
+                        mav.recv_match,
+                        type="GLOBAL_POSITION_INT",
+                        blocking=True,
+                        timeout=2,
+                    )
+                    if msg is None:
+                        continue
 
-            if args.max_messages and sent >= args.max_messages:
-                drain_task.cancel()
-                return
+                    payload = gps_payload(msg, args.altitude, args.device_id, args.device_name)
+                    await ws.send(json.dumps(payload))
+                    sent += 1
+
+                    print(
+                        f"sent #{sent}: lat={payload['lat']:.7f} "
+                        f"lon={payload['lon']:.7f} alt={payload['alt']:.2f}m"
+                    )
+
+                    if args.max_messages and sent >= args.max_messages:
+                        drain_task.cancel()
+                        return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"bridge disconnected: {exc}")
+            await asyncio.sleep(2)
 
 
 async def drain_incoming(ws) -> None:

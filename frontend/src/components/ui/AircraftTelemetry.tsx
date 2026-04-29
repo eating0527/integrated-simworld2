@@ -5,6 +5,7 @@ interface Props {
   deviceId?: string | null;
   device?: GPSDevice | null;
   isTracked: boolean;
+  compact?: boolean;
   onTrack?: () => void;
 }
 
@@ -126,11 +127,21 @@ const S: Record<string, React.CSSProperties> = {
   },
 };
 
-export function AircraftTelemetry({ deviceId, device, isTracked, onTrack }: Props) {
+export function AircraftTelemetry({ deviceId, device, isTracked, compact = false, onTrack }: Props) {
   const age = ageSeconds(device);
 
   return (
-    <div style={S.panel}>
+    <div
+      style={{
+        ...S.panel,
+        left: compact ? 12 : S.panel.left,
+        right: compact ? 12 : undefined,
+        top: compact ? 'auto' : S.panel.top,
+        bottom: compact ? 12 : undefined,
+        width: compact ? 'calc(100vw - 24px)' : S.panel.width,
+        maxWidth: compact ? 320 : undefined,
+      }}
+    >
       <div style={S.header}>
         <div style={S.title}>Aircraft Telemetry</div>
         <div style={S.pill}>

@@ -357,16 +357,15 @@ export function App() {
       )}
 
       {/* GPS 狀態 HUD */}
-      {!isMobile && (
-        <AircraftTelemetry
-          deviceId={aircraftEntry?.[0] ?? null}
-          device={aircraftEntry?.[1] ?? null}
-          isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
-          onTrack={() => {
-            if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
-          }}
-        />
-      )}
+      <AircraftTelemetry
+        deviceId={aircraftEntry?.[0] ?? null}
+        device={aircraftEntry?.[1] ?? null}
+        isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
+        compact={isMobile}
+        onTrack={() => {
+          if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
+        }}
+      />
 
       <GPSStatus
         myDeviceId={myDeviceId}

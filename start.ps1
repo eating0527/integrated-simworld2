@@ -88,6 +88,9 @@ if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $jobs = @()
+$ap3BridgeJob = $null
+$ap3BridgeScript = Join-Path $ToolsDir "ap3_to_simulator.py"
+$ap3BridgeLog = Join-Path $LogDir "ap3_bridge.log"
 
 # Ensure required ports are free before startup.
 Stop-PortListeners -Ports @(5173, 8888)
@@ -175,29 +178,46 @@ ingress:
 }
 
 # --- ALIGN AP3 MAVLink bridge ---
+function Start-Ap3Bridge {
+    param(
+        [string]$PythonExe,
+        [string]$BridgeScript,
+        [string]$WebsocketUrl,
+        [string]$WorkingDir,
+        [string]$LogPath
+    )
+
+    $bridgeArgs = @("-u", $BridgeScript, "--websocket-url", $WebsocketUrl)
+    return Start-Process -FilePath $PythonExe `
+        -ArgumentList $bridgeArgs `
+        -WorkingDirectory $WorkingDir `
+        -RedirectStandardOutput $LogPath `
+        -RedirectStandardError  ($LogPath + ".err") `
+        -NoNewWindow -PassThru
+}
+
 if (-not $NoAP3) {
     $adbExe = Join-Path $ToolsDir "platform-tools\adb.exe"
-    $bridgeScript = Join-Path $ToolsDir "ap3_to_simulator.py"
-    if ((Test-Path $adbExe) -and (Test-Path $bridgeScript)) {
-        $adbDevices = & $adbExe devices 2>$null
-        $hasDevice = $adbDevices | Where-Object { $_ -match "`tdevice$" }
-        if ($hasDevice) {
-            Info "Starting ALIGN AP3 telemetry bridge..."
+    if ((Test-Path $adbExe) -and (Test-Path $ap3BridgeScript)) {
+        Info "Starting ALIGN AP3 telemetry bridge..."
+        $ap3BridgeJob = Start-Ap3Bridge `
+            -PythonExe $pythonExe `
+            -BridgeScript $ap3BridgeScript `
+            -WebsocketUrl "ws://127.0.0.1:8888/ws/gps" `
+            -WorkingDir $ScriptDir `
+            -LogPath $ap3BridgeLog
+        $jobs += $ap3BridgeJob
+        Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
+        try {
             & $adbExe forward tcp:15760 tcp:5760 | Out-Null
             Info "   AP3 MAVLink via USB ADB forward: tcp:127.0.0.1:15760"
-
-            $ap3Log = Join-Path $LogDir "ap3_bridge.log"
-            $ap3Args = @("-u", $bridgeScript, "--websocket-url", "ws://127.0.0.1:8888/ws/gps")
-            $ap3Job = Start-Process -FilePath $pythonExe `
-                -ArgumentList $ap3Args `
-                -WorkingDirectory $ScriptDir `
-                -RedirectStandardOutput $ap3Log `
-                -RedirectStandardError  ($ap3Log + ".err") `
-                -NoNewWindow -PassThru
-            $jobs += $ap3Job
-            Info "   AP3 bridge PID: $($ap3Job.Id)  log: .logs\ap3_bridge.log"
+        } catch {
+            Warn "Initial ADB forward failed; the bridge will keep waiting and retrying."
+        }
+        if ($ap3BridgeJob.HasExited) {
+            Warn "AP3 bridge exited immediately; it will be restarted by the monitor loop."
         } else {
-            Warn "No authorized ADB device found, skipping AP3 bridge"
+            Info "   AP3 bridge auto-restart monitor enabled"
         }
     } else {
         Warn "ADB or AP3 bridge script not found, skipping AP3 bridge"
@@ -224,6 +244,25 @@ try {
         if (Test-Path $backendLog) {
             $lines = Get-Content $backendLog -Tail 3
             if ($lines) { $lines | ForEach-Object { Write-Host "[backend] $_" } }
+        }
+        if (-not $NoAP3 -and $ap3BridgeJob) {
+            if ($ap3BridgeJob.HasExited) {
+                Warn "AP3 bridge exited, restarting..."
+                try {
+                    $jobs = @($jobs | Where-Object { $_.Id -ne $ap3BridgeJob.Id })
+                } catch {
+                    $jobs = @($jobs)
+                }
+                Start-Sleep -Seconds 2
+                $ap3BridgeJob = Start-Ap3Bridge `
+                    -PythonExe $pythonExe `
+                    -BridgeScript $ap3BridgeScript `
+                    -WebsocketUrl "ws://127.0.0.1:8888/ws/gps" `
+                    -WorkingDir $ScriptDir `
+                    -LogPath $ap3BridgeLog
+                $jobs += $ap3BridgeJob
+                Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
+            }
         }
     }
 } finally {
