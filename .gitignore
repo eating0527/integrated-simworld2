@@ -45,6 +45,14 @@ Thumbs.db
 
 # Runtime-generated logs and temp files
 .logs/
+backend/.tmp/
+backend/.pip-cache/
+frontend/.npm-cache/
 
 # Generated simulation map images
 backend/app/static/maps/
+backend/app/static/scenes/generated/
+
+# Local Android platform-tools install for AP3 telemetry bridge
+tools/platform-tools/
+tools/platform-tools-latest-windows.zip

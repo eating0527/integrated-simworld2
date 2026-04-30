@@ -265,11 +265,10 @@ def main():
                 addon.commandLineMode = True
                 addon.dataType = "osm"
                 addon.osmSource = "server"
-                # Prefer a more detailed import profile for better visual completeness.
-                try:
-                    addon.mode = "3Drealistic"
-                except Exception:
-                    addon.mode = "3Dsimple"
+                # Use the base OSM 3D mode by default. "3Drealistic" requires
+                # the separate blosm assets pack (building_materials.blend,
+                # vegetation.blend), which is not guaranteed to be installed.
+                addon.mode = "3Dsimple"
 
                 addon.buildings = True
                 addon.highways = True

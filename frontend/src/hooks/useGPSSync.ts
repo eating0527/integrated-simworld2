@@ -19,7 +19,7 @@ export interface GPSDevice {
   accuracy: number;
   deviceId: string;
   deviceName: string;
-  deviceType: 'mobile' | 'desktop' | 'unknown';
+  deviceType: 'mobile' | 'desktop' | 'uav' | 'unknown';
   timestamp: number;
   lastUpdateTime: number;
 }
