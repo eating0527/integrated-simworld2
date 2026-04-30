@@ -56,3 +56,6 @@ backend/app/static/scenes/generated/
 # Local Android platform-tools install for AP3 telemetry bridge
 tools/platform-tools/
 tools/platform-tools-latest-windows.zip
+
+# Genrated simulation scenes
+backend/app/static/scenes/T-*

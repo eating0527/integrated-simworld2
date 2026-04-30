@@ -55,6 +55,8 @@
 - Python 3.12+
 - Node.js 18+（建議 20+）
 - Blender 4.2 LTS，或能相容 blosm 的版本
+- Blosm (Blender 插件)
+- Mitsuba (Blender 插件)
 - （選用）LLVM：Sionna 在 Windows 可能需要 `LLVM-C.dll`
 - （選用）cloudflared：若要開外網 tunnel
 - Android platform-tools / ADB：若要啟用 AP3 telemetry bridge
@@ -94,7 +96,16 @@ if (Test-Path .env.example) { Copy-Item .env.example .env -Force }
 cd ..
 ```
 
-### 5) 安裝 LLVM（Sionna RT / Dr.Jit 需要）
+### 5) 安裝 Blender 與插件
+
+Blender 版本支援 5.1/4.1/4.3/4.0/3.6。
+安裝成功後，下一步安裝兩個插件：
+1. Blosm: https://prochitecture.gumroad.com/l/blender-osm
+2. Mitsuba: https://github.com/mitsuba-renderer/mitsuba-blender
+
+兩個插件都安裝成功後，自動生成地圖功能才可以正常使用。
+
+### 6) 安裝 LLVM（Sionna RT / Dr.Jit 需要）
 
 Windows 執行 Sionna RT 時需要 `LLVM-C.dll`。建議用 winget 安裝：
 

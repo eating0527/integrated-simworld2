@@ -2,8 +2,11 @@ import { useRef, useEffect, useState, useMemo } from 'react'
 import { useGLTF } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-// @ts-ignore
-import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js'
+import {
+    createClipWithoutPropellerTracks,
+    createUAVSceneInstance,
+    spinPropellers,
+} from './uavModel'
 
 const HOVER_ANIMATION_Y_OFFSET = -1.28
 
@@ -46,9 +49,22 @@ export default function UAVFlight({
     const group = useRef<THREE.Group>(null)
     const lightRef = useRef<THREE.PointLight>(null)
 
-    const { scene, animations } = useGLTF(modelUrl ?? '/models/uav.glb') as any
+    const { scene, animations = [] } = useGLTF(modelUrl ?? '/models/uav.glb') as {
+        scene: THREE.Object3D
+        animations: THREE.AnimationClip[]
+    }
 
-    const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene])
+    const uavScene = useMemo(() => createUAVSceneInstance(scene), [scene])
+    const clonedScene = uavScene.scene
+    const animationClips = useMemo(
+        () =>
+            animations.map((clip) =>
+                clip.name === 'hover'
+                    ? createClipWithoutPropellerTracks(clip)
+                    : clip
+            ),
+        [animations]
+    )
 
     const [mixer, setMixer] = useState<THREE.AnimationMixer | null>(null)
     const [actions, setActions] = useState<{
@@ -360,47 +376,10 @@ export default function UAVFlight({
 
         generatePath()
 
-        if (clonedScene) {
-            clonedScene.traverse((child: THREE.Object3D) => {
-                if ((child as THREE.Mesh).isMesh) {
-                    child.castShadow = true
-                    child.receiveShadow = true
-                    const mesh = child as THREE.Mesh
-                    if (Array.isArray(mesh.material)) {
-                        mesh.material = mesh.material.map((mat) =>
-                            ensureStandardMaterial(mat)
-                        )
-                    } else {
-                        mesh.material = ensureStandardMaterial(mesh.material)
-                    }
-                }
-            })
-        }
-
         return () => {
             console.warn = originalWarning
         }
     }, [actions, clonedScene, uavAnimation])
-
-    const ensureStandardMaterial = (material: THREE.Material) => {
-        if (
-            !(material instanceof THREE.MeshStandardMaterial) &&
-            !(material instanceof THREE.MeshPhysicalMaterial)
-        ) {
-            const stdMaterial = new THREE.MeshStandardMaterial()
-            if (
-                'color' in material &&
-                (material as any).color instanceof THREE.Color
-            ) {
-                stdMaterial.color.copy((material as any).color)
-            }
-            if ('map' in material) {
-                stdMaterial.map = (material as any).map
-            }
-            return stdMaterial
-        }
-        return material
-    }
 
     function findAnimationRoot(obj: THREE.Object3D): THREE.Object3D {
         let found: THREE.Object3D | null = null
@@ -417,25 +396,25 @@ export default function UAVFlight({
     }
 
     useEffect(() => {
-        if (clonedScene && animations && animations.length > 0) {
+        if (clonedScene && animationClips.length > 0) {
             const animationRoot = findAnimationRoot(clonedScene)
             const newMixer = new THREE.AnimationMixer(animationRoot)
             const newActions: { [key: string]: THREE.AnimationAction } = {}
-            animations.forEach((clip: THREE.AnimationClip) => {
+            animationClips.forEach((clip: THREE.AnimationClip) => {
                 newActions[clip.name] = newMixer.clipAction(clip)
             })
             setMixer(newMixer)
             setActions(newActions)
         }
-    }, [clonedScene, animations])
+    }, [clonedScene, animationClips])
 
     useEffect(() => {
-        if (mixer && animations && animations.length > 0 && clonedScene) {
-            const hoverClip = animations.find(
+        if (mixer && animationClips.length > 0 && clonedScene) {
+            const hoverClip = animationClips.find(
                 (clip: THREE.AnimationClip) => clip.name === 'hover'
             )
             if (hoverClip) {
-                const hoverAction = mixer.clipAction(hoverClip)
+                const hoverAction = actions[hoverClip.name] ?? mixer.clipAction(hoverClip)
                 hoverAction.reset()
                 hoverAction.setLoop(THREE.LoopRepeat, Infinity)
                 if (uavAnimation) {
@@ -452,9 +431,9 @@ export default function UAVFlight({
                     clonedScene.position.y = 0
                 }
             }
-            animations.forEach((clip: THREE.AnimationClip) => {
+            animationClips.forEach((clip: THREE.AnimationClip) => {
                 if (clip.name !== 'hover') {
-                    const action = mixer.existingAction(clip)
+                    const action = actions[clip.name] ?? mixer.existingAction(clip)
                     if (action) {
                         action.stop()
                         action.enabled = false
@@ -464,10 +443,11 @@ export default function UAVFlight({
                 }
             })
         }
-    }, [mixer, animations, uavAnimation, clonedScene])
+    }, [mixer, animationClips, actions, uavAnimation, clonedScene])
 
     useFrame((_state, delta) => {
         if (mixer) mixer.update(delta)
+        spinPropellers(uavScene.propellers, delta)
         if (group.current) {
             group.current.position.set(
                 currentPosition.x,
@@ -578,10 +558,10 @@ export default function UAVFlight({
                 const next = prev.clone()
                 switch (manualDirection) {
                     case 'up':
-                        next.y += 1
+                        next.z -= 1
                         break
                     case 'down':
-                        next.y -= 1
+                        next.z += 1
                         break
                     case 'left':
                         next.x -= 1
@@ -590,10 +570,10 @@ export default function UAVFlight({
                         next.x += 1
                         break
                     case 'ascend':
-                        next.z += 1
+                        next.y += 1
                         break
                     case 'descend':
-                        next.z -= 1
+                        next.y -= 1
                         break
                     case 'left-up':
                         next.x -= 1
@@ -634,25 +614,7 @@ export default function UAVFlight({
 
     return (
         <group ref={group} position={position} scale={scale}>
-            <primitive
-                object={clonedScene}
-                onUpdate={(self: THREE.Object3D) => {
-                    self.traverse((child: THREE.Object3D) => {
-                        if ((child as THREE.Mesh).isMesh) {
-                            const mesh = child as THREE.Mesh
-                            if (Array.isArray(mesh.material)) {
-                                mesh.material = mesh.material.map((mat) =>
-                                    ensureStandardMaterial(mat)
-                                )
-                            } else {
-                                mesh.material = ensureStandardMaterial(mesh.material)
-                            }
-                            mesh.castShadow = true
-                            mesh.receiveShadow = true
-                        }
-                    })
-                }}
-            />
+            <primitive object={clonedScene} />
             <pointLight
                 ref={lightRef}
                 position={[0, 5, 0]}

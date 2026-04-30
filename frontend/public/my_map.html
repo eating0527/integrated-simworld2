@@ -137,9 +137,31 @@
             color: #aaa;
             min-height: 20px;
         }
+        .map-toast {
+            position: fixed;
+            top: 18px;
+            left: 50%;
+            z-index: 10000;
+            max-width: calc(100vw - 32px);
+            padding: 12px 16px;
+            border-radius: 6px;
+            background: #ff6b6b;
+            color: #fff;
+            font-weight: 700;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, -12px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+        .map-toast.visible {
+            opacity: 1;
+            transform: translate(-50%, 0);
+        }
     </style>
 </head>
 <body>
+    <div id="map-toast" class="map-toast" role="status" aria-live="polite"></div>
     <div class="container">
         <div id="map"></div>
         <div class="sidebar">
@@ -229,6 +251,9 @@
     <script>
         const API_BASE = 'http://127.0.0.1:8888';
         const FIXED_GENERATION_ZOOM = 17;
+        const BUILDING_CHECK_TIMEOUT_MS = 15000;
+        const DEFAULT_APPLY_BUTTON_TEXT = '送出 Blender 任務並返回 React';
+        const CHECKING_MAP_BUTTON_TEXT = '確認地圖中...';
 
         // Region dataset (sample structure for visualization)
         const regions = [
@@ -427,6 +452,57 @@
         const pickedLonEl = document.getElementById('picked-lon');
         const pickedZoomEl = document.getElementById('picked-zoom');
         const pickedPlaceEl = document.getElementById('picked-place');
+        const mapToast = document.getElementById('map-toast');
+        let toastTimer = null;
+
+        function showToast(message) {
+            if (!mapToast) return;
+            mapToast.textContent = message;
+            mapToast.classList.add('visible');
+            if (toastTimer) {
+                clearTimeout(toastTimer);
+            }
+            toastTimer = setTimeout(() => {
+                mapToast.classList.remove('visible');
+            }, 4000);
+        }
+
+        async function fetchWithTimeout(url, options = {}, timeoutMs = BUILDING_CHECK_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                return await fetch(url, {
+                    ...options,
+                    signal: controller.signal,
+                });
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
+        function isPrecheckTimeout(err) {
+            return Boolean(err && (err.name === 'AbortError' || err.isPrecheckTimeout));
+        }
+
+        async function checkBuildings(lat, lon) {
+            const res = await fetchWithTimeout(`${API_BASE}/api/buildings/check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lat, lon }),
+            });
+
+            if (res.status === 504) {
+                const timeoutErr = new Error('building check timed out');
+                timeoutErr.isPrecheckTimeout = true;
+                throw timeoutErr;
+            }
+
+            if (!res.ok) {
+                throw new Error(`building check failed (${res.status})`);
+            }
+
+            return res.json();
+        }
 
         // Manual redirect button
         if (manualRedirectBtn) {
@@ -502,6 +578,62 @@
             pickedPlaceEl.textContent = pickedLocation.placeName;
         });
 
+        async function createTaskAndRedirect(payload) {
+            const saveRes = await fetch(`${API_BASE}/api/location/select`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!saveRes.ok) {
+                throw new Error(`select failed (${saveRes.status})`);
+            }
+
+            const saveData = await saveRes.json();
+            const locationId = saveData?.location?.id;
+
+            const taskRes = await fetch(`${API_BASE}/api/scene-tasks/from-location`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    location_id: locationId,
+                    scene_name: `picked_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_')}`,
+                    auto_run: true,
+                }),
+            });
+
+            if (!taskRes.ok) {
+                throw new Error(`task create failed (${taskRes.status})`);
+            }
+
+            const taskData = await taskRes.json();
+            const taskId = taskData?.task?.id;
+
+            if (!taskId) {
+                console.error('Task data:', taskData);
+                throw new Error(`No task ID returned from server: ${JSON.stringify(taskData)}`);
+            }
+
+            // Store taskId in localStorage for the React app to pick up
+            localStorage.setItem('recent-generated-scene-task-id', taskId);
+            localStorage.setItem('recent-generated-scene-place-name', pickedLocation.placeName || '你選的地圖');
+            console.log('Saved taskId to localStorage:', taskId);
+
+            applyLocationResult.textContent = `✅ 成功！正在進入場景...`;
+            applyLocationResult.style.color = '#4ade80';
+            console.log('location:', saveData);
+            console.log('task:', taskData);
+
+            // Force redirect to React app
+            console.log('About to redirect to /');
+            try {
+                window.location.replace('/?fromMap=1');
+            } catch(e) {
+                console.error('Redirect error:', e);
+                window.location.href = '/?fromMap=1';
+            }
+        }
+
         applyLocationBtn.addEventListener('click', async () => {
             if (pickedLocation.lat === null || pickedLocation.lon === null) {
                 applyLocationResult.textContent = '請先在地圖上點一個位置';
@@ -519,73 +651,42 @@
             };
 
             applyLocationBtn.disabled = true;
-            applyLocationResult.textContent = '送出選點並建立任務中...';
+            applyLocationBtn.textContent = CHECKING_MAP_BUTTON_TEXT;
+            applyLocationResult.textContent = '確認地圖中...';
             applyLocationResult.style.color = '#aaa';
 
             try {
-                const saveRes = await fetch(`${API_BASE}/api/location/select`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-
-                if (!saveRes.ok) {
-                    throw new Error(`select failed (${saveRes.status})`);
-                }
-
-                const saveData = await saveRes.json();
-                const locationId = saveData?.location?.id;
-
-                const taskRes = await fetch(`${API_BASE}/api/scene-tasks/from-location`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        location_id: locationId,
-                        scene_name: `picked_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_')}`,
-                        auto_run: true,
-                    }),
-                });
-
-                if (!taskRes.ok) {
-                    throw new Error(`task create failed (${taskRes.status})`);
-                }
-
-                const taskData = await taskRes.json();
-                const taskId = taskData?.task?.id;
-                
-                if (!taskId) {
-                    console.error('Task data:', taskData);
-                    throw new Error(`No task ID returned from server: ${JSON.stringify(taskData)}`);
-                }
-                
-                // Store taskId in localStorage for the React app to pick up
-                localStorage.setItem('recent-generated-scene-task-id', taskId);
-                localStorage.setItem('recent-generated-scene-place-name', pickedLocation.placeName || '你選的地圖');
-                console.log('Saved taskId to localStorage:', taskId);
-                
-                applyLocationResult.textContent = `✅ 成功！正在進入場景...`;
-                applyLocationResult.style.color = '#4ade80';
-                console.log('location:', saveData);
-                console.log('task:', taskData);
-                
-                // Force redirect to React app
-                console.log('About to redirect to /');
                 try {
-                                    window.location.replace('/?fromMap=1');
-                } catch(e) {
-                  console.error('Redirect error:', e);
-                                    window.location.href = '/?fromMap=1';
+                    const buildingCheck = await checkBuildings(pickedLocation.lat, pickedLocation.lon);
+                    const buildingCount = Number(buildingCheck?.building_count ?? 0);
+                    if (!buildingCheck?.has_buildings || buildingCount <= 0) {
+                        showToast('該地點無建物，請重選');
+                        applyLocationResult.textContent = '該地點無建物，請重選';
+                        applyLocationResult.style.color = '#ff6b6b';
+                        return;
+                    }
+                } catch (precheckErr) {
+                    if (!isPrecheckTimeout(precheckErr)) {
+                        throw precheckErr;
+                    }
+                    showToast('伺服器回應超時');
+                    console.warn('Building check timed out; continuing to create Blender task.', precheckErr);
                 }
+
+                applyLocationResult.textContent = '送出選點並建立任務中...';
+                applyLocationResult.style.color = '#aaa';
+                await createTaskAndRedirect(payload);
             } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : String(err);
                 applyLocationResult.textContent = `❌ 失敗：${errorMsg}`;
                 applyLocationResult.style.color = '#ff6b6b';
                 console.error('Error:', errorMsg);
-                
+
                 // Show manual redirect button if there's an error
                 manualRedirectBtn.style.display = 'block';
             } finally {
                 applyLocationBtn.disabled = false;
+                applyLocationBtn.textContent = DEFAULT_APPLY_BUTTON_TEXT;
             }
         });
 

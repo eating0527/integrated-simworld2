@@ -197,6 +197,70 @@ canvas {
   }
 }
 
+.dp-action-row {
+  gap: 6px;
+}
+
+.dp-btn-overwrite,
+.dp-btn-apply-default,
+.dp-btn-zero {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 5px;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.dp-btn-overwrite {
+  background: rgba(150, 150, 150, 0.12);
+  border-color: rgba(150, 150, 150, 0.4);
+  color: rgb(180, 180, 180);
+
+  &:hover {
+    background: rgba(150, 150, 150, 0.25);
+    border-color: rgba(150, 150, 150, 0.7);
+  }
+
+  &:active {
+    background: rgba(150, 150, 150, 0.4);
+  }
+}
+
+.dp-btn-apply-default {
+  background: rgba(0, 200, 150, 0.12);
+  border-color: rgba(0, 200, 150, 0.4);
+  color: #00c896;
+
+  &:hover {
+    background: rgba(0, 200, 150, 0.25);
+    border-color: rgba(0, 200, 150, 0.7);
+  }
+
+  &:active {
+    background: rgba(0, 200, 150, 0.4);
+  }
+}
+
+.dp-btn-zero {
+  background: rgba(190, 55, 55, 0.12);
+  border-color: rgba(190, 55, 55, 0.4);
+  color: rgb(230, 90, 90);
+
+  &:hover {
+    background: rgba(190, 55, 55, 0.25);
+    border-color: rgba(190, 55, 55, 0.7);
+  }
+
+  &:active {
+    background: rgba(190, 55, 55, 0.4);
+  }
+}
+
 // ─── Simulation Panel (top-right) ────────────────────────────────────────────
 .sim-panel {
   position: relative;

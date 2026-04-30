@@ -35,6 +35,9 @@ from scipy.ndimage import gaussian_filter, maximum_filter
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TX_POWER_DBM = 80.0
+DEFAULT_JAM_POWER_DBM = 80.0
+
 # ---------------------------------------------------------------------------
 # Optional heavy imports — deferred so the module can still be imported for
 # type-checking even when Sionna / TF are not installed.
@@ -168,8 +171,7 @@ def _draw_scene_footprints(ax, footprints: list[dict]) -> None:
                 max_x - min_x,
                 max_y - min_y,
                 fill=False,
-                edgecolor="white",
-                linewidth=1.2,
+                linewidth=1,
                 alpha=0.65,
                 zorder=2,
             )
@@ -182,7 +184,7 @@ def _draw_scene_footprints(ax, footprints: list[dict]) -> None:
                 LineCollection(
                     lines,
                     colors="white",
-                    linewidths=0.35,
+                    linewidths=1,
                     alpha=0.55,
                     zorder=3,
                 )
@@ -194,7 +196,7 @@ def _draw_scene_footprints(ax, footprints: list[dict]) -> None:
                 max_y - min_y,
                 fill=False,
                 edgecolor="white",
-                linewidth=0.5,
+                linewidth=1,
                 alpha=0.55,
                 zorder=3,
             )
@@ -222,11 +224,13 @@ def generate_maps(
     output_dir: str,
     scene_name: str = "ntpu",
     map_type: str = "iss",          # "iss" | "tss" | "cfar"
-    cell_size: float = 4.0,
+    cell_size: float = 3.0,
     map_size: tuple = (512, 512),
     samples_per_tx: int = 10 ** 6,  # reduced for lite version
     altitude: float = 1.5,          # map altitude in metres (Sionna z)
     gaussian_sigma: float = 1.0,
+    vmin_dbm: float = -60.0,
+    vmax_dbm: float = 0.0,
     cfar_min_distance: int = 3,
     cfar_threshold_percentile: float = 99.5,
     frequency_hz: float = 1.5e9,
@@ -313,7 +317,7 @@ def generate_maps(
 
     for i, d in enumerate(tx_devices):
         pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
-        power = d.get("power_dbm", 20)
+        power = d.get("power_dbm", DEFAULT_TX_POWER_DBM)
         tx = SionnaTransmitter(
             name=d["name"],
             position=pos_sionna,
@@ -328,7 +332,7 @@ def generate_maps(
 
     for i, d in enumerate(jam_devices):
         pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
-        power = d.get("power_dbm", 10)
+        power = d.get("power_dbm", DEFAULT_JAM_POWER_DBM)
         jammer = SionnaTransmitter(
             name=d["name"],
             position=pos_sionna,
@@ -420,17 +424,28 @@ def generate_maps(
         data = iss_smooth
         title = f"ISS Map — {scene_name.upper()}"
         cbar_label = "ISS (dBm)"
-        cmap = "hot"
+        cmap = "jet"
     elif map_type == "tss":
         data = gaussian_filter(tss_dbm, sigma=gaussian_sigma)
         title = f"TSS Map — {scene_name.upper()}"
         cbar_label = "TSS (dBm)"
-        cmap = "viridis"
+        cmap = "jet"
     else:  # cfar
         data = iss_smooth
         title = f"ISS+CFAR Map — {scene_name.upper()}"
         cbar_label = "ISS (dBm)"
-        cmap = "hot"
+        cmap = "jet"
+
+    map_vmin = float(vmin_dbm)
+    map_vmax = float(vmax_dbm)
+    if map_vmax <= map_vmin:
+        map_vmax = map_vmin + 1.0
+    logger.info(
+        "Plot scale for %s map: vmin=%.2f dBm, vmax=%.2f dBm",
+        map_type.upper(),
+        map_vmin,
+        map_vmax,
+    )
 
     # -----------------------------------------------------------------------
     # Plot
@@ -471,6 +486,8 @@ def generate_maps(
         origin="lower",
         aspect="equal",
         cmap=cmap,
+        vmin=map_vmin,
+        vmax=map_vmax,
         alpha=0.88,
         zorder=1,
         extent=[heatmap_x_min, heatmap_x_max, heatmap_y_min, heatmap_y_max],

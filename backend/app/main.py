@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import math
 import os
 import json
 import time
@@ -6,6 +8,9 @@ import uuid
 import shutil
 import subprocess
 import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # Auto-set DRJIT_LIBLLVM_PATH before any drjit/mitsuba/sionna import
 if os.name == "nt" and not os.environ.get("DRJIT_LIBLLVM_PATH"):
@@ -39,10 +44,19 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
-GENERATED_SCENES_DIR = BASE_DIR / "static" / "scenes" / "generated"
+SCENE_DIR = BASE_DIR / "static" / "scenes"
+GENERATED_SCENES_DIR = SCENE_DIR / "generated"
 GENERATED_SCENES_DIR.mkdir(parents=True, exist_ok=True)
 SCENE_TASKS_LOCK = threading.Lock()
 FIXED_GENERATION_ZOOM = 17
+DETAIL_BBOX_SPAN_TILES = 2.6
+BUILDING_CHECK_TOTAL_TIMEOUT_SECONDS = 14.0
+BUILDING_CHECK_REQUEST_TIMEOUT_SECONDS = 5.0
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
 
 # ──────────────────────────────────────────────
 # FastAPI App
@@ -67,7 +81,7 @@ SIMULATION_OUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/simulations", StaticFiles(directory=str(SIMULATION_OUT_DIR)), name="simulations")
 
 # 靜態檔案：動態生成場景（Blender/blosm）
-app.mount("/generated-scenes", StaticFiles(directory=str(GENERATED_SCENES_DIR)), name="generated-scenes")
+app.mount("/generated-scenes", StaticFiles(directory=str(SCENE_DIR)), name="generated-scenes")
 
 
 # ──────────────────────────────────────────────
@@ -367,6 +381,123 @@ class SceneTaskCreateRequest(BaseModel):
     auto_run: bool = True
 
 
+class BuildingCheckRequest(BaseModel):
+    lat: float = Field(..., ge=-90.0, le=90.0)
+    lon: float = Field(..., ge=-180.0, le=180.0)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _latlon_to_tile_float(lat: float, lon: float, zoom: int) -> tuple[float, float]:
+    lat_rad = math.radians(lat)
+    n = 2.0 ** zoom
+    x = (lon + 180.0) / 360.0 * n
+    y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
+    return x, y
+
+
+def _tile_xy_to_latlon(tile_x: float, tile_y: float, zoom: int) -> tuple[float, float]:
+    n = 2.0 ** zoom
+    lon = tile_x / n * 360.0 - 180.0
+    lat_rad = math.atan(math.sinh(math.pi * (1.0 - 2.0 * tile_y / n)))
+    lat = math.degrees(lat_rad)
+    return lat, lon
+
+
+def _bbox_by_zoom_centered(
+    lat: float,
+    lon: float,
+    zoom: int,
+    span_tiles: float = DETAIL_BBOX_SPAN_TILES,
+) -> tuple[float, float, float, float]:
+    z = max(0, min(19, int(zoom)))
+    n = 2.0 ** z
+    half_span = max(0.5, float(span_tiles) * 0.5)
+
+    x_f, y_f = _latlon_to_tile_float(lat, lon, z)
+    min_x = _clamp(x_f - half_span, 0.0, n)
+    max_x = _clamp(x_f + half_span, 0.0, n)
+    min_y = _clamp(y_f - half_span, 0.0, n)
+    max_y = _clamp(y_f + half_span, 0.0, n)
+
+    max_lat, min_lon = _tile_xy_to_latlon(min_x, min_y, z)
+    min_lat, max_lon = _tile_xy_to_latlon(max_x, max_y, z)
+    return min(min_lat, max_lat), max(min_lat, max_lat), min(min_lon, max_lon), max(min_lon, max_lon)
+
+
+def _overpass_building_count_query(south: float, west: float, north: float, east: float, timeout: int) -> str:
+    return f"""[out:json][timeout:{timeout}];
+(
+  way["building"]({south},{west},{north},{east});
+  relation["building"]({south},{west},{north},{east});
+);
+out count;"""
+
+
+def _parse_overpass_building_count(payload: Dict[str, Any]) -> int:
+    for element in payload.get("elements", []):
+        tags = element.get("tags", {}) if isinstance(element, dict) else {}
+        if "ways" in tags or "relations" in tags:
+            ways = int(tags.get("ways", 0))
+            relations = int(tags.get("relations", 0))
+            return ways + relations
+    return 0
+
+
+def _check_building_count_sync(lat: float, lon: float) -> Dict[str, Any]:
+    min_lat, max_lat, min_lon, max_lon = _bbox_by_zoom_centered(
+        lat,
+        lon,
+        FIXED_GENERATION_ZOOM,
+        DETAIL_BBOX_SPAN_TILES,
+    )
+    bbox = {
+        "south": min_lat,
+        "west": min_lon,
+        "north": max_lat,
+        "east": max_lon,
+    }
+    deadline = time.monotonic() + BUILDING_CHECK_TOTAL_TIMEOUT_SECONDS
+    attempts = []
+
+    for endpoint in OVERPASS_ENDPOINTS:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        query_timeout = max(1, int(min(BUILDING_CHECK_REQUEST_TIMEOUT_SECONDS, remaining)))
+        query = _overpass_building_count_query(min_lat, min_lon, max_lat, max_lon, query_timeout)
+        data = urllib.parse.urlencode({"data": query}).encode("utf-8")
+        request = urllib.request.Request(
+            endpoint,
+            data=data,
+            headers={"User-Agent": "integrated-sim-world/1.0"},
+            method="POST",
+        )
+
+        try:
+            request_timeout = max(1.0, min(BUILDING_CHECK_REQUEST_TIMEOUT_SECONDS, remaining))
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            building_count = _parse_overpass_building_count(payload)
+            return {
+                "success": True,
+                "building_count": building_count,
+                "has_buildings": building_count > 0,
+                "zoom": FIXED_GENERATION_ZOOM,
+                "bbox": bbox,
+                "source": endpoint,
+            }
+        except urllib.error.HTTPError as exc:
+            attempts.append({"source": endpoint, "error": f"HTTP {exc.code}"})
+        except Exception as exc:
+            attempts.append({"source": endpoint, "error": str(exc)})
+
+    raise TimeoutError(json.dumps(attempts, ensure_ascii=False))
+
+
 def _find_blender_executable() -> Optional[str]:
     env_path = os.environ.get("BLENDER_PATH")
     if env_path and Path(env_path).exists():
@@ -375,6 +506,7 @@ def _find_blender_executable() -> Optional[str]:
     for candidate in [
         shutil.which("blender"),
         r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
@@ -405,11 +537,87 @@ def _update_task(task_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, An
     return None
 
 
+def _is_generated_scene_key(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    key = value.upper()
+    return (
+        len(key) == 12
+        and key.startswith("T-")
+        and all(ch in "0123456789ABCDEF" for ch in key[2:])
+    )
+
+
+def _normalize_scene_key(value: Any) -> Optional[str]:
+    if not _is_generated_scene_key(value):
+        return None
+    return str(value).upper()
+
+
+def _generate_scene_key_locked(tasks: List[Dict[str, Any]]) -> str:
+    existing = {
+        key
+        for key in (_normalize_scene_key(task.get("sceneKey")) for task in tasks)
+        if key
+    }
+    if SCENE_DIR.exists():
+        for scene_dir in SCENE_DIR.iterdir():
+            key = _normalize_scene_key(scene_dir.name)
+            if key:
+                existing.add(key)
+
+    for _ in range(20):
+        scene_key = f"T-{uuid.uuid4().hex[:10].upper()}"
+        if scene_key not in existing and not (SCENE_DIR / scene_key).exists():
+            return scene_key
+
+    raise RuntimeError("Unable to allocate a unique generated scene key after 20 attempts")
+
+
+def _task_scene_key(task: Dict[str, Any]) -> Optional[str]:
+    key = _normalize_scene_key(task.get("sceneKey"))
+    if key:
+        return key
+
+    # New metadata uses snake_case. This lets old in-memory task payloads recover
+    # after Blender succeeds but before task JSON is updated.
+    key = _normalize_scene_key(task.get("scene_key"))
+    if key:
+        return key
+    return None
+
+
 def _infer_output_dir(task: Dict[str, Any]) -> Path:
     configured = task.get("outputDir")
     if configured:
         return Path(configured)
+    scene_key = _task_scene_key(task)
+    if scene_key:
+        return SCENE_DIR / scene_key
     return GENERATED_SCENES_DIR / str(task.get("id", ""))
+
+
+def _scene_artifact_paths(task: Dict[str, Any], output_dir: Path) -> Dict[str, Path]:
+    scene_key = _task_scene_key(task)
+    if scene_key:
+        return {
+            "glb": output_dir / f"{scene_key}.glb",
+            "blend": output_dir / f"{scene_key}.blend",
+            "xml": output_dir / f"{scene_key}.xml",
+        }
+    return {
+        "glb": output_dir / "scene.glb",
+        "blend": output_dir / "scene.blend",
+        "xml": output_dir / "scene.xml",
+    }
+
+
+def _artifact_url(path: Path) -> Optional[str]:
+    try:
+        rel = path.resolve().relative_to(SCENE_DIR.resolve())
+        return f"/generated-scenes/{rel.as_posix()}"
+    except Exception:
+        return None
 
 
 def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -420,7 +628,9 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
 
     output_dir = _infer_output_dir(task)
     metadata_path = output_dir / "scene_metadata.json"
-    glb_path = output_dir / "scene.glb"
+    artifact_paths = _scene_artifact_paths(task, output_dir)
+    glb_path = artifact_paths["glb"]
+    xml_path = artifact_paths["xml"]
 
     # Nothing to reconcile.
     if not metadata_path.exists() and not glb_path.exists():
@@ -442,6 +652,9 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
     if metadata.get("status") == "failed":
         inferred_status = "failed"
         inferred_error = metadata.get("import_error") or metadata.get("error")
+    elif _task_scene_key(task):
+        if metadata.get("status") == "completed" and glb_path.exists() and xml_path.exists():
+            inferred_status = "completed"
     elif glb_path.exists() or metadata.get("status") == "completed":
         inferred_status = "completed"
 
@@ -455,6 +668,11 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
         "outputDir": str(output_dir),
         "finishedAt": datetime.now().isoformat(),
     }
+    scene_key = _task_scene_key(task) or _normalize_scene_key(metadata.get("scene_key"))
+    if scene_key:
+        updates["sceneKey"] = scene_key
+        updates["modelUrl"] = _artifact_url(glb_path)
+        updates["sionnaSceneXml"] = str(xml_path)
     if inferred_status == "failed":
         updates["error"] = inferred_error or "Recovered failure from scene metadata"
     else:
@@ -469,11 +687,22 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     if not task:
         return {"success": False, "error": f"task not found: {task_id}"}
 
+    scene_key = _task_scene_key(task)
+    if not scene_key:
+        return {"success": False, "error": f"task sceneKey missing: {task_id}"}
+
+    out_dir = _infer_output_dir(task)
+    artifact_paths = _scene_artifact_paths(task, out_dir)
+
     blender_exe = _find_blender_executable()
     if not blender_exe:
         return {
             "success": False,
             "error": "Blender not found. Set BLENDER_PATH or install Blender in default path.",
+            "outputDir": str(out_dir),
+            "sceneKey": scene_key,
+            "modelUrl": _artifact_url(artifact_paths["glb"]),
+            "sionnaSceneXml": str(artifact_paths["xml"]),
         }
 
     loc = task.get("location", {})
@@ -483,7 +712,6 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     if lat is None or lon is None:
         return {"success": False, "error": "task location lat/lon missing"}
 
-    out_dir = GENERATED_SCENES_DIR / task_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     script_path = BASE_DIR / "blender_generate_scene.py"
@@ -501,6 +729,8 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
         str(zoom if zoom is not None else 16),
         "--scene-name",
         str(task.get("sceneName", "custom_scene")),
+        "--scene-key",
+        scene_key,
         "--output-dir",
         str(out_dir),
     ]
@@ -516,6 +746,9 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
             "error": f"Blender failed (exit={run.returncode}): {err[:600]}",
             "outputDir": str(out_dir),
             "blenderPath": blender_exe,
+            "sceneKey": scene_key,
+            "modelUrl": _artifact_url(artifact_paths["glb"]),
+            "sionnaSceneXml": str(artifact_paths["xml"]),
         }
 
     metadata_path = out_dir / "scene_metadata.json"
@@ -528,15 +761,37 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
                     "error": metadata.get("import_error") or metadata.get("error") or "Scene metadata reports failure",
                     "outputDir": str(out_dir),
                     "blenderPath": blender_exe,
+                    "sceneKey": scene_key,
+                    "modelUrl": _artifact_url(artifact_paths["glb"]),
+                    "sionnaSceneXml": str(artifact_paths["xml"]),
                 }
         except Exception:
             # If metadata can't be parsed, keep subprocess success result.
             pass
 
+    missing_artifacts = [
+        str(path)
+        for path in [artifact_paths["glb"], artifact_paths["xml"]]
+        if not path.exists()
+    ]
+    if missing_artifacts:
+        return {
+            "success": False,
+            "error": f"Blender completed but required scene artifact(s) are missing: {', '.join(missing_artifacts)}",
+            "outputDir": str(out_dir),
+            "blenderPath": blender_exe,
+            "sceneKey": scene_key,
+            "modelUrl": _artifact_url(artifact_paths["glb"]),
+            "sionnaSceneXml": str(artifact_paths["xml"]),
+        }
+
     return {
         "success": True,
         "outputDir": str(out_dir),
         "blenderPath": blender_exe,
+        "sceneKey": scene_key,
+        "modelUrl": _artifact_url(artifact_paths["glb"]),
+        "sionnaSceneXml": str(artifact_paths["xml"]),
     }
 
 
@@ -557,31 +812,31 @@ async def _process_scene_task(task_id: str):
         result = {"success": False, "error": str(exc)}
 
     if result.get("success"):
-        _update_task(
-            task_id,
-            {
-                "status": "completed",
-                "stage": "blender_generated",
-                "note": "Blender stage completed",
-                "error": None,
-                "blenderPath": result.get("blenderPath"),
-                "outputDir": result.get("outputDir"),
-                "finishedAt": datetime.now().isoformat(),
-            },
-        )
+        updates = {
+            "status": "completed",
+            "stage": "blender_generated",
+            "note": "Blender stage completed",
+            "error": None,
+            "blenderPath": result.get("blenderPath"),
+            "finishedAt": datetime.now().isoformat(),
+        }
+        for key in ("outputDir", "sceneKey", "modelUrl", "sionnaSceneXml"):
+            if result.get(key) is not None:
+                updates[key] = result.get(key)
+        _update_task(task_id, updates)
     else:
-        _update_task(
-            task_id,
-            {
-                "status": "failed",
-                "stage": "blender_generation_failed",
-                "note": "Blender stage failed",
-                "error": result.get("error"),
-                "blenderPath": result.get("blenderPath"),
-                "outputDir": result.get("outputDir"),
-                "finishedAt": datetime.now().isoformat(),
-            },
-        )
+        updates = {
+            "status": "failed",
+            "stage": "blender_generation_failed",
+            "note": "Blender stage failed",
+            "error": result.get("error"),
+            "blenderPath": result.get("blenderPath"),
+            "finishedAt": datetime.now().isoformat(),
+        }
+        for key in ("outputDir", "sceneKey", "modelUrl", "sionnaSceneXml"):
+            if result.get(key) is not None:
+                updates[key] = result.get(key)
+        _update_task(task_id, updates)
 
 
 @app.post("/api/location/select")
@@ -615,6 +870,34 @@ async def get_latest_location():
     }
 
 
+@app.post("/api/buildings/check")
+async def check_buildings(req: BuildingCheckRequest):
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_check_building_count_sync, req.lat, req.lon),
+            timeout=BUILDING_CHECK_TOTAL_TIMEOUT_SECONDS + 1.0,
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Building check timed out",
+                "detail": str(exc),
+            },
+            status_code=504,
+        )
+    except Exception as exc:
+        logger.warning("Building check failed: %s", exc)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Building check failed",
+                "detail": str(exc),
+            },
+            status_code=504,
+        )
+
+
 @app.post("/api/scene-tasks/from-location")
 async def create_scene_task(req: SceneTaskCreateRequest):
     lat = req.lat
@@ -646,8 +929,15 @@ async def create_scene_task(req: SceneTaskCreateRequest):
     with SCENE_TASKS_LOCK:
         tasks = _read_json_list(SCENE_TASKS_JSON)
         task_id = f"task-{uuid.uuid4().hex[:10]}"
+        try:
+            scene_key = _generate_scene_key_locked(tasks)
+        except RuntimeError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        output_dir = SCENE_DIR / scene_key
+        model_url = f"/generated-scenes/{scene_key}/{scene_key}.glb"
         task = {
             "id": task_id,
+            "sceneKey": scene_key,
             "sceneName": req.scene_name,
             "status": "queued",
             "stage": "pending_blender_generation",
@@ -659,6 +949,9 @@ async def create_scene_task(req: SceneTaskCreateRequest):
                 "place_name": place_name,
                 "location_id": req.location_id,
             },
+            "outputDir": str(output_dir),
+            "modelUrl": model_url,
+            "sionnaSceneXml": str(output_dir / f"{scene_key}.xml"),
             "createdAt": datetime.now().isoformat(),
             "updatedAt": datetime.now().isoformat(),
             "note": "Task created and waiting for Blender generation.",
@@ -780,7 +1073,7 @@ async def sionna_sinr_map(
     sinr_vmin: float = Query(default=-20.0, description="SINR 色階下限 (dB)"),
     sinr_vmax: float = Query(default=40.0,  description="SINR 色階上限 (dB)"),
     cell_size: float = Query(default=2.0,   description="採樣格子大小 (m)"),
-    samples_per_tx: int = Query(default=1000000, description="每個 TX 的採樣數"),
+    samples_per_tx: int = Query(default=100000000, description="每個 TX 的採樣數"),
 ):
     """Generate SINR coverage map and return the PNG."""
     try:
@@ -853,9 +1146,13 @@ async def sionna_channel_response():
     except Exception as e:
         logger.error(f"Channel response error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
-import asyncio
 from fastapi import HTTPException
 from fastapi.responses import Response
+
+DEFAULT_POWER_DBM_BY_ROLE = {
+    "tx": 80.0,
+    "jammer": 80.0,
+}
 
 class DeviceIn(BaseModel):
     name: str
@@ -865,11 +1162,17 @@ class DeviceIn(BaseModel):
     z: float
     power_dbm: Optional[float] = Field(default=None)
 
+
+def _device_power_dbm(device: DeviceIn) -> Optional[float]:
+    if device.power_dbm is not None:
+        return device.power_dbm
+    return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
+
 class SimulateRequest(BaseModel):
     scene: str
     map_type: str
     cell_size: float = Field(default=4.0, gt=0)
-    samples_per_tx: int = Field(default=1000000, ge=10000)
+    samples_per_tx: int = Field(default=100000000, ge=10000)
     overlay_scene: bool = Field(default=False)
     devices: List[DeviceIn]
 
@@ -888,17 +1191,19 @@ async def simulate(req: SimulateRequest):
     output_dir = str(BASE_DIR / "static" / "maps" / req.scene.lower())
     os.makedirs(output_dir, exist_ok=True)
 
-    devices_dicts = [
-        {
+    devices_dicts = []
+    for d in req.devices:
+        power_dbm = _device_power_dbm(d)
+        device_payload = {
             "name": d.name,
             "role": d.role,
             "x": d.x,
             "y": d.y,
             "z": d.z,
-            **({"power_dbm": d.power_dbm} if d.power_dbm is not None else {}),
         }
-        for d in req.devices
-    ]
+        if power_dbm is not None:
+            device_payload["power_dbm"] = power_dbm
+        devices_dicts.append(device_payload)
 
     logger.info(
         "Simulation request: scene=%s, map_type=%s, devices=%d, overlay_scene=%s",

@@ -1,5 +1,6 @@
 ﻿import { useState, useCallback } from 'react';
 import { useDeviceStore } from '../../store/useDeviceStore';
+import { useEffect } from 'react';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -19,6 +20,7 @@ interface SimStatus {
 }
 
 const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null };
+const GENERATED_SCENE_TABS: TabKey[] = ['iss', 'tss', 'cfar'];
 
 function buildSinrUrl(params: SINRParams): string {
   const q = new URLSearchParams({
@@ -30,7 +32,12 @@ function buildSinrUrl(params: SINRParams): string {
   return `${API}/api/sionna/sinr-map?${q.toString()}`;
 }
 
-export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
+interface SimulationPanelProps {
+  sceneId?: string | null;
+  generatedScene?: boolean;
+}
+
+export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: SimulationPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
@@ -48,23 +55,54 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
   const [sinrParams, setSinrParams] = useState<SINRParams>({
     sinr_vmin: -20,
     sinr_vmax: 40,
-    cell_size: 5.0,
-    samples_per_tx: 100000,
+    cell_size: 3.0,
+    samples_per_tx: 100000000,
   });
 
   const devices = useDeviceStore(state => state.devices);
 
+  useEffect(() => {
+    if (generatedScene && !GENERATED_SCENE_TABS.includes(tab)) {
+      setTab('iss');
+    }
+  }, [generatedScene, tab]);
+
   const compute = useCallback(async (key: TabKey) => {
+    if (generatedScene && !sceneId) {
+      setStatus(prev => ({
+        ...prev,
+        [key]: {
+          loading: false,
+          imageUrl: null,
+          error: 'Picked generated scene has no Sionna scene key. Regenerate the scene before running simulation.',
+        },
+      }));
+      return;
+    }
+
+    if (generatedScene && !GENERATED_SCENE_TABS.includes(key)) {
+      setStatus(prev => ({
+        ...prev,
+        [key]: {
+          loading: false,
+          imageUrl: null,
+          error: 'Generated scene currently supports ISS/TSS/CFAR maps only.',
+        },
+      }));
+      return;
+    }
+
     setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null } }));
 
     try {
       let res;
       if (['iss', 'tss', 'cfar'].includes(key)) {
+        const requestSceneId = sceneId ?? 'NTPU';
         res = await fetch(`${API}/api/simulate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            scene: sceneId,
+            scene: requestSceneId,
             map_type: key,
             cell_size: sinrParams.cell_size,
             samples_per_tx: sinrParams.samples_per_tx,
@@ -101,7 +139,7 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg } }));
     }
-  }, [sinrParams, sceneId, devices, overlayScene]);
+  }, [sinrParams, sceneId, devices, overlayScene, generatedScene]);
 
   const cur = status[tab];
 
@@ -175,10 +213,13 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
               { key: 'iss',     label: 'ISS Map' },
               { key: 'tss',     label: 'TSS Map' },
               { key: 'cfar',    label: 'ISS+CFAR Map' },
-            ] as { key: TabKey; label: string }[]).map(({ key, label }) => (
+            ] as { key: TabKey; label: string }[]).map(({ key, label }) => {
+              const disabled = generatedScene && !GENERATED_SCENE_TABS.includes(key);
+              return (
               <button
                 key={key}
                 onClick={() => setTab(key)}
+                disabled={disabled}
                 style={{
                   flex:         '1 1 20%',
                   padding:      '5px 4px',
@@ -189,17 +230,20 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
                     ? '1px solid rgba(0,255,255,.5)'
                     : '1px solid rgba(255,255,255,.08)',
                   borderRadius: 8,
-                  color:        tab === key ? '#0ff' : 'rgba(255,255,255,.5)',
+                  color:        disabled
+                    ? 'rgba(255,255,255,.22)'
+                    : (tab === key ? '#0ff' : 'rgba(255,255,255,.5)'),
                   fontSize:     11,
                   fontWeight:   tab === key ? 700 : 400,
-                  cursor:       'pointer',
+                  cursor:       disabled ? 'not-allowed' : 'pointer',
                   transition:   'all .15s',
                   whiteSpace:   'nowrap',
                 }}
               >
                 {label}
               </button>
-            ))}
+              );
+            })}
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 16px' }}>
@@ -235,10 +279,10 @@ export function SimulationPanel({ sceneId = 'NTPU' }: { sceneId?: string }) {
                     onChange={e => setSinrParams(p => ({ ...p, samples_per_tx: Number(e.target.value) }))}
                     style={selectStyle}
                   >
-                    <option value={10000}>10K (~30s)</option>
-                    <option value={100000}>100K (~2min)</option>
-                    <option value={500000}>500K (~10min)</option>
-                    <option value={1000000}>1M (~20min)</option>
+                    <option value={500000}>500K (less)</option>
+                    <option value={1000000}>1M (medium)</option>
+                    <option value={100000000}>100M (recommend)</option>
+                    <option value={1000000000}>1B (more)</option>
                   </select>
                   {tab !== 'sinr' && (
                     <>
