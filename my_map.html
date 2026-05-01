@@ -163,7 +163,12 @@
     </div>
     
     <script>
-        const API_BASE = 'http://127.0.0.1:8888';
+        const API_BASE = (() => {
+            const override = new URLSearchParams(window.location.search).get('apiBase');
+            if (override) return override.replace(/\/$/, '');
+            if (window.location.protocol === 'file:') return 'http://127.0.0.1:8888';
+            return '';
+        })();
 
         // Region dataset (sample structure for visualization)
         const regions = [
@@ -418,7 +423,7 @@
         // Manual redirect button
         manualRedirectBtn.addEventListener('click', () => {
             console.log('Manual redirect triggered');
-            window.location.href = '/';
+            window.location.href = '/?fromMap=1';
         });
 
         const pickedLocation = {
@@ -517,10 +522,10 @@
                 // Force redirect to React app
                 console.log('About to redirect to /');
                 try {
-                  window.location.replace('/');
+                  window.location.replace('/?fromMap=1');
                 } catch(e) {
                   console.error('Redirect error:', e);
-                  window.location.href = '/';
+                  window.location.href = '/?fromMap=1';
                 }
             } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : String(err);

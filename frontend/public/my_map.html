@@ -249,7 +249,12 @@
     </div>
     
     <script>
-        const API_BASE = 'http://127.0.0.1:8888';
+        const API_BASE = (() => {
+            const override = new URLSearchParams(window.location.search).get('apiBase');
+            if (override) return override.replace(/\/$/, '');
+            if (window.location.protocol === 'file:') return 'http://127.0.0.1:8888';
+            return '';
+        })();
         const FIXED_GENERATION_ZOOM = 17;
         const BUILDING_CHECK_TIMEOUT_MS = 15000;
         const DEFAULT_APPLY_BUTTON_TEXT = '送出 Blender 任務並返回 React';
