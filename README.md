@@ -53,6 +53,7 @@
 ## 安裝需求
 
 - Python 3.12+
+- PyTorch 2.9+（Sionna 2.x PHY/SYS 使用 PyTorch）
 - Node.js 18+（建議 20+）
 - Blender 4.2 LTS，或能相容 blosm 的版本
 - Blosm (Blender 插件)

@@ -87,18 +87,19 @@ def _verify(path: str) -> bool:
     return ok
 
 
-def _setup_gpu():
+def _setup_torch():
     try:
-        import tensorflow as tf
-        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-        gpus = tf.config.list_physical_devices("GPU")
-        if gpus:
-            tf.config.experimental.set_memory_growth(gpus[0], True)
-            logger.info("GPU 記憶體增長已啟用")
+        import torch
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            logger.info("PyTorch CUDA 已啟用: %s", torch.cuda.get_device_name(0))
         else:
-            logger.info("未找到 GPU，使用 CPU（速度較慢）")
+            device = torch.device("cpu")
+            logger.info("PyTorch 未找到 CUDA GPU，使用 CPU（速度較慢）")
+        return device
     except ImportError:
-        logger.warning("TensorFlow 未安裝，跳過 GPU 設定")
+        logger.warning("PyTorch 未安裝，Sionna 2.x PHY/SYS 功能可能無法使用")
+        return None
 
 
 def _load_sionna():
@@ -192,7 +193,7 @@ async def generate_sinr_map(
 
     try:
         load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, RadioMapSolver = _load_sionna()
-        _setup_gpu()
+        _setup_torch()
 
         if tx_list is None:
             tx_list = DEFAULT_TX_LIST + DEFAULT_JAM_LIST
@@ -288,7 +289,8 @@ async def generate_sinr_map(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _solver_and_cir(scene, PathSolver, n_time=1, samp_freq=30e3,
-                    normalize_delays=True, max_depth=5, seed=41):
+                    normalize_delays=True, max_depth=5, seed=41,
+                    out_type="numpy"):
     """建立 PathSolver，取 CIR，回傳 (a, tau, paths)"""
     for name in scene.transmitters:
         scene.get(name).velocity = [30, 0, 0]
@@ -303,7 +305,7 @@ def _solver_and_cir(scene, PathSolver, n_time=1, samp_freq=30e3,
     a, tau = ps.cir(sampling_frequency=samp_freq,
                     num_time_steps=n_time,
                     normalize_delays=normalize_delays,
-                    out_type="numpy")
+                    out_type=out_type)
     return a, tau
 
 
@@ -366,7 +368,7 @@ async def generate_cfr_plot(
         from sionna.phy.channel import AWGN, ApplyOFDMChannel
         from sionna.phy.channel.utils import cir_to_ofdm_channel
         from sionna.phy.mapping import Mapper
-        _setup_gpu()
+        device = _setup_torch() or torch.device("cpu")
 
         if tx_list is None:
             tx_list = DEFAULT_TX_LIST + DEFAULT_JAM_LIST
@@ -386,16 +388,27 @@ async def generate_cfr_plot(
         N_SUB   = 76
         SCS     = 30e3
         EBN0_dB = 20.0
-        freqs_hz = torch.tensor(np.array(subcarrier_frequencies(N_SUB, SCS)), dtype=torch.float32)
+        freqs_hz = torch.tensor(np.array(subcarrier_frequencies(N_SUB, SCS)),
+                                dtype=torch.float32, device=device)
+        cir_out_type = "torch" if device.type == "cuda" else "numpy"
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=1, samp_freq=SCS,
-                                         normalize_delays=True, max_depth=10)
+                                         normalize_delays=True, max_depth=10,
+                                         out_type=cir_out_type)
 
         tx_powers = [_dbm2w(scene.get(n).power_dbm) for n in tx_names]
 
-        a_torch = torch.tensor(np.expand_dims(a_cir, axis=0), dtype=torch.complex64)
-        tau_torch = torch.tensor(np.expand_dims(tau_cir, axis=0), dtype=torch.float32)
+        if torch.is_tensor(a_cir):
+            a_torch = a_cir.to(device=device, dtype=torch.complex64).unsqueeze(0)
+        else:
+            a_torch = torch.tensor(np.expand_dims(a_cir, axis=0),
+                                   dtype=torch.complex64, device=device)
+        if torch.is_tensor(tau_cir):
+            tau_torch = tau_cir.to(device=device, dtype=torch.float32).unsqueeze(0)
+        else:
+            tau_torch = torch.tensor(np.expand_dims(tau_cir, axis=0),
+                                     dtype=torch.float32, device=device)
         h_freq = cir_to_ofdm_channel(freqs_hz, a_torch, tau_torch, normalize=False)
         tx_power_scale = torch.sqrt(torch.tensor(tx_powers, dtype=torch.float32, device=h_freq.device))
         tx_power_scale = tx_power_scale.to(dtype=h_freq.dtype).reshape(1, 1, 1, -1, 1, 1, 1)
@@ -420,7 +433,8 @@ async def generate_cfr_plot(
             bits_per_symbol = 4
 
         mapper = Mapper("qam", bits_per_symbol)
-        bits = torch.randint(0, 2, (1, 1, 1, 1, N_SUB * bits_per_symbol), dtype=torch.int32)
+        bits = torch.randint(0, 2, (1, 1, 1, 1, N_SUB * bits_per_symbol),
+                             dtype=torch.int32, device=h_freq.device)
         x_one = mapper(bits)
         x_sig = x_one.repeat(1, len(idx_des), 1, 1, 1)
         ofdm_channel = ApplyOFDMChannel()
@@ -480,7 +494,7 @@ async def generate_doppler_plot(
 
     try:
         load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
-        _setup_gpu()
+        _setup_torch()
 
         if tx_list is None:
             tx_list = DEFAULT_TX_LIST + DEFAULT_JAM_LIST
@@ -572,7 +586,7 @@ async def generate_channel_response(
 
     try:
         load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
-        _setup_gpu()
+        _setup_torch()
 
         if tx_list is None:
             tx_list = DEFAULT_TX_LIST + DEFAULT_JAM_LIST

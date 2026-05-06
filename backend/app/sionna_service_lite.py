@@ -40,7 +40,7 @@ DEFAULT_JAM_POWER_DBM = 80.0
 
 # ---------------------------------------------------------------------------
 # Optional heavy imports — deferred so the module can still be imported for
-# type-checking even when Sionna / TF are not installed.
+# type-checking even when Sionna / PyTorch are not installed.
 # ---------------------------------------------------------------------------
 
 def _import_sionna():

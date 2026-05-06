@@ -6,7 +6,7 @@ aiofiles==24.1.0
 # Sionna simulation
 sionna
 sionna-rt
-tensorflow
+torch>=2.9.0
 trimesh
 pyrender>=0.1.45
 numpy>=1.24.0
