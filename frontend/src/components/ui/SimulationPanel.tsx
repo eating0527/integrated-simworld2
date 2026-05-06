@@ -6,6 +6,15 @@ const API = import.meta.env.VITE_API_URL || '';
 
 type TabKey = 'sinr' | 'cfr' | 'doppler' | 'channel' | 'iss' | 'tss' | 'cfar';
 type CFRModulation = 'qpsk' | '16qam';
+type ComputeImpact = 'low' | 'medium' | 'high';
+
+interface CFRAdvancedParams {
+  constellationBatchSize: number;
+  ofdmSubcarriers: number;
+  subcarrierSpacingHz: number;
+  ebn0Db: number;
+  rayTracingMaxDepth: number;
+}
 
 interface SINRParams {
   sinr_vmin: number;
@@ -22,6 +31,13 @@ interface SimStatus {
 
 const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null };
 const GENERATED_SCENE_TABS: TabKey[] = ['cfr', 'iss', 'tss', 'cfar'];
+const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
+  constellationBatchSize: 1,
+  ofdmSubcarriers: 76,
+  subcarrierSpacingHz: 30000,
+  ebn0Db: 20,
+  rayTracingMaxDepth: 10,
+};
 
 function buildSinrUrl(params: SINRParams): string {
   const q = new URLSearchParams({
@@ -44,6 +60,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
   const [overlayScene, setOverlayScene] = useState(false);
   const [cfrModulation, setCfrModulation] = useState<CFRModulation>('qpsk');
+  const [cfrAdvancedOpen, setCfrAdvancedOpen] = useState(false);
+  const [cfrAdvanced, setCfrAdvanced] = useState<CFRAdvancedParams>(DEFAULT_CFR_ADVANCED);
   const [status, setStatus] = useState<Record<TabKey, SimStatus>>({
     sinr:    { ...EMPTY },
     cfr:     { ...EMPTY },
@@ -68,6 +86,13 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       setTab('iss');
     }
   }, [generatedScene, tab]);
+
+  const updateCfrAdvanced = <K extends keyof CFRAdvancedParams>(
+    key: K,
+    value: CFRAdvancedParams[K],
+  ) => {
+    setCfrAdvanced(prev => ({ ...prev, [key]: value }));
+  };
 
   const compute = useCallback(async (key: TabKey) => {
     if (generatedScene && !sceneId) {
@@ -106,6 +131,13 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           body: JSON.stringify({
             scene: requestSceneId,
             modulation: cfrModulation,
+            advanced: {
+              constellation_batch_size: cfrAdvanced.constellationBatchSize,
+              ofdm_subcarriers: cfrAdvanced.ofdmSubcarriers,
+              subcarrier_spacing_hz: cfrAdvanced.subcarrierSpacingHz,
+              ebn0_db: cfrAdvanced.ebn0Db,
+              ray_tracing_max_depth: cfrAdvanced.rayTracingMaxDepth,
+            },
             devices: devices.map(d => ({
               name: d.name,
               role: d.role,
@@ -158,7 +190,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg } }));
     }
-  }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation]);
+  }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation, cfrAdvanced]);
 
   const cur = status[tab];
 
