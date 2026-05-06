@@ -353,6 +353,11 @@ async def generate_cfr_plot(
     rx_config: Optional[Tuple] = None,
     scene_xml: Optional[str] = None,
     modulation: str = "qpsk",
+    constellation_batch_size: int = 1,
+    ofdm_subcarriers: int = 76,
+    subcarrier_spacing_hz: float = 30e3,
+    ebn0_db: float = 20.0,
+    ray_tracing_max_depth: int = 10,
 ) -> bool:
     """生成通道頻率響應（CFR）圖 + QPSK 星座圖"""
     logger.info("▶ 開始生成 CFR Plot...")
@@ -385,16 +390,18 @@ async def generate_cfr_plot(
         idx_des  = [i for i, tx in enumerate(all_txs) if getattr(tx, "role", None) == "desired"]
         idx_jam  = [i for i, tx in enumerate(all_txs) if getattr(tx, "role", None) == "jammer"]
 
-        N_SUB   = 76
-        SCS     = 30e3
-        EBN0_dB = 20.0
+        N_SUB = int(ofdm_subcarriers)
+        SCS = float(subcarrier_spacing_hz)
+        EBN0_dB = float(ebn0_db)
+        BATCH_SIZE = int(constellation_batch_size)
         freqs_hz = torch.tensor(np.array(subcarrier_frequencies(N_SUB, SCS)),
                                 dtype=torch.float32, device=device)
         cir_out_type = "torch" if device.type == "cuda" else "numpy"
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=1, samp_freq=SCS,
-                                         normalize_delays=True, max_depth=10,
+                                         normalize_delays=True,
+                                         max_depth=int(ray_tracing_max_depth),
                                          out_type=cir_out_type)
 
         tx_powers = [_dbm2w(scene.get(n).power_dbm) for n in tx_names]
@@ -433,7 +440,7 @@ async def generate_cfr_plot(
             bits_per_symbol = 4
 
         mapper = Mapper("qam", bits_per_symbol)
-        bits = torch.randint(0, 2, (1, 1, 1, 1, N_SUB * bits_per_symbol),
+        bits = torch.randint(0, 2, (BATCH_SIZE, 1, 1, 1, N_SUB * bits_per_symbol),
                              dtype=torch.int32, device=h_freq.device)
         x_one = mapper(bits)
         x_sig = x_one.repeat(1, len(idx_des), 1, 1, 1)
@@ -459,9 +466,9 @@ async def generate_cfr_plot(
         h_intf = h_jam_eff.squeeze().detach().cpu().numpy()
 
         fig, ax = plt.subplots(1, 3, figsize=(15, 4))
-        ax[0].scatter(y_no_i.real,   y_no_i.imag,   s=6, alpha=0.3)
+        ax[0].scatter(np.ravel(y_no_i.real), np.ravel(y_no_i.imag), s=6, alpha=0.3)
         ax[0].set(title=f"{mod_label} Without Jammer Noise",   xlabel="Real", ylabel="Imag"); ax[0].grid(True)
-        ax[1].scatter(y_with_i.real, y_with_i.imag, s=6, alpha=0.3)
+        ax[1].scatter(np.ravel(y_with_i.real), np.ravel(y_with_i.imag), s=6, alpha=0.3)
         ax[1].set(title=f"{mod_label} With Jammer Noise", xlabel="Real", ylabel="Imag"); ax[1].grid(True)
         ax[2].plot(np.abs(h_main), label="|H_main|")
         ax[2].plot(np.abs(h_intf), label="|H_jammer|")
