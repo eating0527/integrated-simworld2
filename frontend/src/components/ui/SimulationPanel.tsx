@@ -358,6 +358,118 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     <option value="16qam">16QAM</option>
                   </select>
                 </ParamGrid>
+
+                <button
+                  type="button"
+                  onClick={() => setCfrAdvancedOpen(v => !v)}
+                  style={{
+                    width: '100%',
+                    marginTop: 8,
+                    padding: '7px 10px',
+                    background: 'rgba(255,255,255,.045)',
+                    border: '1px solid rgba(255,255,255,.1)',
+                    borderRadius: 8,
+                    color: 'rgba(255,255,255,.68)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span>進階設定</span>
+                  <span>{cfrAdvancedOpen ? '收合' : '展開'}</span>
+                </button>
+
+                {cfrAdvancedOpen && (
+                  <div style={{
+                    marginTop: 8,
+                    background: 'rgba(0,0,0,.18)',
+                    border: '1px solid rgba(255,255,255,.08)',
+                    borderRadius: 10,
+                    padding: '4px 10px 8px',
+                  }}>
+                    <AdvancedRow
+                      label="Constellation Batch Size"
+                      impact="medium"
+                      help="控制星座圖的獨立樣本組數。"
+                    >
+                      <select
+                        value={cfrAdvanced.constellationBatchSize}
+                        onChange={e => updateCfrAdvanced('constellationBatchSize', Number(e.target.value))}
+                        style={selectStyle}
+                      >
+                        <option value={1}>1</option>
+                        <option value={10}>10</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                    </AdvancedRow>
+
+                    <AdvancedRow
+                      label="OFDM Subcarriers"
+                      impact="high"
+                      help="控制 CFR 頻域取樣點數。"
+                    >
+                      <select
+                        value={cfrAdvanced.ofdmSubcarriers}
+                        onChange={e => updateCfrAdvanced('ofdmSubcarriers', Number(e.target.value))}
+                        style={selectStyle}
+                      >
+                        <option value={76}>76</option>
+                        <option value={128}>128</option>
+                        <option value={256}>256</option>
+                        <option value={512}>512</option>
+                      </select>
+                    </AdvancedRow>
+
+                    <AdvancedRow
+                      label="Subcarrier Spacing"
+                      impact="low"
+                      help="控制相鄰子載波的頻率間隔。"
+                    >
+                      <NumberInput
+                        value={cfrAdvanced.subcarrierSpacingHz / 1000}
+                        step={15}
+                        min={1}
+                        max={240}
+                        onChange={v => updateCfrAdvanced('subcarrierSpacingHz', v * 1000)}
+                      />
+                    </AdvancedRow>
+
+                    <AdvancedRow
+                      label="Eb/N0"
+                      impact="low"
+                      help="控制訊號相對背景雜訊的品質。"
+                    >
+                      <NumberInput
+                        value={cfrAdvanced.ebn0Db}
+                        step={1}
+                        min={0}
+                        max={60}
+                        onChange={v => updateCfrAdvanced('ebn0Db', v)}
+                      />
+                    </AdvancedRow>
+
+                    <AdvancedRow
+                      label="Ray Tracing Max Depth"
+                      impact="high"
+                      help="控制多路徑追蹤的最大互動深度。"
+                    >
+                      <select
+                        value={cfrAdvanced.rayTracingMaxDepth}
+                        onChange={e => updateCfrAdvanced('rayTracingMaxDepth', Number(e.target.value))}
+                        style={selectStyle}
+                      >
+                        <option value={1}>1</option>
+                        <option value={3}>3</option>
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                      </select>
+                    </AdvancedRow>
+                  </div>
+                )}
               </div>
             )}
 
@@ -450,6 +562,84 @@ function ParamGrid({ children }: { children: React.ReactNode }) {
 
 function Label({ children }: { children: React.ReactNode }) {
   return <div style={{ color: 'rgba(255,255,255,.6)', fontSize: 12 }}>{children}</div>;
+}
+
+function ImpactBadge({ impact }: { impact: ComputeImpact }) {
+  const meta = {
+    low: {
+      label: '低',
+      color: '#43d17a',
+      background: 'rgba(67,209,122,.14)',
+      border: 'rgba(67,209,122,.35)',
+    },
+    medium: {
+      label: '中',
+      color: '#ffd166',
+      background: 'rgba(255,209,102,.14)',
+      border: 'rgba(255,209,102,.35)',
+    },
+    high: {
+      label: '高',
+      color: '#ff5c7a',
+      background: 'rgba(255,92,122,.14)',
+      border: 'rgba(255,92,122,.35)',
+    },
+  }[impact];
+
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minWidth: 28,
+      padding: '2px 6px',
+      borderRadius: 6,
+      border: `1px solid ${meta.border}`,
+      background: meta.background,
+      color: meta.color,
+      fontSize: 11,
+      fontWeight: 700,
+    }}>
+      {meta.label}
+    </span>
+  );
+}
+
+function AdvancedRow({
+  label,
+  impact,
+  help,
+  children,
+}: {
+  label: string;
+  impact: ComputeImpact;
+  help: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'minmax(150px, 1fr) minmax(120px, 150px) auto',
+      gap: '6px 8px',
+      alignItems: 'center',
+      padding: '8px 0',
+      borderTop: '1px solid rgba(255,255,255,.07)',
+    }}>
+      <div style={{ color: 'rgba(255,255,255,.72)', fontSize: 12, fontWeight: 600 }}>
+        {label}
+      </div>
+      <div>{children}</div>
+      <ImpactBadge impact={impact} />
+      <div style={{
+        gridColumn: '1 / -1',
+        color: 'rgba(255,255,255,.38)',
+        fontSize: 11,
+        lineHeight: 1.35,
+      }}>
+        {help}
+      </div>
+    </div>
+  );
 }
 
 function NumberInput({ value, step, min, max, onChange }: { value: number, step: number, min: number, max: number, onChange: (v: number) => void }) {
