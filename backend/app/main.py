@@ -1169,10 +1169,19 @@ def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
 
 
+class CFRAdvancedParams(BaseModel):
+    constellation_batch_size: int = Field(default=1, ge=1, le=100)
+    ofdm_subcarriers: int = Field(default=76, ge=16, le=1024)
+    subcarrier_spacing_hz: float = Field(default=30000.0, ge=1000.0, le=240000.0)
+    ebn0_db: float = Field(default=20.0, ge=0.0, le=60.0)
+    ray_tracing_max_depth: int = Field(default=10, ge=1, le=10)
+
+
 class CFRPlotRequest(BaseModel):
     scene: str
     modulation: Literal["qpsk", "16qam"] = "qpsk"
     devices: List[DeviceIn]
+    advanced: CFRAdvancedParams = Field(default_factory=CFRAdvancedParams)
 
 
 def _resolve_sionna_scene_xml(scene: str) -> Path:
@@ -1235,11 +1244,17 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
         tx_list, rx_config = _cfr_device_config(req.devices)
+        advanced = req.advanced
         await generate_cfr_plot(
             scene_xml=str(scene_xml),
             tx_list=tx_list,
             rx_config=rx_config,
             modulation=req.modulation,
+            constellation_batch_size=advanced.constellation_batch_size,
+            ofdm_subcarriers=advanced.ofdm_subcarriers,
+            subcarrier_spacing_hz=advanced.subcarrier_spacing_hz,
+            ebn0_db=advanced.ebn0_db,
+            ray_tracing_max_depth=advanced.ray_tracing_max_depth,
         )
         if not os.path.isfile(CFR_PLOT_PATH):
             return JSONResponse({"error": "CFR plot generation failed; see server logs"}, status_code=500)
