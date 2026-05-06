@@ -24,7 +24,7 @@ if os.name == "nt" and not os.environ.get("DRJIT_LIBLLVM_PATH"):
 
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Literal
 
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -1167,6 +1167,93 @@ def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
     return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
+
+
+class CFRPlotRequest(BaseModel):
+    scene: str
+    modulation: Literal["qpsk", "16qam"] = "qpsk"
+    devices: List[DeviceIn]
+
+
+def _resolve_sionna_scene_xml(scene: str) -> Path:
+    scene_id = scene.strip()
+    if not scene_id:
+        raise HTTPException(status_code=422, detail="scene is required")
+    if any(part in scene_id for part in ("/", "\\", "..")):
+        raise HTTPException(status_code=422, detail=f"Invalid scene id: {scene_id}")
+
+    builtins = {
+        "ntpu": "NTPU",
+        "nycu": "NYCU",
+    }
+    scene_name = builtins.get(scene_id.lower(), scene_id.upper())
+    scene_xml = BASE_DIR / "static" / "scenes" / scene_name / f"{scene_name}.xml"
+    if not scene_xml.exists():
+        raise HTTPException(status_code=404, detail=f"Scene XML not found: {scene_xml}")
+    return scene_xml
+
+
+def _cfr_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
+    rx_devices = [d for d in devices if d.role == "rx"]
+    tx_devices = [d for d in devices if d.role == "tx"]
+    jammer_devices = [d for d in devices if d.role == "jammer"]
+
+    if not rx_devices:
+        raise HTTPException(status_code=422, detail="CFR requires one RX device")
+    if not tx_devices:
+        raise HTTPException(status_code=422, detail="CFR requires at least one TX device")
+
+    tx_list = []
+    for d in tx_devices:
+        power_dbm = _device_power_dbm(d)
+        tx_list.append((
+            d.name,
+            [d.x, d.y, d.z],
+            [0.0, 0.0, 0.0],
+            "desired",
+            power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["tx"],
+        ))
+    for d in jammer_devices:
+        power_dbm = _device_power_dbm(d)
+        tx_list.append((
+            d.name,
+            [d.x, d.y, d.z],
+            [0.0, 0.0, 0.0],
+            "jammer",
+            power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["jammer"],
+        ))
+
+    rx = rx_devices[0]
+    return tx_list, (rx.name, [rx.x, rx.y, rx.z])
+
+
+@app.post("/api/sionna/cfr-plot")
+async def sionna_cfr_plot_post(req: CFRPlotRequest):
+    """Generate CFR plot using current scene/devices and modulation."""
+    try:
+        from app.sionna_service import generate_cfr_plot, CFR_PLOT_PATH
+
+        scene_xml = _resolve_sionna_scene_xml(req.scene)
+        tx_list, rx_config = _cfr_device_config(req.devices)
+        await generate_cfr_plot(
+            scene_xml=str(scene_xml),
+            tx_list=tx_list,
+            rx_config=rx_config,
+            modulation=req.modulation,
+        )
+        if not os.path.isfile(CFR_PLOT_PATH):
+            return JSONResponse({"error": "CFR plot generation failed; see server logs"}, status_code=500)
+        return FileResponse(CFR_PLOT_PATH, media_type="image/png", filename="cfr_plot.png")
+    except HTTPException:
+        raise
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("cfr-plot", e)
+    except ImportError:
+        return JSONResponse({"error": "Sionna ?芸?鋆?隢??瑁? pip install sionna"}, status_code=503)
+    except Exception as e:
+        logger.exception("CFR plot error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 class SimulateRequest(BaseModel):
     scene: str

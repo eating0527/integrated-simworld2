@@ -349,22 +349,34 @@ async def generate_cfr_plot(
     output_path: str = CFR_PLOT_PATH,
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
+    scene_xml: Optional[str] = None,
+    modulation: str = "qpsk",
 ) -> bool:
     """生成通道頻率響應（CFR）圖 + QPSK 星座圖"""
     logger.info("▶ 開始生成 CFR Plot...")
     _clean(output_path)
 
     try:
+        modulation = modulation.lower()
+        if modulation not in {"qpsk", "16qam"}:
+            raise ValueError("modulation must be 'qpsk' or '16qam'")
+
         load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        import torch
+        from sionna.phy.channel import AWGN, ApplyOFDMChannel
+        from sionna.phy.channel.utils import cir_to_ofdm_channel
+        from sionna.phy.mapping import Mapper
         _setup_gpu()
 
         if tx_list is None:
             tx_list = DEFAULT_TX_LIST + DEFAULT_JAM_LIST
         if rx_config is None:
             rx_config = DEFAULT_RX
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
 
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
-                             tx_list, rx_config, str(NYCU_XML))
+                             tx_list, rx_config, scene_xml)
 
         tx_names = list(scene.transmitters.keys())
         all_txs  = [scene.get(n) for n in tx_names]
@@ -374,7 +386,7 @@ async def generate_cfr_plot(
         N_SUB   = 76
         SCS     = 30e3
         EBN0_dB = 20.0
-        freqs_hz = np.array(subcarrier_frequencies(N_SUB, SCS))  # drjit 轉 numpy
+        freqs_hz = torch.tensor(np.array(subcarrier_frequencies(N_SUB, SCS)), dtype=torch.float32)
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=1, samp_freq=SCS,
@@ -382,39 +394,64 @@ async def generate_cfr_plot(
 
         tx_powers = [_dbm2w(scene.get(n).power_dbm) for n in tx_names]
 
-        h_main = sum(_compute_H_f(a_cir, tau_cir, i, freqs_hz) * np.sqrt(tx_powers[i]) for i in idx_des) \
-                 if idx_des else np.zeros(N_SUB, dtype=complex)
-        h_intf = sum(_compute_H_f(a_cir, tau_cir, i, freqs_hz) * np.sqrt(tx_powers[i]) for i in idx_jam) \
-                 if idx_jam else np.zeros(N_SUB, dtype=complex)
+        a_torch = torch.tensor(np.expand_dims(a_cir, axis=0), dtype=torch.complex64)
+        tau_torch = torch.tensor(np.expand_dims(tau_cir, axis=0), dtype=torch.float32)
+        h_freq = cir_to_ofdm_channel(freqs_hz, a_torch, tau_torch, normalize=False)
+        tx_power_scale = torch.sqrt(torch.tensor(tx_powers, dtype=torch.float32, device=h_freq.device))
+        tx_power_scale = tx_power_scale.to(dtype=h_freq.dtype).reshape(1, 1, 1, -1, 1, 1, 1)
+        h_freq = h_freq * tx_power_scale
+
+        h_des = h_freq.index_select(3, torch.tensor(idx_des, dtype=torch.long, device=h_freq.device))
+        h_jam = h_freq.index_select(3, torch.tensor(idx_jam, dtype=torch.long, device=h_freq.device)) if idx_jam else None
+        h_des_eff = h_des.sum(dim=(3, 4))
+        if h_jam is not None:
+            h_jam_eff = h_jam.sum(dim=(3, 4))
+            jam_var = torch.square(torch.abs(h_jam)).sum(dim=(3, 4))
+        else:
+            h_jam_eff = torch.zeros_like(h_des_eff)
+            jam_var = torch.zeros_like(h_des_eff.real)
 
         # QPSK + OFDM 星座圖模擬
-        bits     = np.random.randint(0, 2, (1, N_SUB, 2))
-        bits_jam = np.random.randint(0, 2, (1, N_SUB, 2))
-        X_sig = (1 - 2*bits[..., 0]     + 1j*(1 - 2*bits[..., 1]))     / np.sqrt(2)
-        X_jam = (1 - 2*bits_jam[..., 0] + 1j*(1 - 2*bits_jam[..., 1])) / np.sqrt(2)
+        if modulation == "qpsk":
+            mod_label = "QPSK"
+            bits_per_symbol = 2
+        else:
+            mod_label = "16QAM"
+            bits_per_symbol = 4
 
-        Y_sig = X_sig * h_main[None, :]
-        Y_int = X_jam * h_intf[None, :]
-        p_sig = np.mean(np.abs(Y_sig) ** 2)
-        N0    = p_sig / (10 ** (EBN0_dB / 10) * 2) if p_sig > 0 else 1e-10
-        noise = np.sqrt(N0 / 2) * (np.random.randn(*Y_sig.shape) + 1j*np.random.randn(*Y_sig.shape))
-        Y_tot = Y_sig + Y_int + noise
+        mapper = Mapper("qam", bits_per_symbol)
+        bits = torch.randint(0, 2, (1, 1, 1, 1, N_SUB * bits_per_symbol), dtype=torch.int32)
+        x_one = mapper(bits)
+        x_sig = x_one.repeat(1, len(idx_des), 1, 1, 1)
+        ofdm_channel = ApplyOFDMChannel()
+        y_clean = ofdm_channel(x_sig, h_des)
+        p_sig = torch.square(torch.abs(y_clean)).mean()
+        n0_base = torch.clamp(
+            p_sig / ((10.0 ** (EBN0_dB / 10.0)) * bits_per_symbol),
+            min=1e-10,
+        )
+        base_var = torch.ones_like(y_clean.real) * n0_base
+        y_base = ofdm_channel(x_sig, h_des, base_var)
+        y_tot = AWGN()(y_base, jam_var)
 
-        mask = np.abs(h_main) > 1e-12
-        y_no_i   = np.zeros_like(Y_sig)
-        y_with_i = np.zeros_like(Y_tot)
-        if np.any(mask):
-            y_no_i[:, mask]   = (Y_sig + noise)[:, mask] / h_main[None, mask]
-            y_with_i[:, mask] = Y_tot[:, mask]            / h_main[None, mask]
+        mask = torch.abs(h_des_eff) > 1e-12
+        zeros = torch.zeros_like(y_base)
+        y_no_i = torch.where(mask, y_base / h_des_eff, zeros)
+        y_with_i = torch.where(mask, y_tot / h_des_eff, zeros)
+
+        y_no_i = y_no_i.squeeze().detach().cpu().numpy()
+        y_with_i = y_with_i.squeeze().detach().cpu().numpy()
+        h_main = h_des_eff.squeeze().detach().cpu().numpy()
+        h_intf = h_jam_eff.squeeze().detach().cpu().numpy()
 
         fig, ax = plt.subplots(1, 3, figsize=(15, 4))
         ax[0].scatter(y_no_i.real,   y_no_i.imag,   s=6, alpha=0.3)
-        ax[0].set(title="No Interference",   xlabel="Real", ylabel="Imag"); ax[0].grid(True)
+        ax[0].set(title=f"{mod_label} Without Jammer Noise",   xlabel="Real", ylabel="Imag"); ax[0].grid(True)
         ax[1].scatter(y_with_i.real, y_with_i.imag, s=6, alpha=0.3)
-        ax[1].set(title="With Interference", xlabel="Real", ylabel="Imag"); ax[1].grid(True)
+        ax[1].set(title=f"{mod_label} With Jammer Noise", xlabel="Real", ylabel="Imag"); ax[1].grid(True)
         ax[2].plot(np.abs(h_main), label="|H_main|")
-        ax[2].plot(np.abs(h_intf), label="|H_intf|")
-        ax[2].set(title="CFR Magnitude", xlabel="Subcarrier Index"); ax[2].legend(); ax[2].grid(True)
+        ax[2].plot(np.abs(h_intf), label="|H_jammer|")
+        ax[2].set(title=f"CFR Magnitude ({mod_label})", xlabel="Subcarrier Index"); ax[2].legend(); ax[2].grid(True)
         plt.tight_layout()
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

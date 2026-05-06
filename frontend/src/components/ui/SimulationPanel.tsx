@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 const API = import.meta.env.VITE_API_URL || '';
 
 type TabKey = 'sinr' | 'cfr' | 'doppler' | 'channel' | 'iss' | 'tss' | 'cfar';
+type CFRModulation = 'qpsk' | '16qam';
 
 interface SINRParams {
   sinr_vmin: number;
@@ -20,7 +21,7 @@ interface SimStatus {
 }
 
 const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null };
-const GENERATED_SCENE_TABS: TabKey[] = ['iss', 'tss', 'cfar'];
+const GENERATED_SCENE_TABS: TabKey[] = ['cfr', 'iss', 'tss', 'cfar'];
 
 function buildSinrUrl(params: SINRParams): string {
   const q = new URLSearchParams({
@@ -42,6 +43,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
   const [tab, setTab] = useState<TabKey>('sinr');
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
   const [overlayScene, setOverlayScene] = useState(false);
+  const [cfrModulation, setCfrModulation] = useState<CFRModulation>('qpsk');
   const [status, setStatus] = useState<Record<TabKey, SimStatus>>({
     sinr:    { ...EMPTY },
     cfr:     { ...EMPTY },
@@ -86,7 +88,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
         [key]: {
           loading: false,
           imageUrl: null,
-          error: 'Generated scene currently supports ISS/TSS/CFAR maps only.',
+          error: 'Generated scene currently supports CFR/ISS/TSS/CFAR maps only.',
         },
       }));
       return;
@@ -96,7 +98,25 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
 
     try {
       let res;
-      if (['iss', 'tss', 'cfar'].includes(key)) {
+      if (key === 'cfr') {
+        const requestSceneId = sceneId ?? 'NTPU';
+        res = await fetch(`${API}/api/sionna/cfr-plot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scene: requestSceneId,
+            modulation: cfrModulation,
+            devices: devices.map(d => ({
+              name: d.name,
+              role: d.role,
+              x: d.x,
+              y: d.y,
+              z: d.z,
+              power_dbm: d.powerDbm ?? null,
+            })),
+          }),
+        });
+      } else if (['iss', 'tss', 'cfar'].includes(key)) {
         const requestSceneId = sceneId ?? 'NTPU';
         res = await fetch(`${API}/api/simulate`, {
           method: 'POST',
@@ -120,7 +140,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       } else {
         const urlMap: Record<string, string> = {
           sinr:    buildSinrUrl(sinrParams),
-          cfr:     `${API}/api/sionna/cfr-plot`,
           doppler: `${API}/api/sionna/doppler`,
           channel: `${API}/api/sionna/channel-response`,
         };
@@ -139,7 +158,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg } }));
     }
-  }, [sinrParams, sceneId, devices, overlayScene, generatedScene]);
+  }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation]);
 
   const cur = status[tab];
 
@@ -290,6 +309,22 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       <ToggleSwitch checked={overlayScene} onChange={setOverlayScene} />
                     </>
                   )}
+                </ParamGrid>
+              </div>
+            )}
+
+            {tab === 'cfr' && (
+              <div style={{ marginBottom: 12 }}>
+                <ParamGrid>
+                  <Label>調變方式</Label>
+                  <select
+                    value={cfrModulation}
+                    onChange={e => setCfrModulation(e.target.value as CFRModulation)}
+                    style={selectStyle}
+                  >
+                    <option value="qpsk">QPSK</option>
+                    <option value="16qam">16QAM</option>
+                  </select>
                 </ParamGrid>
               </div>
             )}
