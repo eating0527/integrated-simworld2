@@ -362,6 +362,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                 <button
                   type="button"
                   onClick={() => setCfrAdvancedOpen(v => !v)}
+                  aria-expanded={cfrAdvancedOpen}
+                  aria-controls="cfr-advanced-panel"
                   style={{
                     width: '100%',
                     marginTop: 8,
@@ -383,7 +385,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                 </button>
 
                 {cfrAdvancedOpen && (
-                  <div style={{
+                  <div id="cfr-advanced-panel" style={{
                     marginTop: 8,
                     background: 'rgba(0,0,0,.18)',
                     border: '1px solid rgba(255,255,255,.08)',
@@ -434,7 +436,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                         step={15}
                         min={1}
                         max={240}
-                        onChange={v => updateCfrAdvanced('subcarrierSpacingHz', v * 1000)}
+                        onChange={v => updateCfrAdvanced('subcarrierSpacingHz', clampNumber(v, 1, 240) * 1000)}
                       />
                     </AdvancedRow>
 
@@ -448,7 +450,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                         step={1}
                         min={0}
                         max={60}
-                        onChange={v => updateCfrAdvanced('ebn0Db', v)}
+                        onChange={v => updateCfrAdvanced('ebn0Db', clampNumber(v, 0, 60))}
                       />
                     </AdvancedRow>
 
@@ -640,6 +642,10 @@ function AdvancedRow({
       </div>
     </div>
   );
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function NumberInput({ value, step, min, max, onChange }: { value: number, step: number, min: number, max: number, onChange: (v: number) => void }) {
