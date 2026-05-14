@@ -25,6 +25,17 @@ canvas {
 }
 
 // ─── CSS custom properties ────────────────────────────────────────────────────
+.gen-menu {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
 :root {
   --panel-bg: rgba(10, 14, 26, 0.88);
   --panel-border: rgba(80, 140, 255, 0.25);

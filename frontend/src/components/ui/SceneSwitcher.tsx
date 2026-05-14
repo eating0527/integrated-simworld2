@@ -273,7 +273,7 @@ export function SceneSwitcher({
           />
         </span>
         {generatedOpen && (
-          <div role="listbox" aria-label="Generated scenes" style={generatedMenuStyle}>
+          <div className="gen-menu" role="listbox" aria-label="Generated scenes" style={generatedMenuStyle}>
             {generatedScenes.map(scene => {
               const selected = selectedGeneratedScene?.taskId === scene.taskId;
               const hovered = hoveredGeneratedTaskId === scene.taskId;
