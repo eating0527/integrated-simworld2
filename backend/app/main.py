@@ -1151,7 +1151,7 @@ def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
         power_dbm = _device_power_dbm(d)
         tx_list.append((
             d.name,
-            [d.x, d.y, d.z],
+            [d.x, -d.z, d.y],
             [0.0, 0.0, 0.0],
             "desired",
             power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["tx"],
@@ -1160,14 +1160,14 @@ def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
         power_dbm = _device_power_dbm(d)
         tx_list.append((
             d.name,
-            [d.x, d.y, d.z],
+            [d.x, -d.z, d.y],
             [0.0, 0.0, 0.0],
             "jammer",
             power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["jammer"],
         ))
 
     rx = rx_devices[0]
-    return tx_list, (rx.name, [rx.x, rx.y, rx.z])
+    return tx_list, (rx.name, [rx.x, -rx.z, rx.y])
 
 
 @app.post("/api/sionna/cfr-plot")
@@ -1181,6 +1181,7 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
         advanced = req.advanced
         await generate_cfr_plot(
             scene_xml=str(scene_xml),
+            scene_name=str(scene_xml.parent.name),
             tx_list=tx_list,
             rx_config=rx_config,
             modulation=req.modulation,
@@ -1216,6 +1217,7 @@ async def sionna_sinr_map_post(req: SINRMapRequest):
             tx_list=tx_list,
             rx_config=rx_config,
             scene_xml=str(scene_xml),
+            scene_name=str(scene_xml.parent.name),
             sinr_vmin=req.sinr_vmin,
             sinr_vmax=req.sinr_vmax,
             cell_size=req.cell_size,
@@ -1247,6 +1249,7 @@ async def sionna_doppler_post(req: BaseSionnaRequest):
             tx_list=tx_list,
             rx_config=rx_config,
             scene_xml=str(scene_xml),
+            scene_name=str(scene_xml.parent.name),
         )
         if not os.path.isfile(DOPPLER_PLOT_PATH):
             return JSONResponse({"error": "Doppler plot generation failed; see server logs"}, status_code=500)
@@ -1274,6 +1277,7 @@ async def sionna_channel_response_post(req: BaseSionnaRequest):
             tx_list=tx_list,
             rx_config=rx_config,
             scene_xml=str(scene_xml),
+            scene_name=str(scene_xml.parent.name),
         )
         if not os.path.isfile(CHANNEL_RESP_PATH):
             return JSONResponse({"error": "Channel response generation failed; see server logs"}, status_code=500)
