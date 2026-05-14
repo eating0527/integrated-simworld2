@@ -31,6 +31,10 @@ ISS_MAX_DBM = -35.0
 BUILDING_MAX_M = 60.0
 
 
+def result_image_url(filename: str) -> str:
+    return f"/api/iss-unet/images/{filename}"
+
+
 @dataclass(frozen=True)
 class SceneDataset:
     scene: str
@@ -443,9 +447,9 @@ def reconstruct_iss_unet(
         "sparse_ratio": sparse_ratio,
         "metrics": metrics,
         "images": {
-            "reconstructed": f"/simulations/{reconstructed_path.name}",
-            "comparison": f"/simulations/{comparison_path.name}",
-            "cfar": f"/simulations/{cfar_path.name}" if cfar.enabled else None,
+            "reconstructed": result_image_url(reconstructed_path.name),
+            "comparison": result_image_url(comparison_path.name),
+            "cfar": result_image_url(cfar_path.name) if cfar.enabled else None,
         },
         "files": {
             "reconstructed_png": str(reconstructed_path),

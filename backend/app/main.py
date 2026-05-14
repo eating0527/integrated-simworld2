@@ -1250,6 +1250,20 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/iss-unet/images/{filename}")
+async def iss_unet_image_get(filename: str):
+    from app.iss_unet_service import OUTPUT_DIR
+
+    if "/" in filename or "\\" in filename or not filename.startswith("iss_unet_") or not filename.endswith(".png"):
+        return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
+
+    image_path = OUTPUT_DIR / filename
+    if not image_path.exists():
+        return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
+
+    return FileResponse(image_path, media_type="image/png", filename=filename)
+
+
 class CFRAdvancedParams(BaseModel):
     constellation_batch_size: int = Field(default=1, ge=1, le=100)
     ofdm_subcarriers: int = Field(default=76, ge=16, le=1024)

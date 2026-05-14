@@ -99,6 +99,29 @@ class ISSUNetServiceTests(unittest.TestCase):
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(set(payload["missing_files"]), REQUIRED_FILES)
 
+    def test_result_image_urls_use_api_route(self):
+        from app.iss_unet_service import result_image_url
+
+        self.assertEqual(
+            result_image_url("iss_unet_ntpu_comparison.png"),
+            "/api/iss-unet/images/iss_unet_ntpu_comparison.png",
+        )
+
+    def test_image_endpoint_serves_generated_png_from_api_route(self):
+        image_path = self.output_dir / "iss_unet_ntpu_comparison.png"
+        image_path.write_bytes(b"png-bytes")
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            response = asyncio.run(main.iss_unet_image_get("iss_unet_ntpu_comparison.png"))
+
+        self.assertEqual(Path(response.path), image_path)
+
+    def test_image_endpoint_rejects_path_traversal(self):
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            response = asyncio.run(main.iss_unet_image_get("../secret.png"))
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,11 @@ export default defineConfig({
         target: 'http://localhost:8888',
         changeOrigin: true,
       },
+      // Simulation result images
+      '/simulations': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+      },
       // WebSocket
       '/ws': {
         target: 'ws://localhost:8888',
