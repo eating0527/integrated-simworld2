@@ -37,13 +37,18 @@ docker-compose.override.yml
 
 # Runtime-generated logs and temp files
 .logs/
+.test_tmp/
 backend/.tmp/
 backend/.pip-cache/
 frontend/.npm-cache/
 
 # Generated simulation map images
 backend/app/static/maps/
+backend/app/static/images/iss_unet_*
 backend/app/static/scenes/generated/
+
+# Local ISS_UNET model artifacts
+backend/app/model_artifacts/
 
 # Local Android platform-tools install for AP3 telemetry bridge
 tools/platform-tools/

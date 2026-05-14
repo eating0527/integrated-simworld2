@@ -1156,6 +1156,22 @@ class BaseSionnaRequest(BaseModel):
     devices: List[DeviceIn]
 
 
+class ISSUNetCFARRequest(BaseModel):
+    enabled: bool = Field(default=True)
+    guard_cells: int = Field(default=2, ge=1, le=10)
+    training_cells: int = Field(default=4, ge=1, le=20)
+    pfa: float = Field(default=1e-4, gt=0.0, lt=1.0)
+    os_rank: float = Field(default=0.75, gt=0.0, le=1.0)
+    min_threshold_dbm: float = Field(default=-50.0, ge=-140.0, le=-35.0)
+
+
+class ISSUNetReconstructRequest(BaseModel):
+    scene: str
+    sparse_ratio: float = Field(default=0.2, gt=0.0, le=1.0)
+    cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
+    seed: int = Field(default=41)
+
+
 class SINRMapRequest(BaseSionnaRequest):
     sinr_vmin: float = Field(default=-20.0)
     sinr_vmax: float = Field(default=40.0)
@@ -1167,6 +1183,71 @@ def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
     return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
+
+
+@app.get("/api/iss-unet/status")
+async def iss_unet_status_get():
+    from app.iss_unet_service import iss_unet_status
+
+    return iss_unet_status()
+
+
+@app.post("/api/iss-unet/reconstruct")
+async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
+    from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
+
+    dataset = resolve_scene_dataset(req.scene)
+    if not dataset.available:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "ISS_UNET dataset is missing for this scene",
+                "scene": dataset.scene,
+                "data_dir": str(dataset.data_dir),
+                "missing_files": dataset.missing_files,
+            },
+            status_code=409,
+        )
+
+    cfar_params = ISSUNetCFARParams(
+        enabled=req.cfar.enabled,
+        guard_cells=req.cfar.guard_cells,
+        training_cells=req.cfar.training_cells,
+        pfa=req.cfar.pfa,
+        os_rank=req.cfar.os_rank,
+        min_threshold_dbm=req.cfar.min_threshold_dbm,
+    )
+
+    try:
+        result = await asyncio.to_thread(
+            reconstruct_iss_unet,
+            scene=req.scene,
+            sparse_ratio=req.sparse_ratio,
+            cfar=cfar_params,
+            seed=req.seed,
+        )
+        return {"success": True, **result}
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_artifact_missing",
+            },
+            status_code=503,
+        )
+    except ImportError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_dependency_missing",
+            },
+            status_code=503,
+        )
+    except Exception as exc:
+        logger.exception("ISS_UNET reconstruction failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 class CFRAdvancedParams(BaseModel):
@@ -1243,11 +1324,12 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
         from app.sionna_service import generate_cfr_plot, CFR_PLOT_PATH
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
+        scene_xml_path = Path(scene_xml)
         tx_list, rx_config = _sionna_device_config(req.devices)
         advanced = req.advanced
         await generate_cfr_plot(
-            scene_xml=str(scene_xml),
-            scene_name=str(scene_xml.parent.name),
+            scene_xml=str(scene_xml_path),
+            scene_name=str(scene_xml_path.parent.name),
             tx_list=tx_list,
             rx_config=rx_config,
             modulation=req.modulation,
