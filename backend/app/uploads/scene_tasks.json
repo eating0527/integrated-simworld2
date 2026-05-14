@@ -1,5 +1,30 @@
 [
   {
+    "id": "task-9375b041a3",
+    "sceneKey": "T-F52A5571A8",
+    "sceneName": "picked_2026-05-14_08_05_00",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 25.014431509761046,
+      "lon": 121.42227172851564,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": null,
+      "location_id": "loc-eda789843c"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F52A5571A8",
+    "modelUrl": "/generated-scenes/T-F52A5571A8/T-F52A5571A8.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F52A5571A8\\T-F52A5571A8.xml",
+    "createdAt": "2026-05-14T16:05:00.744280",
+    "updatedAt": "2026-05-14T16:05:44.694712",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-14T16:05:00.746283",
+    "finishedAt": "2026-05-14T16:05:44.694167",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe"
+  },
+  {
     "id": "task-2271ae1931",
     "sceneKey": "T-5D3B7D2B45",
     "sceneName": "picked_2026-05-14_05_28_23",

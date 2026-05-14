@@ -55,7 +55,7 @@ function normalizeTask(task: SceneTask): GeneratedSceneOption | null {
   const sceneKey = task.sceneKey?.trim();
   const modelPath = task.modelUrl?.trim();
 
-  if (task.status !== 'completed' || !taskId || !sceneKey || !modelPath) {
+  if ((task.status && task.status !== 'completed') || !taskId || !sceneKey || !modelPath) {
     return null;
   }
 
@@ -75,6 +75,33 @@ function normalizeTask(task: SceneTask): GeneratedSceneOption | null {
   };
 }
 
+async function fetchGeneratedSceneIndex(rebuildIndex: boolean): Promise<GeneratedSceneOption[]> {
+  const res = await fetch(`${API}/api/generated-scenes${rebuildIndex ? '/refresh' : ''}`, {
+    method: rebuildIndex ? 'POST' : 'GET',
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch generated scenes: ${res.statusText}`);
+  }
+
+  const payload = await res.json();
+  const tasks = Array.isArray(payload?.scenes) ? payload.scenes as SceneTask[] : [];
+  return tasks
+    .map(normalizeTask)
+    .filter((scene): scene is GeneratedSceneOption => Boolean(scene));
+}
+
+async function fetchSceneTasks(): Promise<SceneTask[]> {
+  const res = await fetch(`${API}/api/scene-tasks`, { method: 'GET' });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch scene tasks: ${res.statusText}`);
+  }
+
+  const payload = await res.json();
+  return Array.isArray(payload?.tasks) ? payload.tasks as SceneTask[] : [];
+}
+
 export function useGeneratedScenes() {
   const [state, setState] = useState<GeneratedScenesState>({
     scenes: [],
@@ -83,7 +110,7 @@ export function useGeneratedScenes() {
     error: null,
   });
 
-  const refreshScenes = useCallback(async () => {
+  const refreshScenes = useCallback(async (options?: { rebuildIndex?: boolean }) => {
     setState(prev => ({
       ...prev,
       status: prev.pollingTaskId ? 'polling' : 'loading',
@@ -91,35 +118,33 @@ export function useGeneratedScenes() {
     }));
 
     try {
-      const res = await fetch(`${API}/api/scene-tasks`, { method: 'GET' });
+      let scenes = await fetchGeneratedSceneIndex(Boolean(options?.rebuildIndex));
+      let nextPollingTaskId = state.pollingTaskId;
 
-      if (!res.ok) {
-        throw new Error(`Failed to fetch scene tasks: ${res.statusText}`);
-      }
+      if (nextPollingTaskId) {
+        const completed = scenes.some(scene => scene.taskId === nextPollingTaskId);
 
-      const payload = await res.json();
-      const tasks = Array.isArray(payload?.tasks) ? payload.tasks as SceneTask[] : [];
-      const scenes = tasks
-        .map(normalizeTask)
-        .filter((scene): scene is GeneratedSceneOption => Boolean(scene));
-
-      setState(prev => {
-        let pollingTaskId = prev.pollingTaskId;
-
-        if (pollingTaskId) {
-          const pollingTask = tasks.find(task => task.id === pollingTaskId);
-          const completed = scenes.some(scene => scene.taskId === pollingTaskId);
+        if (completed) {
+          nextPollingTaskId = null;
+        } else {
+          const tasks = await fetchSceneTasks();
+          const pollingTask = tasks.find(task => task.id === nextPollingTaskId);
           const stillPending = pollingTask?.status === 'queued' || pollingTask?.status === 'running';
 
-          if (completed || (pollingTask && !stillPending)) {
-            pollingTaskId = null;
+          if (pollingTask?.status === 'completed') {
+            scenes = await fetchGeneratedSceneIndex(true);
+            nextPollingTaskId = null;
+          } else if (pollingTask && !stillPending) {
+            nextPollingTaskId = null;
           }
         }
+      }
 
+      setState(prev => {
         return {
           scenes,
-          status: pollingTaskId ? 'polling' : 'idle',
-          pollingTaskId,
+          status: nextPollingTaskId ? 'polling' : 'idle',
+          pollingTaskId: nextPollingTaskId,
           error: null,
         };
       });
@@ -130,7 +155,7 @@ export function useGeneratedScenes() {
         error: err instanceof Error ? err.message : String(err),
       }));
     }
-  }, []);
+  }, [state.pollingTaskId]);
 
   const watchTask = useCallback((taskId: string) => {
     setState(prev => ({
@@ -147,7 +172,7 @@ export function useGeneratedScenes() {
       watchTask(recentTaskId);
     }
 
-    void refreshScenes();
+    void refreshScenes({ rebuildIndex: true });
   }, [refreshScenes, watchTask]);
 
   useEffect(() => {

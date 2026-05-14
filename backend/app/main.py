@@ -44,6 +44,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
+SCENE_INDEX_JSON = UPLOAD_DIR / "scene_index.json"
 SCENE_DIR = BASE_DIR / "static" / "scenes"
 GENERATED_SCENES_DIR = SCENE_DIR / "generated"
 GENERATED_SCENES_DIR.mkdir(parents=True, exist_ok=True)
@@ -285,6 +286,10 @@ def _read_json_list(path: Path) -> List[Dict[str, Any]]:
 
 def _write_json_list(path: Path, data: List[Dict[str, Any]]):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _read_scene_index() -> List[Dict[str, Any]]:
+    return _read_json_list(SCENE_INDEX_JSON)
 
 
 @app.post("/api/upload-photo")
@@ -620,6 +625,47 @@ def _artifact_url(path: Path) -> Optional[str]:
         return None
 
 
+def _scene_index_entry(task: Dict[str, Any], indexed_at: str) -> Optional[Dict[str, Any]]:
+    if task.get("status") != "completed":
+        return None
+
+    scene_key = _task_scene_key(task)
+    if not scene_key:
+        return None
+
+    output_dir = SCENE_DIR / scene_key
+    artifact_paths = _scene_artifact_paths({**task, "sceneKey": scene_key}, output_dir)
+    if not output_dir.is_dir() or not artifact_paths["glb"].is_file() or not artifact_paths["xml"].is_file():
+        return None
+
+    entry = {
+        "id": task.get("id"),
+        "sceneKey": scene_key,
+        "sceneName": task.get("sceneName"),
+        "location": task.get("location"),
+        "modelUrl": task.get("modelUrl") or _artifact_url(artifact_paths["glb"]),
+        "sionnaSceneXml": task.get("sionnaSceneXml") or str(artifact_paths["xml"]),
+        "createdAt": task.get("createdAt"),
+        "updatedAt": task.get("updatedAt"),
+        "indexedAt": indexed_at,
+    }
+    return {key: value for key, value in entry.items() if value is not None}
+
+
+def rebuild_scene_index() -> List[Dict[str, Any]]:
+    indexed_at = datetime.now().isoformat()
+    with SCENE_TASKS_LOCK:
+        tasks = _read_json_list(SCENE_TASKS_JSON)
+
+    scenes = [
+        entry
+        for entry in (_scene_index_entry(task, indexed_at) for task in tasks)
+        if entry is not None
+    ]
+    _write_json_list(SCENE_INDEX_JSON, scenes)
+    return scenes
+
+
 def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
     """Recover task status from generated files when worker status update was interrupted."""
     task_id = str(task.get("id", ""))
@@ -679,6 +725,8 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
         updates["error"] = None
 
     updated = _update_task(task_id, updates)
+    if inferred_status == "completed":
+        rebuild_scene_index()
     return updated or task
 
 
@@ -824,6 +872,7 @@ async def _process_scene_task(task_id: str):
             if result.get(key) is not None:
                 updates[key] = result.get(key)
         _update_task(task_id, updates)
+        rebuild_scene_index()
     else:
         updates = {
             "status": "failed",
@@ -837,6 +886,11 @@ async def _process_scene_task(task_id: str):
             if result.get(key) is not None:
                 updates[key] = result.get(key)
         _update_task(task_id, updates)
+
+
+@app.on_event("startup")
+async def refresh_scene_index_on_startup():
+    await asyncio.to_thread(rebuild_scene_index)
 
 
 @app.post("/api/location/select")
@@ -975,6 +1029,18 @@ async def list_scene_tasks():
         for task in tasks
     ]
     return {"success": True, "tasks": reconciled_tasks, "count": len(reconciled_tasks)}
+
+
+@app.get("/api/generated-scenes")
+async def list_generated_scenes():
+    scenes = _read_scene_index()
+    return {"success": True, "scenes": scenes, "count": len(scenes)}
+
+
+@app.post("/api/generated-scenes/refresh")
+async def refresh_generated_scenes():
+    scenes = await asyncio.to_thread(rebuild_scene_index)
+    return {"success": True, "scenes": scenes, "count": len(scenes)}
 
 
 @app.get("/api/scene-tasks/{task_id}")
