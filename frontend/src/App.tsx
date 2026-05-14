@@ -15,10 +15,10 @@ import { CameraUpload } from './components/ui/CameraUpload';
 import { PhotoViewer } from './components/ui/PhotoViewer';
 import { GPSStatus } from './components/ui/GPSStatus';
 import { useGPSSync } from './hooks/useGPSSync';
-import { useGeneratedScene } from './hooks/useGeneratedScene';
+import { useGeneratedScenes } from './hooks/useGeneratedScene';
 import { latLonToENU } from './utils/geo';
 import { SimulationPanel } from './components/ui/SimulationPanel';
-import { SceneSwitcher } from './components/ui/SceneSwitcher';
+import { SceneSwitcher, type SelectedScene } from './components/ui/SceneSwitcher';
 import { type SceneId, DEFAULT_SCENE_ID, getSceneById } from './config/scenes.config';
 import { DevicePanel } from './components/ui/DevicePanel';
 import { UAVControlPanel } from './components/ui/UAVControlPanel';
@@ -113,12 +113,19 @@ export function App() {
   }, [resetManualControl]);
 
   // ── 生成場景管理（地圖點選生成）─────────────────────────────────
-  const generatedScene = useGeneratedScene();
-  const [usePickedScene, setUsePickedScene] = useState(false);
+  const generatedScenes = useGeneratedScenes();
 
   // ── 場景管理 ────────────────────────────────────────────────
-  const [sceneId, setSceneId] = useState<SceneId>(DEFAULT_SCENE_ID);
-  const sceneDef = getSceneById(sceneId);
+  const [selectedScene, setSelectedScene] = useState<SelectedScene>({
+    source: 'preset',
+    id: DEFAULT_SCENE_ID,
+  });
+  const [lastPresetSceneId, setLastPresetSceneId] = useState<SceneId>(DEFAULT_SCENE_ID);
+  const activeGeneratedScene = selectedScene.source === 'generated'
+    ? generatedScenes.scenes.find(scene => scene.taskId === selectedScene.taskId) ?? null
+    : null;
+  const renderSceneId = selectedScene.source === 'preset' ? selectedScene.id : lastPresetSceneId;
+  const sceneDef = getSceneById(renderSceneId);
   const ORIGIN = {
     lat: sceneDef.config.observer.lat,
     lon: sceneDef.config.observer.lon,
@@ -267,13 +274,14 @@ export function App() {
       allDevicePathsRef.current.set(id, { position: data.position, path: [] });
     });
     setOtherUavs(prev => prev.map(u => ({ ...u, path: [] })));
-  }, [sceneId]);
+  }, [renderSceneId, activeGeneratedScene?.taskId]);
 
   useEffect(() => {
-    if (!generatedScene.modelPath) {
-      setUsePickedScene(false);
+    if (selectedScene.source !== 'generated') return;
+    if (!activeGeneratedScene) {
+      setSelectedScene({ source: 'preset', id: lastPresetSceneId });
     }
-  }, [generatedScene.modelPath]);
+  }, [activeGeneratedScene?.taskId, lastPresetSceneId, selectedScene.source]);
 
   const handleClearPath = useCallback(() => {
     sendClearPath();
@@ -318,8 +326,8 @@ export function App() {
 
   // ── 目前 GPS（供 HUD 顯示）────────────────────────────────────────
   const currentGPS = isMobile && localGPS.lat !== 0 ? localGPS : null;
-  const simulationSceneId = usePickedScene ? generatedScene.sceneKey : sceneId;
-  const simulationUsesGeneratedScene = usePickedScene;
+  const simulationSceneId = activeGeneratedScene?.sceneKey ?? renderSceneId;
+  const simulationUsesGeneratedScene = Boolean(activeGeneratedScene);
 
   // ── Render ────────────────────────────────────────────────────────
   return (
@@ -329,13 +337,13 @@ export function App() {
       <MainScene
         uavPosition={uavPosition}
         uavPath={uavPath}
-        sceneId={sceneId}
+        sceneId={renderSceneId}
         auto={auto}
         manualDirection={manualDirection}
         onManualMoveDone={handleManualMoveDone}
         uavAnimation={uavAnimation}
         otherUavs={otherUavs}
-        generatedSceneModelPath={usePickedScene ? (generatedScene.modelPath ?? undefined) : undefined}
+        generatedSceneModelPath={activeGeneratedScene?.modelPath}
         onPositionUpdate={(pos) => {
           setUavPosition(pos);
           setUavPath(prev => {
@@ -409,18 +417,15 @@ export function App() {
       {/* 場景切換器 */}
       {!isMobile && (
         <SceneSwitcher
-          currentScene={sceneId}
-          onChange={(id) => {
-            setUsePickedScene(false);
-            setSceneId(id);
+          selectedScene={selectedScene}
+          generatedScenes={generatedScenes.scenes}
+          generatedStatus={generatedScenes.status}
+          onSelectPreset={(id) => {
+            setLastPresetSceneId(id);
+            setSelectedScene({ source: 'preset', id });
           }}
-          hasPickedScene={Boolean(generatedScene.modelPath)}
-          pickedActive={usePickedScene}
-          pickedLabel={generatedScene.pickedPlaceName}
-          onSelectPicked={() => {
-            if (generatedScene.modelPath) {
-              setUsePickedScene(true);
-            }
+          onSelectGenerated={(taskId) => {
+            setSelectedScene({ source: 'generated', taskId });
           }}
         />
       )}

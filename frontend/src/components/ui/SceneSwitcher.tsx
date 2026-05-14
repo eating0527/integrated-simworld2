@@ -1,23 +1,55 @@
 import { SCENES, type SceneId } from '@/config/scenes.config';
+import { type GeneratedSceneOption } from '@/hooks/useGeneratedScene';
+
+export type SelectedScene =
+  | { source: 'preset'; id: SceneId }
+  | { source: 'generated'; taskId: string };
 
 interface SceneSwitcherProps {
-  currentScene: SceneId;
-  onChange: (id: SceneId) => void;
-  hasPickedScene?: boolean;
-  pickedActive?: boolean;
-  pickedLabel?: string | null;
-  onSelectPicked?: () => void;
+  selectedScene: SelectedScene;
+  generatedScenes: GeneratedSceneOption[];
+  generatedStatus?: 'idle' | 'loading' | 'polling' | 'error';
+  onSelectPreset: (id: SceneId) => void;
+  onSelectGenerated: (taskId: string) => void;
+}
+
+const buttonBaseStyle = {
+  padding: '6px 18px',
+  borderRadius: '8px',
+  border: 'none',
+  fontSize: '13px',
+  letterSpacing: '0.04em',
+  transition: 'all 0.2s',
+} as const;
+
+function subtitleStyle(maxWidth = '120px') {
+  return {
+    display: 'block',
+    fontSize: '10px',
+    fontWeight: 400,
+    opacity: 0.75,
+    marginTop: '1px',
+    maxWidth,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  } as const;
 }
 
 export function SceneSwitcher({
-  currentScene,
-  onChange,
-  hasPickedScene = false,
-  pickedActive = false,
-  pickedLabel,
-  onSelectPicked,
+  selectedScene,
+  generatedScenes,
+  generatedStatus = 'idle',
+  onSelectPreset,
+  onSelectGenerated,
 }: SceneSwitcherProps) {
-  const pickedSubtitle = (pickedLabel ?? '').trim() || '你選的地圖';
+  const selectedGeneratedScene = selectedScene.source === 'generated'
+    ? generatedScenes.find(scene => scene.taskId === selectedScene.taskId)
+    : null;
+  const generatedActive = selectedScene.source === 'generated';
+  const hasGeneratedScenes = generatedScenes.length > 0;
+  const generatedLabel = selectedGeneratedScene?.label
+    ?? (generatedStatus === 'polling' ? 'Generating...' : 'Select scene');
 
   return (
     <div style={{
@@ -37,21 +69,16 @@ export function SceneSwitcher({
       boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
     }}>
       {SCENES.map(scene => {
-        const active = currentScene === scene.id;
+        const active = selectedScene.source === 'preset' && selectedScene.id === scene.id;
         return (
           <button
             key={scene.id}
-            onClick={() => onChange(scene.id)}
+            onClick={() => onSelectPreset(scene.id)}
             title={scene.label}
             style={{
-              padding: '6px 18px',
-              borderRadius: '8px',
-              border: 'none',
+              ...buttonBaseStyle,
               cursor: 'pointer',
-              fontSize: '13px',
               fontWeight: active ? 700 : 400,
-              letterSpacing: '0.04em',
-              transition: 'all 0.2s',
               background: active
                 ? 'linear-gradient(135deg, rgba(99,179,237,0.9), rgba(129,140,248,0.9))'
                 : 'transparent',
@@ -60,57 +87,64 @@ export function SceneSwitcher({
             }}
           >
             {scene.labelEn}
-            <span style={{
-              display: 'block',
-              fontSize: '10px',
-              fontWeight: 400,
-              opacity: 0.75,
-              marginTop: '1px',
-            }}>
+            <span style={subtitleStyle()}>
               {scene.label}
             </span>
           </button>
         );
       })}
 
-      <button
-        key="picked-map"
-        onClick={() => onSelectPicked?.()}
-        title={hasPickedScene ? `${pickedSubtitle}（動態生成）` : '尚未有可用的動態地圖'}
-        disabled={!hasPickedScene}
+      <label
+        title={hasGeneratedScenes ? generatedLabel : 'No generated scenes available'}
         style={{
-          padding: '6px 18px',
-          borderRadius: '8px',
-          border: 'none',
-          cursor: hasPickedScene ? 'pointer' : 'not-allowed',
-          fontSize: '13px',
-          fontWeight: pickedActive ? 700 : 400,
-          letterSpacing: '0.04em',
-          transition: 'all 0.2s',
-          background: pickedActive
+          ...buttonBaseStyle,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minWidth: '150px',
+          fontWeight: generatedActive ? 700 : 400,
+          background: generatedActive
             ? 'linear-gradient(135deg, rgba(16,185,129,0.9), rgba(59,130,246,0.9))'
             : 'transparent',
-          color: hasPickedScene
-            ? (pickedActive ? '#fff' : 'rgba(255,255,255,0.7)')
+          color: hasGeneratedScenes || generatedStatus === 'polling'
+            ? (generatedActive ? '#fff' : 'rgba(255,255,255,0.7)')
             : 'rgba(255,255,255,0.35)',
-          boxShadow: pickedActive ? '0 2px 12px rgba(16,185,129,0.35)' : 'none',
+          boxShadow: generatedActive ? '0 2px 12px rgba(16,185,129,0.35)' : 'none',
         }}
       >
-        PICKED
-        <span style={{
-          display: 'block',
-          fontSize: '10px',
-          fontWeight: 400,
-          opacity: 0.75,
-          marginTop: '1px',
-          maxWidth: '120px',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}>
-          {pickedSubtitle}
-        </span>
-      </button>
+        Generated
+        <select
+          value={selectedGeneratedScene?.taskId ?? ''}
+          disabled={!hasGeneratedScenes}
+          onChange={(event) => {
+            if (event.target.value) {
+              onSelectGenerated(event.target.value);
+            }
+          }}
+          style={{
+            width: '130px',
+            marginTop: '2px',
+            border: 'none',
+            outline: 'none',
+            cursor: hasGeneratedScenes ? 'pointer' : 'not-allowed',
+            background: 'transparent',
+            color: 'inherit',
+            fontSize: '10px',
+            textAlign: 'center',
+            opacity: 0.8,
+          }}
+        >
+          <option value="" style={{ color: '#111' }}>
+            {generatedLabel}
+          </option>
+          {generatedScenes.map(scene => (
+            <option key={scene.taskId} value={scene.taskId} style={{ color: '#111' }}>
+              {scene.label}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
