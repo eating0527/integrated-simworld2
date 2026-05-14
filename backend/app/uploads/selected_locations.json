@@ -1,0 +1,232 @@
+[
+  {
+    "id": "loc-a38c408b99",
+    "lat": 24.987652866658557,
+    "lon": 121.28554344177248,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "中聖里",
+    "timestamp": "2026-05-14T05:28:22.218Z",
+    "createdAt": "2026-05-14T13:28:23.513082"
+  },
+  {
+    "id": "loc-ad43515984",
+    "lat": 25.053101462955347,
+    "lon": 121.44407272338869,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "立廷里",
+    "timestamp": "2026-05-06T16:54:52.569Z",
+    "createdAt": "2026-05-07T00:54:53.174673"
+  },
+  {
+    "id": "loc-10b964c32e",
+    "lat": 25.18873851324777,
+    "lon": 121.43531799316406,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "崁頂里",
+    "timestamp": "2026-05-06T04:51:20.384Z",
+    "createdAt": "2026-05-06T12:51:20.119113"
+  },
+  {
+    "id": "loc-17e1b61788",
+    "lat": 25.013906494432717,
+    "lon": 121.45299911499025,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "光榮里",
+    "timestamp": "2026-05-05T15:48:21.051Z",
+    "createdAt": "2026-05-05T23:48:26.533540"
+  },
+  {
+    "id": "loc-536ad96a06",
+    "lat": 24.946841657070184,
+    "lon": 121.38158798217775,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "南園里",
+    "timestamp": "2026-05-05T03:36:47.087Z",
+    "createdAt": "2026-05-05T11:36:46.896773"
+  },
+  {
+    "id": "loc-678b0df2d2",
+    "lat": 24.96528424205014,
+    "lon": 121.42218589782716,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "虎躍第一停車場",
+    "timestamp": "2026-05-01T08:09:14.004Z",
+    "createdAt": "2026-05-01T16:09:14.427140"
+  },
+  {
+    "id": "loc-49433a5350",
+    "lat": 24.787007273936474,
+    "lon": 120.99783897399904,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "東區",
+    "timestamp": "2026-04-30T03:01:43.013Z",
+    "createdAt": "2026-04-30T11:01:45.298172"
+  },
+  {
+    "id": "loc-1bf4d5ea8b",
+    "lat": 24.787981311712517,
+    "lon": 120.99714159965517,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "東區",
+    "timestamp": "2026-04-30T02:50:18.740Z",
+    "createdAt": "2026-04-30T10:50:31.496825"
+  },
+  {
+    "id": "loc-abee1f3a85",
+    "lat": 24.787883908279028,
+    "lon": 120.99691629409791,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "東區",
+    "timestamp": "2026-04-30T02:49:06.785Z",
+    "createdAt": "2026-04-30T10:49:21.523044"
+  },
+  {
+    "id": "loc-f209fbb8ff",
+    "lat": 24.94855374329632,
+    "lon": 121.38090133666994,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "柑園里",
+    "timestamp": "2026-04-30T02:44:53.594Z",
+    "createdAt": "2026-04-30T10:45:08.605295"
+  },
+  {
+    "id": "loc-126bcff10b",
+    "lat": 24.948252184381012,
+    "lon": 121.38050436973573,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "柑園里",
+    "timestamp": "2026-04-30T02:36:18.834Z",
+    "createdAt": "2026-04-30T10:36:21.207335"
+  },
+  {
+    "id": "loc-3ed6cab0ab",
+    "lat": 24.999360732941128,
+    "lon": 121.36073112487794,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "新嶺里",
+    "timestamp": "2026-04-24T04:55:25.842Z",
+    "createdAt": "2026-04-24T12:55:26.893652"
+  },
+  {
+    "id": "loc-635e71c2c1",
+    "lat": 24.977422157063152,
+    "lon": 121.25206947326662,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "復興里",
+    "timestamp": "2026-04-24T04:46:51.930Z",
+    "createdAt": "2026-04-24T12:46:57.596628"
+  },
+  {
+    "id": "loc-553bfbca0b",
+    "lat": 24.7861890762952,
+    "lon": 120.99951267242433,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "LALA Kitchen",
+    "timestamp": "2026-04-24T03:30:26.117Z",
+    "createdAt": "2026-04-24T11:30:26.929234"
+  },
+  {
+    "id": "loc-9cef324d5b",
+    "lat": 24.966957166865082,
+    "lon": 121.29717350006105,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "大宏里",
+    "timestamp": "2026-04-24T03:28:28.080Z",
+    "createdAt": "2026-04-24T11:28:28.987965"
+  },
+  {
+    "id": "loc-b9a27baae0",
+    "lat": 24.80901866083198,
+    "lon": 120.9767246246338,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "東區",
+    "timestamp": "2026-04-24T03:20:31.424Z",
+    "createdAt": "2026-04-24T11:20:33.947383"
+  },
+  {
+    "id": "loc-59c7d1ade6",
+    "lat": 24.787572216777985,
+    "lon": 120.99691629409791,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "東區",
+    "timestamp": "2026-04-23T15:54:03.437Z",
+    "createdAt": "2026-04-23T23:54:06.255782"
+  },
+  {
+    "id": "loc-92a4e2fae0",
+    "lat": 24.94562567228545,
+    "lon": 121.37622356414796,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "龍學里",
+    "timestamp": "2026-04-23T06:47:52.591Z",
+    "createdAt": "2026-04-23T14:47:53.517259"
+  },
+  {
+    "id": "loc-57b3bde968",
+    "lat": 24.950460356764918,
+    "lon": 121.3831651210785,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "南園里",
+    "timestamp": "2026-04-22T10:06:24.132Z",
+    "createdAt": "2026-04-22T18:06:25.016664"
+  },
+  {
+    "id": "loc-0bda4cfca5",
+    "lat": 24.942862910235686,
+    "lon": 121.3703978061676,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": null,
+    "timestamp": "2026-04-22T10:04:37.613Z",
+    "createdAt": "2026-04-22T18:04:38.493108"
+  },
+  {
+    "id": "loc-0154c268b8",
+    "lat": 24.77177232822881,
+    "lon": 121.44836425781251,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "福山里",
+    "timestamp": "2026-04-22T08:46:14.122Z",
+    "createdAt": "2026-04-22T16:46:15.841255"
+  },
+  {
+    "id": "loc-8d987dcb15",
+    "lat": 24.966140159912975,
+    "lon": 121.38244628906251,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "樂山里",
+    "timestamp": "2026-04-18T08:19:39.434Z",
+    "createdAt": "2026-04-18T16:19:39.440062"
+  },
+  {
+    "id": "loc-a9a3eba3de",
+    "lat": 24.973609735832184,
+    "lon": 121.40441894531251,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "東山里",
+    "timestamp": "2026-04-18T05:49:20.288Z",
+    "createdAt": "2026-04-18T13:49:20.296699"
+  }
+]
