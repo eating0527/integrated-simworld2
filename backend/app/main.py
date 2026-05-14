@@ -1163,6 +1163,18 @@ class DeviceIn(BaseModel):
     power_dbm: Optional[float] = Field(default=None)
 
 
+class BaseSionnaRequest(BaseModel):
+    scene: str
+    devices: List[DeviceIn]
+
+
+class SINRMapRequest(BaseSionnaRequest):
+    sinr_vmin: float = Field(default=-20.0)
+    sinr_vmax: float = Field(default=40.0)
+    cell_size: float = Field(default=2.0)
+    samples_per_tx: int = Field(default=100000000)
+
+
 def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
@@ -1202,7 +1214,7 @@ def _resolve_sionna_scene_xml(scene: str) -> Path:
     return scene_xml
 
 
-def _cfr_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
+def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
     rx_devices = [d for d in devices if d.role == "rx"]
     tx_devices = [d for d in devices if d.role == "tx"]
     jammer_devices = [d for d in devices if d.role == "jammer"]
@@ -1243,7 +1255,7 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
         from app.sionna_service import generate_cfr_plot, CFR_PLOT_PATH
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
-        tx_list, rx_config = _cfr_device_config(req.devices)
+        tx_list, rx_config = _sionna_device_config(req.devices)
         advanced = req.advanced
         await generate_cfr_plot(
             scene_xml=str(scene_xml),
@@ -1267,6 +1279,91 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
         return JSONResponse({"error": "Sionna ?芸?鋆?隢??瑁? pip install sionna"}, status_code=503)
     except Exception as e:
         logger.exception("CFR plot error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/sionna/sinr-map")
+async def sionna_sinr_map_post(req: SINRMapRequest):
+    try:
+        from app.sionna_service import generate_sinr_map, SINR_MAP_PATH
+
+        scene_xml = _resolve_sionna_scene_xml(req.scene)
+        tx_list, rx_config = _sionna_device_config(req.devices)
+
+        await generate_sinr_map(
+            tx_list=tx_list,
+            rx_config=rx_config,
+            scene_xml=str(scene_xml),
+            sinr_vmin=req.sinr_vmin,
+            sinr_vmax=req.sinr_vmax,
+            cell_size=req.cell_size,
+            samples_per_tx=req.samples_per_tx,
+        )
+        if not os.path.isfile(SINR_MAP_PATH):
+            return JSONResponse({"error": "SINR map generation failed; see server logs"}, status_code=500)
+        return FileResponse(SINR_MAP_PATH, media_type="image/png", filename="sinr_map.png")
+    except HTTPException:
+        raise
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("sinr-map", e)
+    except ImportError:
+        return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
+    except Exception as e:
+        logger.exception("SINR map error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/sionna/doppler")
+async def sionna_doppler_post(req: BaseSionnaRequest):
+    try:
+        from app.sionna_service import generate_doppler_plot, DOPPLER_PLOT_PATH
+
+        scene_xml = _resolve_sionna_scene_xml(req.scene)
+        tx_list, rx_config = _sionna_device_config(req.devices)
+
+        await generate_doppler_plot(
+            tx_list=tx_list,
+            rx_config=rx_config,
+            scene_xml=str(scene_xml),
+        )
+        if not os.path.isfile(DOPPLER_PLOT_PATH):
+            return JSONResponse({"error": "Doppler plot generation failed; see server logs"}, status_code=500)
+        return FileResponse(DOPPLER_PLOT_PATH, media_type="image/png", filename="doppler_plot.png")
+    except HTTPException:
+        raise
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("doppler", e)
+    except ImportError:
+        return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
+    except Exception as e:
+        logger.exception("Doppler plot error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/sionna/channel-response")
+async def sionna_channel_response_post(req: BaseSionnaRequest):
+    try:
+        from app.sionna_service import generate_channel_response, CHANNEL_RESP_PATH
+
+        scene_xml = _resolve_sionna_scene_xml(req.scene)
+        tx_list, rx_config = _sionna_device_config(req.devices)
+
+        await generate_channel_response(
+            tx_list=tx_list,
+            rx_config=rx_config,
+            scene_xml=str(scene_xml),
+        )
+        if not os.path.isfile(CHANNEL_RESP_PATH):
+            return JSONResponse({"error": "Channel response generation failed; see server logs"}, status_code=500)
+        return FileResponse(CHANNEL_RESP_PATH, media_type="image/png", filename="channel_response.png")
+    except HTTPException:
+        raise
+    except SionnaLLVMError as e:
+        return _sionna_llvm_error_response("channel-response", e)
+    except ImportError:
+        return JSONResponse({"error": "Sionna 未安裝，請先執行 pip install sionna"}, status_code=503)
+    except Exception as e:
+        logger.exception("Channel response error")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

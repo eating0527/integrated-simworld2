@@ -181,6 +181,7 @@ async def generate_sinr_map(
     sinr_vmax: float = 0.0,
     cell_size: float = 1.0,
     samples_per_tx: int = 10 ** 7,
+    scene_xml: Optional[str] = None,
 ) -> bool:
     """
     生成 SINR Map。
@@ -200,7 +201,8 @@ async def generate_sinr_map(
         if rx_config is None:
             rx_config = DEFAULT_RX
 
-        scene_xml = str(NYCU_XML)
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
         logger.info(f"使用場景: {scene_xml}")
 
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
@@ -494,6 +496,7 @@ async def generate_doppler_plot(
     output_path: str = DOPPLER_PLOT_PATH,
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
+    scene_xml: Optional[str] = None,
 ) -> bool:
     """生成延遲多普勒（Delay-Doppler）圖"""
     logger.info("▶ 開始生成 Delay-Doppler Plot...")
@@ -508,8 +511,11 @@ async def generate_doppler_plot(
         if rx_config is None:
             rx_config = DEFAULT_RX
 
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
+
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
-                             tx_list, rx_config, str(NYCU_XML))
+                             tx_list, rx_config, scene_xml)
 
         tx_names = list(scene.transmitters.keys())
         all_txs  = [scene.get(n) for n in tx_names]
@@ -586,6 +592,7 @@ async def generate_channel_response(
     output_path: str = CHANNEL_RESP_PATH,
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
+    scene_xml: Optional[str] = None,
 ) -> bool:
     """生成 H(t, f) 通道響應 3D 曲面圖（H_des / H_jam / H_all）"""
     logger.info("▶ 開始生成 Channel Response Plot...")
@@ -600,8 +607,11 @@ async def generate_channel_response(
         if rx_config is None:
             rx_config = DEFAULT_RX
 
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
+
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
-                             tx_list, rx_config, str(NYCU_XML))
+                             tx_list, rx_config, scene_xml)
 
         tx_names = list(scene.transmitters.keys())
         all_txs  = [scene.get(n) for n in tx_names]

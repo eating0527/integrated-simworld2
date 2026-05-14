@@ -30,7 +30,7 @@ interface SimStatus {
 }
 
 const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null };
-const GENERATED_SCENE_TABS: TabKey[] = ['cfr', 'iss', 'tss', 'cfar'];
+const GENERATED_SCENE_TABS: TabKey[] = ['sinr', 'cfr', 'doppler', 'channel', 'iss', 'tss', 'cfar'];
 const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
   constellationBatchSize: 1,
   ofdmSubcarriers: 76,
@@ -38,16 +38,6 @@ const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
   ebn0Db: 20,
   rayTracingMaxDepth: 10,
 };
-
-function buildSinrUrl(params: SINRParams): string {
-  const q = new URLSearchParams({
-    sinr_vmin: String(params.sinr_vmin),
-    sinr_vmax: String(params.sinr_vmax),
-    cell_size:  String(params.cell_size),
-    samples_per_tx: String(params.samples_per_tx),
-  });
-  return `${API}/api/sionna/sinr-map?${q.toString()}`;
-}
 
 interface SimulationPanelProps {
   sceneId?: string | null;
@@ -107,24 +97,21 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       return;
     }
 
-    if (generatedScene && !GENERATED_SCENE_TABS.includes(key)) {
-      setStatus(prev => ({
-        ...prev,
-        [key]: {
-          loading: false,
-          imageUrl: null,
-          error: 'Generated scene currently supports CFR/ISS/TSS/CFAR maps only.',
-        },
-      }));
-      return;
-    }
-
     setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null } }));
 
     try {
       let res;
+      const requestSceneId = sceneId ?? 'NTPU';
+      const devicePayload = devices.map(d => ({
+        name: d.name,
+        role: d.role,
+        x: d.x,
+        y: d.y,
+        z: d.z,
+        power_dbm: d.powerDbm ?? null,
+      }));
+
       if (key === 'cfr') {
-        const requestSceneId = sceneId ?? 'NTPU';
         res = await fetch(`${API}/api/sionna/cfr-plot`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -138,18 +125,10 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               ebn0_db: cfrAdvanced.ebn0Db,
               ray_tracing_max_depth: cfrAdvanced.rayTracingMaxDepth,
             },
-            devices: devices.map(d => ({
-              name: d.name,
-              role: d.role,
-              x: d.x,
-              y: d.y,
-              z: d.z,
-              power_dbm: d.powerDbm ?? null,
-            })),
+            devices: devicePayload,
           }),
         });
       } else if (['iss', 'tss', 'cfar'].includes(key)) {
-        const requestSceneId = sceneId ?? 'NTPU';
         res = await fetch(`${API}/api/simulate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -159,27 +138,44 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             cell_size: sinrParams.cell_size,
             samples_per_tx: sinrParams.samples_per_tx,
             overlay_scene: overlayScene,
-            devices: devices.map(d => ({
-              name: d.name,
-              role: d.role,
-              x: d.x,
-              y: d.y,
-              z: d.z,
-              power_dbm: d.powerDbm ?? null,
-            })),
+            devices: devicePayload,
           }),
         });
-      } else {
-        const urlMap: Record<string, string> = {
-          sinr:    buildSinrUrl(sinrParams),
-          doppler: `${API}/api/sionna/doppler`,
-          channel: `${API}/api/sionna/channel-response`,
-        };
-        res = await fetch(urlMap[key]);
+      } else if (key === 'sinr') {
+        res = await fetch(`${API}/api/sionna/sinr-map`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scene: requestSceneId,
+            sinr_vmin: sinrParams.sinr_vmin,
+            sinr_vmax: sinrParams.sinr_vmax,
+            cell_size: sinrParams.cell_size,
+            samples_per_tx: sinrParams.samples_per_tx,
+            devices: devicePayload,
+          }),
+        });
+      } else if (key === 'doppler') {
+        res = await fetch(`${API}/api/sionna/doppler`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scene: requestSceneId,
+            devices: devicePayload,
+          }),
+        });
+      } else if (key === 'channel') {
+        res = await fetch(`${API}/api/sionna/channel-response`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scene: requestSceneId,
+            devices: devicePayload,
+          }),
+        });
       }
 
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({ error: 'HTTP Error' }));
+      if (!res || !res.ok) {
+        const json = res ? await res.json().catch(() => ({ error: 'HTTP Error' })) : { error: 'Unknown Error' };
         throw new Error(json.detail || json.error || 'HTTP Error');
       }
       
