@@ -182,6 +182,7 @@ async def generate_sinr_map(
     cell_size: float = 1.0,
     samples_per_tx: int = 10 ** 7,
     scene_xml: Optional[str] = None,
+    scene_name: str = "Unknown",
 ) -> bool:
     """
     生成 SINR Map。
@@ -262,7 +263,7 @@ async def generate_sinr_map(
                           cmap="RdYlGn", vmin=sinr_vmin, vmax=sinr_vmax,
                           shading="auto")
         plt.colorbar(c, ax=ax, label="SINR (dB)")
-        ax.set_title("SINR Map (NYCU Scene)")
+        ax.set_title(f"SINR Map ({scene_name})")
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         plt.tight_layout()
@@ -360,6 +361,7 @@ async def generate_cfr_plot(
     subcarrier_spacing_hz: float = 30e3,
     ebn0_db: float = 20.0,
     ray_tracing_max_depth: int = 10,
+    scene_name: str = "Unknown",
 ) -> bool:
     """生成通道頻率響應（CFR）圖 + QPSK 星座圖"""
     logger.info("▶ 開始生成 CFR Plot...")
@@ -475,6 +477,7 @@ async def generate_cfr_plot(
         ax[2].plot(np.abs(h_main), label="|H_main|")
         ax[2].plot(np.abs(h_intf), label="|H_jammer|")
         ax[2].set(title=f"CFR Magnitude ({mod_label})", xlabel="Subcarrier Index"); ax[2].legend(); ax[2].grid(True)
+        fig.suptitle(f"Channel Frequency Response - {scene_name}")
         plt.tight_layout()
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -497,6 +500,7 @@ async def generate_doppler_plot(
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
     scene_xml: Optional[str] = None,
+    scene_name: str = "Unknown",
 ) -> bool:
     """生成延遲多普勒（Delay-Doppler）圖"""
     logger.info("▶ 開始生成 Delay-Doppler Plot...")
@@ -562,7 +566,7 @@ async def generate_doppler_plot(
         cols = min(3, len(grids))
         rows = int(np.ceil(len(grids) / cols))
         fig  = plt.figure(figsize=(cols * 5, rows * 4.5))
-        fig.suptitle("Delay-Doppler Plots")
+        fig.suptitle(f"Delay-Doppler Plots - {scene_name}")
 
         for k, (Z, lbl) in enumerate(zip(grids, labels), start=1):
             ax = fig.add_subplot(rows, cols, k, projection="3d")
@@ -593,6 +597,7 @@ async def generate_channel_response(
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
     scene_xml: Optional[str] = None,
+    scene_name: str = "Unknown",
 ) -> bool:
     """生成 H(t, f) 通道響應 3D 曲面圖（H_des / H_jam / H_all）"""
     logger.info("▶ 開始生成 Channel Response Plot...")
@@ -645,6 +650,7 @@ async def generate_channel_response(
             ax = fig.add_subplot(1, 3, k, projection="3d")
             ax.plot_surface(F_mesh, T_mesh, np.abs(H), cmap="viridis", edgecolor="none")
             ax.set_xlabel("Subcarrier"); ax.set_ylabel("OFDM Symbol"); ax.set_title(title)
+        fig.suptitle(f"Channel Response 3D Surface - {scene_name}")
         plt.tight_layout()
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
