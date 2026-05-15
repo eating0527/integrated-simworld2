@@ -129,6 +129,13 @@ def _denormalize_iss(values: np.ndarray) -> np.ndarray:
     return values * (ISS_MAX_DBM - ISS_MIN_DBM) + ISS_MIN_DBM
 
 
+def _normalize_sparse_ratio(sparse_ratio: float) -> float:
+    sparse_ratio = float(sparse_ratio)
+    if not np.isfinite(sparse_ratio):
+        raise ValueError("sparse_ratio must be finite")
+    return float(np.clip(sparse_ratio, 0.0, 1.0))
+
+
 def load_scene_arrays(dataset: SceneDataset) -> dict[str, np.ndarray]:
     arrays = {
         "building": np.load(dataset.files["building_height_128.npy"]).astype(np.float32),
@@ -151,6 +158,7 @@ def create_sparse_sample(
     sparse_ratio: float = 0.2,
     seed: int = 41,
 ) -> tuple[np.ndarray, np.ndarray]:
+    sparse_ratio = _normalize_sparse_ratio(sparse_ratio)
     outdoor_mask = (building_map <= 3.0).astype(np.float32)
     sparse_mask = np.zeros_like(outdoor_mask, dtype=np.float32)
     outdoor_indices = np.argwhere(outdoor_mask > 0.5)
@@ -158,7 +166,9 @@ def create_sparse_sample(
         return sparse_mask, outdoor_mask
 
     n_sparse = int(len(outdoor_indices) * sparse_ratio)
-    n_sparse = max(1, min(n_sparse, len(outdoor_indices)))
+    n_sparse = min(n_sparse, len(outdoor_indices))
+    if n_sparse == 0:
+        return sparse_mask, outdoor_mask
     rng = np.random.default_rng(seed)
     selected = outdoor_indices[rng.choice(len(outdoor_indices), size=n_sparse, replace=False)]
     sparse_mask[selected[:, 0], selected[:, 1]] = 1.0
@@ -394,6 +404,7 @@ def reconstruct_iss_unet(
     seed: int = 41,
     device: str = "cuda",
 ) -> dict[str, Any]:
+    sparse_ratio = _normalize_sparse_ratio(sparse_ratio)
     dataset = resolve_scene_dataset(scene)
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))

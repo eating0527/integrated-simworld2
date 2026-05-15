@@ -107,6 +107,47 @@ class ISSUNetServiceTests(unittest.TestCase):
             "/api/iss-unet/images/iss_unet_ntpu_comparison.png",
         )
 
+    def test_sparse_sample_zero_ratio_selects_no_samples(self):
+        from app.iss_unet_service import create_sparse_sample
+
+        iss = np.full((4, 5), -95.0, dtype=np.float32)
+        building = np.zeros((4, 5), dtype=np.float32)
+
+        sparse_mask, outdoor_mask = create_sparse_sample(iss, building, sparse_ratio=0.0)
+
+        self.assertEqual(int(outdoor_mask.sum()), 20)
+        self.assertEqual(int(sparse_mask.sum()), 0)
+
+    def test_sparse_sample_ratio_selects_expected_count(self):
+        from app.iss_unet_service import create_sparse_sample
+
+        iss = np.full((4, 5), -95.0, dtype=np.float32)
+        building = np.zeros((4, 5), dtype=np.float32)
+        building[0, 0] = 10.0
+        outdoor_pixels = int((building <= 3.0).sum())
+
+        sparse_mask, _ = create_sparse_sample(iss, building, sparse_ratio=0.2)
+
+        self.assertEqual(outdoor_pixels, 19)
+        self.assertEqual(int(sparse_mask.sum()), int(outdoor_pixels * 0.2))
+
+    def test_sparse_sample_full_ratio_selects_all_outdoor_pixels(self):
+        from app.iss_unet_service import create_sparse_sample
+
+        iss = np.full((4, 5), -95.0, dtype=np.float32)
+        building = np.zeros((4, 5), dtype=np.float32)
+        building[0, 0] = 10.0
+        outdoor_pixels = int((building <= 3.0).sum())
+
+        sparse_mask, _ = create_sparse_sample(iss, building, sparse_ratio=1.0)
+
+        self.assertEqual(int(sparse_mask.sum()), outdoor_pixels)
+
+    def test_reconstruct_request_accepts_zero_sparse_ratio(self):
+        req = main.ISSUNetReconstructRequest(scene="NTPU", sparse_ratio=0.0)
+
+        self.assertEqual(req.sparse_ratio, 0.0)
+
     def test_image_endpoint_serves_generated_png_from_api_route(self):
         image_path = self.output_dir / "iss_unet_ntpu_comparison.png"
         image_path.write_bytes(b"png-bytes")

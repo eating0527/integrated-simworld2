@@ -24,7 +24,7 @@ interface SINRParams {
 }
 
 interface ISSUNetParams {
-  sparse_ratio: number;
+  sparseRatioPercent: number;
   cfar_enabled: boolean;
 }
 
@@ -75,7 +75,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     samples_per_tx: 100000000,
   });
   const [issUnetParams, setIssUnetParams] = useState<ISSUNetParams>({
-    sparse_ratio: 0.2,
+    sparseRatioPercent: 20,
     cfar_enabled: true,
   });
 
@@ -144,7 +144,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             scene: requestSceneId,
-            sparse_ratio: issUnetParams.sparse_ratio,
+            sparse_ratio: issUnetParams.sparseRatioPercent / 100,
             cfar: {
               enabled: issUnetParams.cfar_enabled,
             },
@@ -374,11 +374,11 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             {tab === 'iss_unet' && (
               <div style={{ marginBottom: 12 }}>
                 <ParamGrid>
-                  <Label>Sparse Ratio</Label>
+                  <Label>Sparse Ratio (%)</Label>
                   <NumberInput
-                    value={issUnetParams.sparse_ratio}
-                    step={0.05} min={0.01} max={1}
-                    onChange={v => setIssUnetParams(p => ({ ...p, sparse_ratio: clampNumber(v, 0.01, 1) }))}
+                    value={issUnetParams.sparseRatioPercent}
+                    step={10} min={0} max={100}
+                    onChange={v => setIssUnetParams(p => ({ ...p, sparseRatioPercent: clampNumber(v, 0, 100) }))}
                   />
                   <Label>OS-CFAR</Label>
                   <ToggleSwitch

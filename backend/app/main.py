@@ -1167,7 +1167,7 @@ class ISSUNetCFARRequest(BaseModel):
 
 class ISSUNetReconstructRequest(BaseModel):
     scene: str
-    sparse_ratio: float = Field(default=0.2, gt=0.0, le=1.0)
+    sparse_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
     seed: int = Field(default=41)
 
