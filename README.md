@@ -117,8 +117,20 @@ winget install --id LLVM.LLVM --exact --accept-package-agreements --accept-sourc
 安裝後確認 DLL 存在：
 
 ```powershell
-Test-Path "C:\Program Files\LLVM\bin\LLVM-C.dll"
+### 7) 部署 ISS_UNET 模型權重 (ISS / Jammer 重建功能)
+
+ISS_UNET 功能需要預訓練的模型權重檔案。請手動將權重檔案放置於後端指定目錄：
+
+1. 建立目錄：`backend/app/model_artifacts/`
+2. 將 `best_iss_reconstruction_model.pth` 檔案放入該目錄中。
+
+檔案結構應如下：
+```text
+backend/app/model_artifacts/
+└── best_iss_reconstruction_model.pth
 ```
+
+若缺少此檔案，系統仍可啟動，但 ISS 重建功能將會顯示錯誤訊息。
 
 ## 啟動方式
 

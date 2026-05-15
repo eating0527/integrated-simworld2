@@ -108,7 +108,6 @@ def iss_unet_status() -> dict[str, Any]:
         "available": model_available and torch_available,
         "model": {
             "available": model_available,
-            "path": str(MODEL_ARTIFACT_PATH),
         },
         "torch": {
             "available": torch_available,
@@ -399,7 +398,8 @@ def reconstruct_iss_unet(
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))
     if not MODEL_ARTIFACT_PATH.exists():
-        raise FileNotFoundError(f"ISS_UNET model artifact not found.")
+        logger.error(f"ISS_UNET model artifact not found at: {MODEL_ARTIFACT_PATH}")
+        raise FileNotFoundError("ISS_UNET model artifact not found on the server. Please check the backend configuration.")
 
     arrays = load_scene_arrays(dataset)
     inputs, sparse_mask, outdoor_mask = build_model_input(arrays, sparse_ratio=sparse_ratio, seed=seed)
