@@ -399,7 +399,7 @@ def reconstruct_iss_unet(
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))
     if not MODEL_ARTIFACT_PATH.exists():
-        raise FileNotFoundError(f"Model artifact not found: {MODEL_ARTIFACT_PATH}")
+        raise FileNotFoundError(f"ISS_UNET model artifact not found.")
 
     arrays = load_scene_arrays(dataset)
     inputs, sparse_mask, outdoor_mask = build_model_input(arrays, sparse_ratio=sparse_ratio, seed=seed)

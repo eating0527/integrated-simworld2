@@ -56,4 +56,5 @@ tools/platform-tools-latest-windows.zip
 
 # Genrated simulation scenes
 backend/app/static/scenes/T-*
+backend/app/uploads/scene_index.json
 docs/plans/
