@@ -136,6 +136,15 @@ def _normalize_sparse_ratio(sparse_ratio: float) -> float:
     return float(np.clip(sparse_ratio, 0.0, 1.0))
 
 
+def sparse_ratio_label(sparse_ratio: float) -> str:
+    percent = _normalize_sparse_ratio(sparse_ratio) * 100.0
+    if np.isclose(percent, round(percent)):
+        value = str(int(round(percent)))
+    else:
+        value = f"{percent:.6f}".rstrip("0").rstrip(".").replace(".", "p")
+    return f"ratio_{value}"
+
+
 def load_scene_arrays(dataset: SceneDataset) -> dict[str, np.ndarray]:
     arrays = {
         "building": np.load(dataset.files["building_height_128.npy"]).astype(np.float32),
@@ -425,7 +434,7 @@ def reconstruct_iss_unet(
     reconstructed_iss = _clip_radio_map(_denormalize_iss(reconstructed_norm))
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"iss_unet_{dataset.scene.lower()}"
+    stem = f"iss_unet_{dataset.scene.lower()}_{sparse_ratio_label(sparse_ratio)}"
     reconstructed_path = OUTPUT_DIR / f"{stem}_reconstructed.png"
     comparison_path = OUTPUT_DIR / f"{stem}_comparison.png"
     cfar_path = OUTPUT_DIR / f"{stem}_cfar.png"

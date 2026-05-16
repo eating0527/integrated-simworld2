@@ -2,6 +2,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import json
 import time
 import uuid
@@ -1254,7 +1255,11 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
 async def iss_unet_image_get(filename: str):
     from app.iss_unet_service import OUTPUT_DIR
 
-    if "/" in filename or "\\" in filename or not filename.startswith("iss_unet_") or not filename.endswith(".png"):
+    valid_iss_unet_image = re.fullmatch(
+        r"iss_unet_[A-Za-z0-9_-]+(?:_ratio_[0-9]+(?:p[0-9]+)?)?_(?:reconstructed|comparison|cfar)\.png",
+        filename,
+    )
+    if "/" in filename or "\\" in filename or not valid_iss_unet_image:
         return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
 
     image_path = OUTPUT_DIR / filename

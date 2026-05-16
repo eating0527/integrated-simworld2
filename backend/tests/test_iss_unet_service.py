@@ -1,6 +1,8 @@
 import asyncio
 import json
 import shutil
+import sys
+import types
 import unittest
 import uuid
 from pathlib import Path
@@ -107,6 +109,23 @@ class ISSUNetServiceTests(unittest.TestCase):
             "/api/iss-unet/images/iss_unet_ntpu_comparison.png",
         )
 
+    def test_result_image_urls_support_ratio_bearing_names(self):
+        from app.iss_unet_service import result_image_url
+
+        self.assertEqual(
+            result_image_url("iss_unet_ntpu_ratio_50_comparison.png"),
+            "/api/iss-unet/images/iss_unet_ntpu_ratio_50_comparison.png",
+        )
+
+    def test_sparse_ratio_label_formats_common_ratios(self):
+        from app.iss_unet_service import sparse_ratio_label
+
+        self.assertEqual(sparse_ratio_label(0), "ratio_0")
+        self.assertEqual(sparse_ratio_label(0.2), "ratio_20")
+        self.assertEqual(sparse_ratio_label(0.5), "ratio_50")
+        self.assertEqual(sparse_ratio_label(1.0), "ratio_100")
+        self.assertEqual(sparse_ratio_label(0.125), "ratio_12p5")
+
     def test_sparse_sample_zero_ratio_selects_no_samples(self):
         from app.iss_unet_service import create_sparse_sample
 
@@ -148,6 +167,77 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(req.sparse_ratio, 0.0)
 
+    def test_reconstruct_uses_ratio_bearing_outputs_and_render_ratio(self):
+        self._write_ntpu_dataset()
+        model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
+        model_path.write_bytes(b"model")
+
+        class FakeTensor:
+            def float(self):
+                return self
+
+            def unsqueeze(self, _dim):
+                return self
+
+            def to(self, _device):
+                return self
+
+        class FakePrediction:
+            def __getitem__(self, _key):
+                return self
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return np.full((128, 128), 0.5, dtype=np.float32)
+
+        class FakeNoGrad:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, *_args):
+                return False
+
+        fake_torch = types.SimpleNamespace(
+            from_numpy=lambda _value: FakeTensor(),
+            no_grad=lambda: FakeNoGrad(),
+        )
+
+        class FakeModel:
+            def __call__(self, _tensor):
+                return FakePrediction()
+
+        captured = {}
+
+        def fake_render_comparison(_arrays, _reconstructed_iss, _sparse_mask, _outdoor_mask, sparse_ratio):
+            captured["sparse_ratio"] = sparse_ratio
+            return b"comparison"
+
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+                with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                    with patch.dict(sys.modules, {"torch": fake_torch}):
+                        with patch("app.iss_unet_service._load_model", return_value=(FakeModel(), "cpu")):
+                            with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                                with patch("app.iss_unet_service._render_comparison_png", side_effect=fake_render_comparison):
+                                    result = reconstruct_iss_unet(
+                                        "NTPU",
+                                        sparse_ratio=0.5,
+                                        cfar=ISSUNetCFARParams(enabled=False),
+                                    )
+
+        self.assertEqual(captured["sparse_ratio"], 0.5)
+        self.assertEqual(result["images"]["comparison"], "/api/iss-unet/images/iss_unet_ntpu_ratio_50_comparison.png")
+        self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.png").exists())
+        self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_comparison.png").exists())
+        self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.npy").exists())
+
     def test_image_endpoint_serves_generated_png_from_api_route(self):
         image_path = self.output_dir / "iss_unet_ntpu_comparison.png"
         image_path.write_bytes(b"png-bytes")
@@ -157,9 +247,27 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(Path(response.path), image_path)
 
+    def test_image_endpoint_serves_ratio_bearing_png_from_api_route(self):
+        image_path = self.output_dir / "iss_unet_ntpu_ratio_50_comparison.png"
+        image_path.write_bytes(b"png-bytes")
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            response = asyncio.run(main.iss_unet_image_get("iss_unet_ntpu_ratio_50_comparison.png"))
+
+        self.assertEqual(Path(response.path), image_path)
+
     def test_image_endpoint_rejects_path_traversal(self):
         with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
             response = asyncio.run(main.iss_unet_image_get("../secret.png"))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_image_endpoint_rejects_non_iss_filename(self):
+        image_path = self.output_dir / "other_ntpu_ratio_50_comparison.png"
+        image_path.write_bytes(b"png-bytes")
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            response = asyncio.run(main.iss_unet_image_get("other_ntpu_ratio_50_comparison.png"))
 
         self.assertEqual(response.status_code, 404)
 

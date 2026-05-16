@@ -205,7 +205,15 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       let url: string;
       if (key === 'iss_unet') {
         const json = await res.json();
-        url = `${API}${json.images?.comparison || json.images?.reconstructed}`;
+        const imagePath = json.images?.comparison || json.images?.reconstructed;
+        const sparseRatioPercent = typeof json.sparse_ratio === 'number'
+          ? json.sparse_ratio * 100
+          : issUnetParams.sparseRatioPercent;
+        const cacheParams = new URLSearchParams({
+          ratio: String(sparseRatioPercent),
+          t: String(Date.now()),
+        });
+        url = `${API}${imagePath}?${cacheParams.toString()}`;
       } else {
         const blob = await res.blob();
         url = URL.createObjectURL(blob);
