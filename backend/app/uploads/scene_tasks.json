@@ -1,5 +1,84 @@
 [
   {
+    "id": "task-f9df052911",
+    "sceneKey": "T-E9929455F7",
+    "sceneName": "picked_2026-05-17_06_10_48",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 25.109766469635776,
+      "lon": 121.51452988704061,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "文林里",
+      "location_id": "loc-23cbb0a95c"
+    },
+    "outputDir": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7",
+    "modelUrl": "/generated-scenes/T-E9929455F7/T-E9929455F7.glb",
+    "sionnaSceneXml": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\T-E9929455F7.xml",
+    "createdAt": "2026-05-17T14:10:48.243025",
+    "updatedAt": "2026-05-17T14:12:43.815138",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-05-17T14:10:48.246019",
+    "finishedAt": "2026-05-17T14:12:43.814138",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 4.3\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-E9929455F7",
+      "available": true,
+      "data_dir": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-E9929455F7",
+        "scene_xml": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\T-E9929455F7.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-05-17T14:12:43.812138"
+      }
+    }
+  },
+  {
     "id": "task-9375b041a3",
     "sceneKey": "T-F52A5571A8",
     "sceneName": "picked_2026-05-14_08_05_00",

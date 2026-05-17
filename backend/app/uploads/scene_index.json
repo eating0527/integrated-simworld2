@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "id": "task-f9df052911",
+    "sceneKey": "T-E9929455F7",
+    "sceneName": "picked_2026-05-17_06_10_48",
+    "location": {
+      "lat": 25.109766469635776,
+      "lon": 121.51452988704061,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "文林里",
+      "location_id": "loc-23cbb0a95c"
+    },
+    "modelUrl": "/generated-scenes/T-E9929455F7/T-E9929455F7.glb",
+    "sionnaSceneXml": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\T-E9929455F7.xml",
+    "createdAt": "2026-05-17T14:10:48.243025",
+    "updatedAt": "2026-05-17T14:12:43.815138",
+    "indexedAt": "2026-05-17T14:12:43.816138"
+  }
+]

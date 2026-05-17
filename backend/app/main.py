@@ -844,6 +844,28 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     }
 
 
+def _prepare_iss_unet_dataset_for_scene_task(scene_key: str) -> Dict[str, Any]:
+    from app.iss_unet_dataset_service import prepare_iss_unet_dataset
+
+    try:
+        result = prepare_iss_unet_dataset(scene_key, scene_dir=SCENE_DIR)
+        return {
+            "stage": "iss_unet_dataset_prepared",
+            "note": "Blender stage completed and ISS_UNET dataset prepared",
+            "issUnetDataset": result,
+        }
+    except Exception as exc:
+        logger.exception("ISS_UNET dataset preparation failed for generated scene %s", scene_key)
+        return {
+            "stage": "iss_unet_dataset_failed",
+            "note": "Blender stage completed but ISS_UNET dataset preparation failed",
+            "issUnetDataset": {
+                "available": False,
+                "error": str(exc),
+            },
+        }
+
+
 async def _process_scene_task(task_id: str):
     _update_task(
         task_id,
@@ -861,13 +883,18 @@ async def _process_scene_task(task_id: str):
         result = {"success": False, "error": str(exc)}
 
     if result.get("success"):
+        dataset_updates = await asyncio.to_thread(
+            _prepare_iss_unet_dataset_for_scene_task,
+            result.get("sceneKey") or scene_key,
+        )
         updates = {
             "status": "completed",
-            "stage": "blender_generated",
-            "note": "Blender stage completed",
+            "stage": dataset_updates["stage"],
+            "note": dataset_updates["note"],
             "error": None,
             "blenderPath": result.get("blenderPath"),
             "finishedAt": datetime.now().isoformat(),
+            "issUnetDataset": dataset_updates["issUnetDataset"],
         }
         for key in ("outputDir", "sceneKey", "modelUrl", "sionnaSceneXml"):
             if result.get(key) is not None:
@@ -1173,6 +1200,18 @@ class ISSUNetReconstructRequest(BaseModel):
     seed: int = Field(default=41)
 
 
+class ISSUNetDatasetPrepareRequest(BaseModel):
+    scene: str
+    bs_pos: tuple[int, int] = Field(default=(64, 64))
+    jammer_positions: List[tuple[int, int]] = Field(default_factory=lambda: [(30, 30)])
+    jammer_powers: List[float] = Field(default_factory=lambda: [40.0])
+    bs_power: float = Field(default=40.0)
+    bs_height: float = Field(default=40.0)
+    jammer_height: float = Field(default=40.0)
+    rx_height: float = Field(default=1.5)
+    area_m: float = Field(default=512.0, gt=0.0)
+
+
 class SINRMapRequest(BaseSionnaRequest):
     sinr_vmin: float = Field(default=-20.0)
     sinr_vmax: float = Field(default=40.0)
@@ -1191,6 +1230,63 @@ async def iss_unet_status_get():
     from app.iss_unet_service import iss_unet_status
 
     return iss_unet_status()
+
+
+@app.get("/api/iss-unet/dataset/status")
+async def iss_unet_dataset_status_get(scene: str = Query(...)):
+    from app.iss_unet_service import resolve_scene_dataset
+
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
+    return {
+        "success": True,
+        "scene": dataset.scene,
+        "available": dataset.available,
+        "data_dir": str(dataset.data_dir),
+        "missing_files": dataset.missing_files,
+        "meta_available": dataset.meta_path is not None,
+    }
+
+
+@app.post("/api/iss-unet/dataset/prepare")
+async def iss_unet_dataset_prepare_post(req: ISSUNetDatasetPrepareRequest):
+    from app.iss_unet_dataset_service import SceneUnavailableError, prepare_iss_unet_dataset
+
+    try:
+        result = await asyncio.to_thread(
+            prepare_iss_unet_dataset,
+            scene=req.scene,
+            scene_dir=SCENE_DIR,
+            bs_pos=req.bs_pos,
+            jammer_positions=req.jammer_positions,
+            jammer_powers=req.jammer_powers,
+            bs_power=req.bs_power,
+            bs_height=req.bs_height,
+            jammer_height=req.jammer_height,
+            rx_height=req.rx_height,
+            area_m=req.area_m,
+        )
+        return result
+    except SceneUnavailableError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "scene_unavailable",
+            },
+            status_code=404,
+        )
+    except ImportError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_dependency_missing",
+            },
+            status_code=503,
+        )
+    except Exception as exc:
+        logger.exception("ISS_UNET dataset preparation failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 @app.post("/api/iss-unet/reconstruct")

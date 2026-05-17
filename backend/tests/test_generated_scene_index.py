@@ -111,6 +111,56 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         self.assertEqual(response["scenes"][0]["id"], "task-ok")
         self.assertEqual(json.loads(self.index_json.read_text(encoding="utf-8")), response["scenes"])
 
+    def test_completed_scene_task_prepares_iss_unet_dataset(self):
+        task = _task("task-ok", "T-AAAAAAAAAA", status="running")
+        task["outputDir"] = str(self.scene_dir / "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+
+        prepare_calls = []
+
+        def fake_prepare(scene, scene_dir):
+            prepare_calls.append((scene, scene_dir))
+            return {"available": True}
+
+        with patch.object(main, "_run_blender_task_sync", return_value={
+            "success": True,
+            "outputDir": str(self.scene_dir / "T-AAAAAAAAAA"),
+            "sceneKey": "T-AAAAAAAAAA",
+            "modelUrl": "/generated-scenes/T-AAAAAAAAAA/T-AAAAAAAAAA.glb",
+            "sionnaSceneXml": str(self.scene_dir / "T-AAAAAAAAAA" / "T-AAAAAAAAAA.xml"),
+        }):
+            with patch("app.iss_unet_dataset_service.prepare_iss_unet_dataset", side_effect=fake_prepare):
+                asyncio.run(main._process_scene_task("task-ok"))
+
+        updated = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
+        self.assertEqual(prepare_calls, [("T-AAAAAAAAAA", self.scene_dir)])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(updated["stage"], "iss_unet_dataset_prepared")
+        self.assertTrue(updated["issUnetDataset"]["available"])
+
+    def test_completed_scene_task_records_dataset_prepare_failure_without_crashing(self):
+        task = _task("task-ok", "T-AAAAAAAAAA", status="running")
+        task["outputDir"] = str(self.scene_dir / "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+
+        with patch.object(main, "_run_blender_task_sync", return_value={
+            "success": True,
+            "outputDir": str(self.scene_dir / "T-AAAAAAAAAA"),
+            "sceneKey": "T-AAAAAAAAAA",
+            "modelUrl": "/generated-scenes/T-AAAAAAAAAA/T-AAAAAAAAAA.glb",
+            "sionnaSceneXml": str(self.scene_dir / "T-AAAAAAAAAA" / "T-AAAAAAAAAA.xml"),
+        }):
+            with patch("app.iss_unet_dataset_service.prepare_iss_unet_dataset", side_effect=RuntimeError("Sionna unavailable")):
+                asyncio.run(main._process_scene_task("task-ok"))
+
+        updated = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(updated["stage"], "iss_unet_dataset_failed")
+        self.assertEqual(updated["issUnetDataset"]["available"], False)
+        self.assertIn("Sionna unavailable", updated["issUnetDataset"]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

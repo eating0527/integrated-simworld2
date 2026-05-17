@@ -271,6 +271,64 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_prepare_dataset_reuses_existing_building_height_map_and_writes_contract_files(self):
+        scene_root = self.scene_dir / "NYCU"
+        scene_root.mkdir(parents=True)
+        scene_xml = scene_root / "NYCU.xml"
+        scene_xml.write_text("<scene/>", encoding="utf-8")
+        source_map = np.arange(512 * 512, dtype=np.float32).reshape(512, 512)
+        np.save(scene_root / "building_height_512.npy", source_map)
+
+        radio_maps = {
+            "DSS": np.full((128, 128), -120.0, dtype=np.float32),
+            "ISS": np.full((128, 128), -80.0, dtype=np.float32),
+            "TSS": np.full((128, 128), -75.0, dtype=np.float32),
+        }
+
+        from app.iss_unet_dataset_service import prepare_iss_unet_dataset
+
+        with patch("app.iss_unet_dataset_service.run_sionna_dataset_maps", return_value=radio_maps):
+            result = prepare_iss_unet_dataset("nycu", scene_dir=self.scene_dir)
+
+        data_dir = scene_root / "iss_unet_data"
+        self.assertTrue(result["available"])
+        self.assertEqual(result["scene"], "NYCU")
+        self.assertEqual(np.load(data_dir / "building_height_128.npy").shape, (128, 128))
+        np.testing.assert_array_equal(np.load(data_dir / "building_height_128.npy"), source_map[::4, ::4])
+        self.assertEqual(np.load(data_dir / "sionna_dss.npy").shape, (128, 128))
+        self.assertEqual(np.load(data_dir / "sionna_iss.npy").shape, (128, 128))
+        self.assertEqual(np.load(data_dir / "sionna_tss.npy").shape, (128, 128))
+        meta = json.loads((data_dir / "scene_meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["scene"], "NYCU")
+        self.assertEqual(meta["grid_res"], 128)
+        self.assertEqual(meta["area_m"], 512.0)
+        self.assertEqual(meta["outputs"]["iss"], "sionna_iss.npy")
+
+    def test_dataset_status_endpoint_reports_scene_availability(self):
+        scene_root = self.scene_dir / "NYCU"
+        data_dir = scene_root / "iss_unet_data"
+        data_dir.mkdir(parents=True)
+        for name in REQUIRED_FILES:
+            np.save(data_dir / name, np.zeros((128, 128), dtype=np.float32))
+        (data_dir / "scene_meta.json").write_text('{"scene":"NYCU"}', encoding="utf-8")
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            response = asyncio.run(main.iss_unet_dataset_status_get(scene="nycu"))
+
+        self.assertTrue(response["available"])
+        self.assertEqual(response["scene"], "NYCU")
+        self.assertEqual(response["missing_files"], [])
+        self.assertTrue(response["meta_available"])
+
+    def test_dataset_prepare_endpoint_returns_unavailable_for_missing_scene_xml(self):
+        with patch("app.iss_unet_dataset_service.SCENE_DIR", self.scene_dir):
+            response = asyncio.run(main.iss_unet_dataset_prepare_post(main.ISSUNetDatasetPrepareRequest(scene="T-ABCDEF1234")))
+
+        self.assertEqual(response.status_code, 404)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error_type"], "scene_unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()
