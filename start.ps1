@@ -80,6 +80,16 @@ if (-not (Test-Path $pythonExe)) {
     Err "Missing .venv, run: cd backend; python -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
 }
+
+# Check environment versions
+Info "Checking environment versions..."
+$checkEnvScript = Join-Path $ToolsDir "check_env.py"
+& $pythonExe $checkEnvScript
+if ($LASTEXITCODE -ne 0) {
+    Err "Environment check failed. Update your dependencies: cd backend; .venv\Scripts\python -m pip install -r requirements.txt"
+    exit 1
+}
+
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
     Err "Missing node_modules, run: cd frontend; npm install"
     exit 1

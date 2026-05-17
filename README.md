@@ -52,8 +52,12 @@
 
 ## 安裝需求
 
-- Python 3.12+
+- **Python 3.12+**（Sionna 2.x 支援 3.12 以上）
+  - 檢查版本：`python --version`
+- **Sionna 2.x.x**（最新版 PHY/SYS 模組已改用 PyTorch）
+  - 檢查版本：`python -c "import sionna; print(sionna.__version__)"`
 - PyTorch 2.9+（Sionna 2.x PHY/SYS 使用 PyTorch）
+  - 檢查版本：`python -c "import torch; print(torch.__version__)"`
 - Node.js 18+（建議 20+）
 - Blender 4.2 LTS，或能相容 blosm 的版本
 - Blosm (Blender 插件)

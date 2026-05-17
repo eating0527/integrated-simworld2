@@ -26,6 +26,17 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; }
 [[ -d "$BACKEND_DIR/.venv" ]] || { error "Missing .venv, run: cd backend && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt"; exit 1; }
 [[ -d "$FRONTEND_DIR/node_modules" ]] || { error "Missing node_modules, run: cd frontend && npm install"; exit 1; }
 
+# Check environment versions
+PYTHON_EXE="$BACKEND_DIR/.venv/Scripts/python.exe"
+[[ -f "$PYTHON_EXE" ]] || PYTHON_EXE="$BACKEND_DIR/.venv/bin/python"
+
+info "Checking environment versions..."
+"$PYTHON_EXE" "$SCRIPT_DIR/tools/check_env.py" || {
+    error "Environment check failed. Update your dependencies:"
+    error "  cd backend && .venv/bin/python -m pip install -r requirements.txt"
+    exit 1
+}
+
 LOG_DIR="$SCRIPT_DIR/.logs"
 mkdir -p "$LOG_DIR"
 
