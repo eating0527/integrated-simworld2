@@ -388,7 +388,7 @@ async def generate_cfr_plot(
         if modulation not in {"qpsk", "16qam"}:
             raise ValueError("modulation must be 'qpsk' or '16qam'")
 
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()
         import torch
         from sionna.phy.channel import AWGN, ApplyOFDMChannel, cir_to_ofdm_channel
         from sionna.phy.mapping import Mapper
@@ -521,7 +521,7 @@ async def generate_doppler_plot(
     _clean(output_path)
 
     try:
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()
         _setup_torch()
 
         if tx_list is None:
@@ -618,7 +618,7 @@ async def generate_channel_response(
     _clean(output_path)
 
     try:
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()
         _setup_torch()
 
         if tx_list is None:

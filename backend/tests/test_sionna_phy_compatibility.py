@@ -1,3 +1,4 @@
+import inspect
 import sys
 import types
 import unittest
@@ -31,6 +32,17 @@ class SionnaPhyCompatibilityTests(unittest.TestCase):
     def test_torch_subcarrier_frequencies_exists(self):
         """Verify _torch_subcarrier_frequencies function is callable."""
         self.assertTrue(callable(sionna_service._torch_subcarrier_frequencies))
+
+    def test_channel_plot_generators_unpack_load_sionna_signature(self):
+        """Verify channel plot generators accept _load_sionna's 6-item return signature."""
+        for func in (
+            sionna_service.generate_cfr_plot,
+            sionna_service.generate_doppler_plot,
+            sionna_service.generate_channel_response,
+        ):
+            source = inspect.getsource(func)
+            self.assertIn("load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()", source)
+            self.assertNotIn("subcarrier_frequencies, _ = _load_sionna()", source)
 
 
 if __name__ == "__main__":
