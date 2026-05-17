@@ -49,6 +49,16 @@ def _w_to_dbm(watts: np.ndarray) -> np.ndarray:
     return 10.0 * np.log10(np.maximum(watts, 1e-30)) + 30.0
 
 
+def _to_numpy(value: Any) -> np.ndarray:
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        return value.numpy()
+    return np.array(value)
+
+
 def resolve_scene_xml(scene: str, scene_dir: Path = SCENE_DIR) -> tuple[str, Path]:
     scene_name = _canonical_scene(scene)
     scene_xml = scene_dir / scene_name / f"{scene_name}.xml"
@@ -197,7 +207,7 @@ def run_sionna_dataset_maps(
         refraction=False,
         diffuse_reflection=True,
     )
-    path_gain = rm.path_gain.numpy().astype(np.float32)
+    path_gain = _to_numpy(rm.path_gain).astype(np.float32)
     path_gain = np.flip(path_gain, axis=1)
 
     total_gain_lin = 10.0 ** ((GTX_DB + GRX_DB - INSERTION_LOSS_DB) / 10.0)

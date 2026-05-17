@@ -130,10 +130,9 @@ def _load_sionna():
             Receiver as SionnaRX,
             PlanarArray,
             PathSolver,
-            subcarrier_frequencies,
             RadioMapSolver,
         )
-        return load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, RadioMapSolver
+        return load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, RadioMapSolver
     except ImportError as e:
         if _is_llvm_error(e):
             raise SionnaLLVMError(_format_llvm_error(e)) from e
@@ -194,7 +193,7 @@ async def generate_sinr_map(
     _clean(output_path)
 
     try:
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, RadioMapSolver = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, RadioMapSolver = _load_sionna()
         _setup_torch()
 
         if tx_list is None:
@@ -226,10 +225,10 @@ async def generate_sinr_map(
                        samples_per_tx=samples_per_tx)
 
         # path_gain: [num_tx, H, W]（線性，無單位）
-        pg = rm.path_gain.numpy()
+        pg = _to_numpy(rm.path_gain)
 
         # cell_centers: [H, W, 3] → 取 X/Y 座標
-        cc = rm.cell_centers.numpy()
+        cc = _to_numpy(rm.cell_centers)
         X = cc[:, :, 0]
         Y = cc[:, :, 1]
 
@@ -315,6 +314,23 @@ def _solver_and_cir(scene, PathSolver, n_time=1, samp_freq=30e3,
 def _dbm2w(dbm): return 10 ** (dbm / 10) / 1e3
 
 
+def _torch_subcarrier_frequencies(num_subcarriers: int, subcarrier_spacing_hz: float, device):
+    from sionna.phy.channel import subcarrier_frequencies
+
+    freqs = subcarrier_frequencies(int(num_subcarriers), float(subcarrier_spacing_hz))
+    return freqs.to(device=device)
+
+
+def _to_numpy(value):
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        return value.numpy()
+    return np.array(value)
+
+
 def _compute_H_f(a, tau, tx_i, freqs_hz):
     """單一 TX 的 H(f) = Σ_p a_p · exp(−j2πf·τ_p)  [num_paths] → [N_F]"""
     a_p = a[0, 0, tx_i, 0, :, 0]     # [num_paths]
@@ -374,8 +390,7 @@ async def generate_cfr_plot(
 
         load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
         import torch
-        from sionna.phy.channel import AWGN, ApplyOFDMChannel
-        from sionna.phy.channel.utils import cir_to_ofdm_channel
+        from sionna.phy.channel import AWGN, ApplyOFDMChannel, cir_to_ofdm_channel
         from sionna.phy.mapping import Mapper
         device = _setup_torch() or torch.device("cpu")
 
@@ -398,9 +413,8 @@ async def generate_cfr_plot(
         SCS = float(subcarrier_spacing_hz)
         EBN0_dB = float(ebn0_db)
         BATCH_SIZE = int(constellation_batch_size)
-        freqs_hz = torch.tensor(np.array(subcarrier_frequencies(N_SUB, SCS)),
-                                dtype=torch.float32, device=device)
-        cir_out_type = "torch" if device.type == "cuda" else "numpy"
+        freqs_hz = _torch_subcarrier_frequencies(N_SUB, SCS, device)
+        cir_out_type = "torch"
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=1, samp_freq=SCS,
@@ -627,7 +641,7 @@ async def generate_channel_response(
         N_F  = 76       # 子載波數
         SCS  = 30e3     # 子載波間距 Hz
         T_sym = 1.0 / SCS
-        freqs_hz = np.array(subcarrier_frequencies(N_F, SCS))   # drjit 轉 numpy [N_F]
+        freqs_hz = _torch_subcarrier_frequencies(N_F, SCS, "cpu").numpy()
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=N_T, samp_freq=1.0/T_sym,
