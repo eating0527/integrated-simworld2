@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 
 const API = import.meta.env.VITE_API_URL || '';
 
-type TabKey = 'sinr' | 'cfr' | 'doppler' | 'channel' | 'iss' | 'tss' | 'cfar';
+type TabKey = 'sinr' | 'cfr' | 'doppler' | 'channel' | 'iss' | 'tss' | 'cfar' | 'iss_unet';
 type CFRModulation = 'qpsk' | '16qam';
 type ComputeImpact = 'low' | 'medium' | 'high';
 
@@ -23,6 +23,11 @@ interface SINRParams {
   samples_per_tx: number;
 }
 
+interface ISSUNetParams {
+  sparseRatioPercent: number;
+  cfar_enabled: boolean;
+}
+
 interface SimStatus {
   loading: boolean;
   imageUrl: string | null;
@@ -30,7 +35,7 @@ interface SimStatus {
 }
 
 const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null };
-const GENERATED_SCENE_TABS: TabKey[] = ['sinr', 'cfr', 'doppler', 'channel', 'iss', 'tss', 'cfar'];
+const GENERATED_SCENE_TABS: TabKey[] = ['sinr', 'cfr', 'doppler', 'channel', 'iss', 'tss', 'cfar', 'iss_unet'];
 const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
   constellationBatchSize: 1,
   ofdmSubcarriers: 76,
@@ -60,6 +65,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     iss:     { ...EMPTY },
     tss:     { ...EMPTY },
     cfar:    { ...EMPTY },
+    iss_unet:{ ...EMPTY },
   });
 
   const [sinrParams, setSinrParams] = useState<SINRParams>({
@@ -67,6 +73,10 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     sinr_vmax: 40,
     cell_size: 3.0,
     samples_per_tx: 100000000,
+  });
+  const [issUnetParams, setIssUnetParams] = useState<ISSUNetParams>({
+    sparseRatioPercent: 20,
+    cfar_enabled: true,
   });
 
   const devices = useDeviceStore(state => state.devices);
@@ -128,6 +138,18 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             devices: devicePayload,
           }),
         });
+      } else if (key === 'iss_unet') {
+        res = await fetch(`${API}/api/iss-unet/reconstruct`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scene: requestSceneId,
+            sparse_ratio: issUnetParams.sparseRatioPercent / 100,
+            cfar: {
+              enabled: issUnetParams.cfar_enabled,
+            },
+          }),
+        });
       } else if (['iss', 'tss', 'cfar'].includes(key)) {
         res = await fetch(`${API}/api/simulate`, {
           method: 'POST',
@@ -176,17 +198,32 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
 
       if (!res || !res.ok) {
         const json = res ? await res.json().catch(() => ({ error: 'HTTP Error' })) : { error: 'Unknown Error' };
-        throw new Error(json.detail || json.error || 'HTTP Error');
+        const missing = Array.isArray(json.missing_files) ? `: ${json.missing_files.join(', ')}` : '';
+        throw new Error(`${json.detail || json.error || 'HTTP Error'}${missing}`);
       }
-      
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
+
+      let url: string;
+      if (key === 'iss_unet') {
+        const json = await res.json();
+        const imagePath = json.images?.comparison || json.images?.reconstructed;
+        const sparseRatioPercent = typeof json.sparse_ratio === 'number'
+          ? json.sparse_ratio * 100
+          : issUnetParams.sparseRatioPercent;
+        const cacheParams = new URLSearchParams({
+          ratio: String(sparseRatioPercent),
+          t: String(Date.now()),
+        });
+        url = `${API}${imagePath}?${cacheParams.toString()}`;
+      } else {
+        const blob = await res.blob();
+        url = URL.createObjectURL(blob);
+      }
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: url, error: null } }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg } }));
     }
-  }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation, cfrAdvanced]);
+  }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams]);
 
   const cur = status[tab];
 
@@ -260,6 +297,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               { key: 'iss',     label: 'ISS Map' },
               { key: 'tss',     label: 'TSS Map' },
               { key: 'cfar',    label: 'ISS+CFAR Map' },
+              { key: 'iss_unet', label: 'ISS_UNET' },
             ] as { key: TabKey; label: string }[]).map(({ key, label }) => {
               const disabled = generatedScene && !GENERATED_SCENE_TABS.includes(key);
               return (
@@ -337,6 +375,24 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       <ToggleSwitch checked={overlayScene} onChange={setOverlayScene} />
                     </>
                   )}
+                </ParamGrid>
+              </div>
+            )}
+
+            {tab === 'iss_unet' && (
+              <div style={{ marginBottom: 12 }}>
+                <ParamGrid>
+                  <Label>Sparse Ratio (%)</Label>
+                  <NumberInput
+                    value={issUnetParams.sparseRatioPercent}
+                    step={10} min={0} max={100}
+                    onChange={v => setIssUnetParams(p => ({ ...p, sparseRatioPercent: clampNumber(v, 0, 100) }))}
+                  />
+                  <Label>OS-CFAR</Label>
+                  <ToggleSwitch
+                    checked={issUnetParams.cfar_enabled}
+                    onChange={v => setIssUnetParams(p => ({ ...p, cfar_enabled: v }))}
+                  />
                 </ParamGrid>
               </div>
             )}

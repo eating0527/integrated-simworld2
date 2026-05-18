@@ -1,56 +1,20 @@
 [
   {
-    "id": "task-9375b041a3",
-    "sceneKey": "T-F52A5571A8",
-    "sceneName": "picked_2026-05-14_08_05_00",
+    "id": "task-f9df052911",
+    "sceneKey": "T-E9929455F7",
+    "sceneName": "picked_2026-05-17_06_10_48",
     "location": {
-      "lat": 25.014431509761046,
-      "lon": 121.42227172851564,
+      "lat": 25.109766469635776,
+      "lon": 121.51452988704061,
       "zoom": 17,
       "requested_zoom": 17,
-      "place_name": null,
-      "location_id": "loc-eda789843c"
+      "place_name": "文林里",
+      "location_id": "loc-23cbb0a95c"
     },
-    "modelUrl": "/generated-scenes/T-F52A5571A8/T-F52A5571A8.glb",
-    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F52A5571A8\\T-F52A5571A8.xml",
-    "createdAt": "2026-05-14T16:05:00.744280",
-    "updatedAt": "2026-05-14T16:05:44.694712",
-    "indexedAt": "2026-05-14T16:13:20.913330"
-  },
-  {
-    "id": "task-2271ae1931",
-    "sceneKey": "T-5D3B7D2B45",
-    "sceneName": "picked_2026-05-14_05_28_23",
-    "location": {
-      "lat": 24.987652866658557,
-      "lon": 121.28554344177248,
-      "zoom": 17,
-      "requested_zoom": 17,
-      "place_name": "中聖里",
-      "location_id": "loc-a38c408b99"
-    },
-    "modelUrl": "/generated-scenes/T-5D3B7D2B45/T-5D3B7D2B45.glb",
-    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5D3B7D2B45\\T-5D3B7D2B45.xml",
-    "createdAt": "2026-05-14T13:28:23.583761",
-    "updatedAt": "2026-05-14T13:30:00.017061",
-    "indexedAt": "2026-05-14T16:13:20.913330"
-  },
-  {
-    "id": "task-5a4d12cd7b",
-    "sceneKey": "T-752752D30E",
-    "sceneName": "picked_2026-05-06_16_54_53",
-    "location": {
-      "lat": 25.053101462955347,
-      "lon": 121.44407272338869,
-      "zoom": 17,
-      "requested_zoom": 17,
-      "place_name": "立廷里",
-      "location_id": "loc-ad43515984"
-    },
-    "modelUrl": "/generated-scenes/T-752752D30E/T-752752D30E.glb",
-    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-752752D30E\\T-752752D30E.xml",
-    "createdAt": "2026-05-07T00:54:53.382906",
-    "updatedAt": "2026-05-07T00:55:25.511087",
-    "indexedAt": "2026-05-14T16:13:20.913330"
+    "modelUrl": "/generated-scenes/T-E9929455F7/T-E9929455F7.glb",
+    "sionnaSceneXml": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\T-E9929455F7.xml",
+    "createdAt": "2026-05-17T14:10:48.243025",
+    "updatedAt": "2026-05-17T14:12:43.815138",
+    "indexedAt": "2026-05-18T01:13:46.905764"
   }
 ]

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import json
 import time
 import uuid
@@ -843,6 +844,28 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     }
 
 
+def _prepare_iss_unet_dataset_for_scene_task(scene_key: str) -> Dict[str, Any]:
+    from app.iss_unet_dataset_service import prepare_iss_unet_dataset
+
+    try:
+        result = prepare_iss_unet_dataset(scene_key, scene_dir=SCENE_DIR)
+        return {
+            "stage": "iss_unet_dataset_prepared",
+            "note": "Blender stage completed and ISS_UNET dataset prepared",
+            "issUnetDataset": result,
+        }
+    except Exception as exc:
+        logger.exception("ISS_UNET dataset preparation failed for generated scene %s", scene_key)
+        return {
+            "stage": "iss_unet_dataset_failed",
+            "note": "Blender stage completed but ISS_UNET dataset preparation failed",
+            "issUnetDataset": {
+                "available": False,
+                "error": str(exc),
+            },
+        }
+
+
 async def _process_scene_task(task_id: str):
     _update_task(
         task_id,
@@ -860,13 +883,18 @@ async def _process_scene_task(task_id: str):
         result = {"success": False, "error": str(exc)}
 
     if result.get("success"):
+        dataset_updates = await asyncio.to_thread(
+            _prepare_iss_unet_dataset_for_scene_task,
+            result.get("sceneKey") or scene_key,
+        )
         updates = {
             "status": "completed",
-            "stage": "blender_generated",
-            "note": "Blender stage completed",
+            "stage": dataset_updates["stage"],
+            "note": dataset_updates["note"],
             "error": None,
             "blenderPath": result.get("blenderPath"),
             "finishedAt": datetime.now().isoformat(),
+            "issUnetDataset": dataset_updates["issUnetDataset"],
         }
         for key in ("outputDir", "sceneKey", "modelUrl", "sionnaSceneXml"):
             if result.get(key) is not None:
@@ -1156,6 +1184,34 @@ class BaseSionnaRequest(BaseModel):
     devices: List[DeviceIn]
 
 
+class ISSUNetCFARRequest(BaseModel):
+    enabled: bool = Field(default=True)
+    guard_cells: int = Field(default=2, ge=1, le=10)
+    training_cells: int = Field(default=4, ge=1, le=20)
+    pfa: float = Field(default=1e-4, gt=0.0, lt=1.0)
+    os_rank: float = Field(default=0.75, gt=0.0, le=1.0)
+    min_threshold_dbm: float = Field(default=-50.0, ge=-140.0, le=-35.0)
+
+
+class ISSUNetReconstructRequest(BaseModel):
+    scene: str
+    sparse_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
+    seed: int = Field(default=41)
+
+
+class ISSUNetDatasetPrepareRequest(BaseModel):
+    scene: str
+    bs_pos: tuple[int, int] = Field(default=(64, 64))
+    jammer_positions: List[tuple[int, int]] = Field(default_factory=lambda: [(30, 30)])
+    jammer_powers: List[float] = Field(default_factory=lambda: [40.0])
+    bs_power: float = Field(default=40.0)
+    bs_height: float = Field(default=40.0)
+    jammer_height: float = Field(default=40.0)
+    rx_height: float = Field(default=1.5)
+    area_m: float = Field(default=512.0, gt=0.0)
+
+
 class SINRMapRequest(BaseSionnaRequest):
     sinr_vmin: float = Field(default=-20.0)
     sinr_vmax: float = Field(default=40.0)
@@ -1167,6 +1223,146 @@ def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
     return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
+
+
+@app.get("/api/iss-unet/status")
+async def iss_unet_status_get():
+    from app.iss_unet_service import iss_unet_status
+
+    return iss_unet_status()
+
+
+@app.get("/api/iss-unet/dataset/status")
+async def iss_unet_dataset_status_get(scene: str = Query(...)):
+    from app.iss_unet_service import resolve_scene_dataset
+
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
+    return {
+        "success": True,
+        "scene": dataset.scene,
+        "available": dataset.available,
+        "data_dir": str(dataset.data_dir),
+        "missing_files": dataset.missing_files,
+        "meta_available": dataset.meta_path is not None,
+    }
+
+
+@app.post("/api/iss-unet/dataset/prepare")
+async def iss_unet_dataset_prepare_post(req: ISSUNetDatasetPrepareRequest):
+    from app.iss_unet_dataset_service import SceneUnavailableError, prepare_iss_unet_dataset
+
+    try:
+        result = await asyncio.to_thread(
+            prepare_iss_unet_dataset,
+            scene=req.scene,
+            scene_dir=SCENE_DIR,
+            bs_pos=req.bs_pos,
+            jammer_positions=req.jammer_positions,
+            jammer_powers=req.jammer_powers,
+            bs_power=req.bs_power,
+            bs_height=req.bs_height,
+            jammer_height=req.jammer_height,
+            rx_height=req.rx_height,
+            area_m=req.area_m,
+        )
+        return result
+    except SceneUnavailableError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "scene_unavailable",
+            },
+            status_code=404,
+        )
+    except ImportError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_dependency_missing",
+            },
+            status_code=503,
+        )
+    except Exception as exc:
+        logger.exception("ISS_UNET dataset preparation failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/iss-unet/reconstruct")
+async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
+    from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
+
+    dataset = resolve_scene_dataset(req.scene)
+    if not dataset.available:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "ISS_UNET dataset is missing for this scene",
+                "scene": dataset.scene,
+                "data_dir": str(dataset.data_dir),
+                "missing_files": dataset.missing_files,
+            },
+            status_code=409,
+        )
+
+    cfar_params = ISSUNetCFARParams(
+        enabled=req.cfar.enabled,
+        guard_cells=req.cfar.guard_cells,
+        training_cells=req.cfar.training_cells,
+        pfa=req.cfar.pfa,
+        os_rank=req.cfar.os_rank,
+        min_threshold_dbm=req.cfar.min_threshold_dbm,
+    )
+
+    try:
+        result = await asyncio.to_thread(
+            reconstruct_iss_unet,
+            scene=req.scene,
+            sparse_ratio=req.sparse_ratio,
+            cfar=cfar_params,
+            seed=req.seed,
+        )
+        return {"success": True, **result}
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_artifact_missing",
+            },
+            status_code=503,
+        )
+    except ImportError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_dependency_missing",
+            },
+            status_code=503,
+        )
+    except Exception as exc:
+        logger.exception("ISS_UNET reconstruction failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/iss-unet/images/{filename}")
+async def iss_unet_image_get(filename: str):
+    from app.iss_unet_service import OUTPUT_DIR
+
+    valid_iss_unet_image = re.fullmatch(
+        r"iss_unet_[A-Za-z0-9_-]+(?:_ratio_[0-9]+(?:p[0-9]+)?)?_(?:reconstructed|comparison|cfar)\.png",
+        filename,
+    )
+    if "/" in filename or "\\" in filename or not valid_iss_unet_image:
+        return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
+
+    image_path = OUTPUT_DIR / filename
+    if not image_path.exists():
+        return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
+
+    return FileResponse(image_path, media_type="image/png", filename=filename)
 
 
 class CFRAdvancedParams(BaseModel):
@@ -1243,11 +1439,12 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
         from app.sionna_service import generate_cfr_plot, CFR_PLOT_PATH
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
+        scene_xml_path = Path(scene_xml)
         tx_list, rx_config = _sionna_device_config(req.devices)
         advanced = req.advanced
         await generate_cfr_plot(
-            scene_xml=str(scene_xml),
-            scene_name=str(scene_xml.parent.name),
+            scene_xml=str(scene_xml_path),
+            scene_name=str(scene_xml_path.parent.name),
             tx_list=tx_list,
             rx_config=rx_config,
             modulation=req.modulation,
