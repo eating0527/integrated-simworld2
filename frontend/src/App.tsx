@@ -23,6 +23,7 @@ import { type SceneId, DEFAULT_SCENE_ID, getSceneById } from './config/scenes.co
 import { DevicePanel } from './components/ui/DevicePanel';
 import { UAVControlPanel } from './components/ui/UAVControlPanel';
 import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
+import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 
@@ -53,9 +54,37 @@ interface Photo {
   deviceId?: string | null;
 }
 
+interface GeoOrigin {
+  lat: number;
+  lon: number;
+  alt: number;
+}
+
 function getInitialRxPosition(): [number, number, number] {
   const rx = useDeviceStore.getState().devices.find((d) => d.id === 'dev-rx-0');
   return rx ? [rx.x, rx.y, rx.z] : [0, 0, 0];
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function getGeneratedSceneOrigin(metadata: Record<string, unknown> | null | undefined): GeoOrigin | null {
+  if (!metadata) return null;
+
+  const lat = metadata.lat;
+  const lon = metadata.lon;
+  const alt = metadata.alt;
+
+  if (!isFiniteNumber(lat) || !isFiniteNumber(lon)) {
+    return null;
+  }
+
+  return {
+    lat,
+    lon,
+    alt: isFiniteNumber(alt) ? alt : 0,
+  };
 }
 
 // ── App ─────────────────────────────────────────────────────────────
@@ -126,11 +155,28 @@ export function App() {
     : null;
   const renderSceneId = selectedScene.source === 'preset' ? selectedScene.id : lastPresetSceneId;
   const sceneDef = getSceneById(renderSceneId);
-  const ORIGIN = {
+  const defaultOrigin = useMemo<GeoOrigin>(() => ({
     lat: sceneDef.config.observer.lat,
     lon: sceneDef.config.observer.lon,
     alt: sceneDef.config.observer.alt,
-  };
+  }), [
+    sceneDef.config.observer.alt,
+    sceneDef.config.observer.lat,
+    sceneDef.config.observer.lon,
+  ]);
+  const pickedSceneOrigin = useMemo(() => {
+    if (!activeGeneratedScene?.location) return null;
+    return getGeneratedSceneOrigin({
+      lat: activeGeneratedScene.location.lat,
+      lon: activeGeneratedScene.location.lon,
+      alt: 0,
+    });
+  }, [activeGeneratedScene?.location]);
+  const activeOrigin = useMemo(
+    () => (activeGeneratedScene && pickedSceneOrigin ? pickedSceneOrigin : defaultOrigin),
+    [activeGeneratedScene, defaultOrigin, pickedSceneOrigin]
+  );
+  const activeOriginKey = `${activeOrigin.lat}:${activeOrigin.lon}:${activeOrigin.alt}`;
 
   const [localGPS, setLocalGPS] = useState<LocalGPS>({ lat: 0, lon: 0, alt: 0, accuracy: 999 });
 
@@ -163,6 +209,7 @@ export function App() {
     sendClearPath,
     photoEvent,
     photoDeleteEvent,
+    usrpSpectrumByDevice,
     connectionStatus,
   } = useGPSSync(localGPS);
 
@@ -175,6 +222,15 @@ export function App() {
       null
     );
   }, [allDevices]);
+  const selectedUsrpSpectrum = useMemo(() => {
+    if (selectedDeviceId) {
+      return usrpSpectrumByDevice.get(selectedDeviceId) ?? null;
+    }
+    if (aircraftEntry?.[0]) {
+      return usrpSpectrumByDevice.get(aircraftEntry[0]) ?? null;
+    }
+    return usrpSpectrumByDevice.values().next().value ?? null;
+  }, [aircraftEntry, selectedDeviceId, usrpSpectrumByDevice]);
 
   // 當第一個裝置上線時自動選取
   useEffect(() => {
@@ -208,7 +264,7 @@ export function App() {
 
     if (!gps) return;
 
-    const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, ORIGIN);
+    const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, activeOrigin);
     const x = ex * SCALE;
     const z = ez * SCALE;
     const y = Math.max(ealt * ALT_GAIN, 10);
@@ -219,7 +275,7 @@ export function App() {
       if (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.z - z) < 0.1) return prev;
       return [...prev, { x, y, z }];
     });
-  }, [allDevices, localGPS, selectedDeviceId, myDeviceId, isMobile]);
+  }, [activeOrigin, allDevices, localGPS, selectedDeviceId, myDeviceId, isMobile]);
 
   // ── 追蹤所有裝置位置、建立各自軌跡 ─────────────────────────────────
   useEffect(() => {
@@ -228,7 +284,7 @@ export function App() {
     pmap.forEach((_, id) => { if (!allDevices.has(id)) pmap.delete(id); });
 
     allDevices.forEach((gps, deviceId) => {
-      const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, ORIGIN);
+      const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, activeOrigin);
       const x = ex * SCALE;
       const z = ez * SCALE;
       const y = Math.max(ealt * ALT_GAIN, 10);
@@ -254,7 +310,7 @@ export function App() {
       }
     });
     setOtherUavs(others);
-  }, [allDevices, selectedDeviceId, isMobile]);
+  }, [activeOrigin, allDevices, selectedDeviceId, isMobile]);
 
   // ── 清除軌跡 ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -274,7 +330,7 @@ export function App() {
       allDevicePathsRef.current.set(id, { position: data.position, path: [] });
     });
     setOtherUavs(prev => prev.map(u => ({ ...u, path: [] })));
-  }, [renderSceneId, activeGeneratedScene?.taskId]);
+  }, [activeOriginKey]);
 
   useEffect(() => {
     if (selectedScene.source !== 'generated') return;
@@ -381,6 +437,9 @@ export function App() {
           if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
         }}
       />
+      {!isMobile && (
+        <USRPTelemetry event={selectedUsrpSpectrum} />
+      )}
 
       <GPSStatus
         myDeviceId={myDeviceId}

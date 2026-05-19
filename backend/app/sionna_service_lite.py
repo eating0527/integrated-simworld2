@@ -223,7 +223,7 @@ def generate_maps(
     devices: List[dict],
     output_dir: str,
     scene_name: str = "ntpu",
-    map_type: str = "iss",          # "iss" | "tss" | "cfar"
+    map_type: str = "iss",          # "sinr" | "iss" | "tss" | "cfar"
     cell_size: float = 3.0,
     map_size: tuple = (512, 512),
     samples_per_tx: int = 10 ** 6,  # reduced for lite version
@@ -231,6 +231,9 @@ def generate_maps(
     gaussian_sigma: float = 1.0,
     vmin_dbm: float = -60.0,
     vmax_dbm: float = 0.0,
+    sinr_vmin: float = -20.0,
+    sinr_vmax: float = 40.0,
+    noise_floor_dbm: float = -100.0,
     cfar_min_distance: int = 3,
     cfar_threshold_percentile: float = 99.5,
     frequency_hz: float = 1.5e9,
@@ -263,6 +266,12 @@ def generate_maps(
         PlanarArray,
         RadioMapSolver,
     ) = _import_sionna()
+    map_type = str(map_type).strip().lower()
+    supported_map_types = {"sinr", "iss", "tss", "cfar"}
+    if map_type not in supported_map_types:
+        raise ValueError(
+            f"Unsupported map_type '{map_type}'. Expected one of: {sorted(supported_map_types)}"
+        )
 
     os.makedirs(output_dir, exist_ok=True)
     scene_footprints: list[dict] = []
@@ -289,6 +298,8 @@ def generate_maps(
 
     if not rx_devices:
         raise ValueError("At least one RX device is required.")
+    if map_type == "sinr" and not tx_devices:
+        raise ValueError("At least one TX device is required for a SINR map.")
 
     rx = rx_devices[0]  # only one RX (UAV)
 
@@ -396,6 +407,9 @@ def generate_maps(
 
     iss_dbm = to_dbm(ISS)
     tss_dbm = to_dbm(TSS)
+    noise_floor_w = 10.0 ** ((float(noise_floor_dbm) - 30.0) / 10.0)
+    sinr_db = 10.0 * np.log10(np.maximum(DSS, 1e-12) / np.maximum(ISS + noise_floor_w, 1e-12))
+    sinr_smooth = gaussian_filter(sinr_db, sigma=gaussian_sigma)
 
     # Cell centres for axis labels
     # Sionna 1.x: cell_centers shape is (num_cells_y, num_cells_x, 2)
@@ -420,7 +434,13 @@ def generate_maps(
     # -----------------------------------------------------------------------
     # Select data for requested map type
     # -----------------------------------------------------------------------
-    if map_type == "iss":
+    scale_unit = "dBm"
+    if map_type == "sinr":
+        data = sinr_smooth
+        title = f"SINR Map ??{scene_name.upper()}"
+        cbar_label = "SINR (dB)"
+        cmap = "RdYlGn"
+    elif map_type == "iss":
         data = iss_smooth
         title = f"ISS Map — {scene_name.upper()}"
         cbar_label = "ISS (dBm)"
@@ -436,15 +456,19 @@ def generate_maps(
         cbar_label = "ISS (dBm)"
         cmap = "jet"
 
-    map_vmin = float(vmin_dbm)
-    map_vmax = float(vmax_dbm)
+    map_vmin = float(sinr_vmin) if map_type == "sinr" else float(vmin_dbm)
+    map_vmax = float(sinr_vmax) if map_type == "sinr" else float(vmax_dbm)
+    if map_type == "sinr":
+        scale_unit = "dB"
     if map_vmax <= map_vmin:
         map_vmax = map_vmin + 1.0
     logger.info(
-        "Plot scale for %s map: vmin=%.2f dBm, vmax=%.2f dBm",
+        "Plot scale for %s map: vmin=%.2f %s, vmax=%.2f %s",
         map_type.upper(),
         map_vmin,
+        scale_unit,
         map_vmax,
+        scale_unit,
     )
 
     # -----------------------------------------------------------------------
@@ -543,8 +567,16 @@ def generate_maps(
     buf.close()
 
     # Also write to disk for caching / debugging
-    filename_map = {"iss": "iss_map.png", "tss": "tss_map.png", "cfar": "cfar_map.png"}
-    out_path = os.path.join(output_dir, filename_map[map_type])
+    filename_map = {
+        "sinr": "sinr_map.png",
+        "iss": "iss_map.png",
+        "tss": "tss_map.png",
+        "cfar": "cfar_map.png",
+    }
+    output_filename = filename_map.get(map_type)
+    if output_filename is None:
+        raise ValueError(f"No output filename configured for map_type '{map_type}'")
+    out_path = os.path.join(output_dir, output_filename)
     with open(out_path, "wb") as f:
         f.write(image_bytes)
     logger.info("Saved %s map to %s (%d bytes)", map_type.upper(), out_path, len(image_bytes))
