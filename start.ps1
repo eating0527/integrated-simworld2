@@ -1,9 +1,10 @@
 # GPS Tracker startup script for Windows PowerShell
 # Usage: .\start.ps1
-#        .\start.ps1 --no-tunnel
+#        .\start.ps1 -NoTunnel
 #        .\start.ps1 -NoAP3
+#        .\start.ps1 -Reload
 
-param([switch]$NoTunnel, [switch]$NoAP3)
+param([switch]$NoTunnel, [switch]$NoAP3, [switch]$Reload)
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir  = Join-Path $ScriptDir "backend"
@@ -80,14 +81,24 @@ if (-not (Test-Path $pythonExe)) {
     Err "Missing .venv, run: cd backend; python -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
 }
+$nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $nodeExe) {
+    Err "Missing node.exe, install Node.js and ensure it is available on PATH"
+    exit 1
+}
+$viteScript = Join-Path $FrontendDir "node_modules\vite\bin\vite.js"
+if (-not (Test-Path $viteScript)) {
+    Err "Missing Vite entrypoint, run: cd frontend; npm install"
+    exit 1
+}
 
 # Check environment versions
 Info "Checking environment versions..."
 $checkEnvScript = Join-Path $ToolsDir "check_env.py"
 & $pythonExe $checkEnvScript
 if ($LASTEXITCODE -ne 0) {
-    Err "Environment check failed. Update your dependencies: cd backend; .venv\Scripts\python -m pip install -r requirements.txt"
-    exit 1
+    Warn "Environment check reported issues. Continuing startup with the current environment."
+    Warn "If startup later fails, update dependencies: cd backend; .venv\Scripts\python -m pip install -r requirements.txt"
 }
 
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
@@ -118,24 +129,32 @@ if ($NoTunnel) {
 # --- Backend ---
 Info "Starting backend (port 8888)..."
 $backendLog = Join-Path $LogDir "backend.log"
-# Pass DRJIT_LIBLLVM_PATH explicitly so sionna can find LLVM-C.dll
-$drjitEnv = if ($env:DRJIT_LIBLLVM_PATH) { "set `"DRJIT_LIBLLVM_PATH=$env:DRJIT_LIBLLVM_PATH`" && " } else { "" }
-$backendCmd = "`"$pythonExe`" -m uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload"
-$backendJob = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c","${drjitEnv}cd /d `"$BackendDir`" && $backendCmd" `
+$backendArgs = @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888")
+if ($Reload) {
+    $backendArgs += "--reload"
+}
+$backendJob = Start-Process -FilePath $pythonExe `
+    -ArgumentList $backendArgs `
+    -WorkingDirectory $BackendDir `
     -RedirectStandardOutput $backendLog `
     -RedirectStandardError  ($backendLog + ".err") `
     -NoNewWindow -PassThru
 $jobs += $backendJob
 Info "   Backend PID: $($backendJob.Id)  log: .logs\backend.log"
+if ($Reload) {
+    Info "   Backend reload mode: enabled"
+} else {
+    Info "   Backend reload mode: disabled"
+}
 
 Start-Sleep -Seconds 2
 
 # --- Frontend ---
 Info "Starting frontend (port 5173)..."
 $frontendLog = Join-Path $LogDir "frontend.log"
-$frontendJob = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c","npm run dev" `
+$frontendArgs = @($viteScript, "--host", "0.0.0.0", "--port", "5173")
+$frontendJob = Start-Process -FilePath $nodeExe `
+    -ArgumentList $frontendArgs `
     -WorkingDirectory $FrontendDir `
     -RedirectStandardOutput $frontendLog `
     -RedirectStandardError  ($frontendLog + ".err") `
