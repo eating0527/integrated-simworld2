@@ -159,6 +159,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             map_type: key,
             cell_size: sinrParams.cell_size,
             samples_per_tx: sinrParams.samples_per_tx,
+            sinr_vmin: sinrParams.sinr_vmin,
+            sinr_vmax: sinrParams.sinr_vmax,
             overlay_scene: overlayScene,
             devices: devicePayload,
           }),
@@ -369,7 +371,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     <option value={100000000}>100M (recommend)</option>
                     <option value={1000000000}>1B (more)</option>
                   </select>
-                  {tab !== 'sinr' && (
+                  {['sinr', 'iss', 'tss', 'cfar'].includes(tab) && (
                     <>
                       <Label>場景輪廓</Label>
                       <ToggleSwitch checked={overlayScene} onChange={setOverlayScene} />

@@ -278,3 +278,34 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | Con
 - 生成場景視覺對齊與品質微調
 - 任務狀態與使用者等待體驗
 - Blender/blosm 物件過濾與場景清理策略
+## USRP B210 bridge
+
+Use `tools/usrp_to_simulator.py` to capture short B210 snapshots and forward summary RF metrics into the existing simulator WebSocket.
+
+Install the Python dependency once:
+
+```powershell
+cd backend
+.\.venv\Scripts\python -m pip install -r requirements.txt
+cd ..
+```
+
+Run a local test against the backend WebSocket:
+
+```powershell
+backend\.venv\Scripts\python.exe .\tools\usrp_to_simulator.py `
+  --websocket-url ws://127.0.0.1:8888/ws/gps `
+  --device-id align-m4p-top-aircraft `
+  --device-name "M4P TOP + B210" `
+  --center-freq 2450000000 `
+  --sample-rate 1000000 `
+  --gain 20 `
+  --lat 24.784727 `
+  --lon 121.000433 `
+  --alt 120
+```
+
+The bridge sends two messages per capture cycle:
+
+- a normal GPS update so the simulator can place the sensor in the scene
+- a `usrp-spectrum` event with `mean_power_dbfs`, `peak_power_dbfs`, frequency, rate, and sample count
