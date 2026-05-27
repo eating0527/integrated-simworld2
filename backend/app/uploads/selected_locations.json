@@ -1,5 +1,85 @@
 [
   {
+    "id": "loc-c5012b567e",
+    "lat": 24.943806954484117,
+    "lon": 121.36875687941034,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "National Taipei University School of Social Sciences (Tuzi Avenue)",
+    "timestamp": "2026-05-21T07:02:53.259Z",
+    "createdAt": "2026-05-21T15:02:54.756996"
+  },
+  {
+    "id": "loc-40b0aeaba5",
+    "lat": 24.943493202627817,
+    "lon": 121.36877935760126,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "長椅",
+    "timestamp": "2026-05-21T06:35:53.857Z",
+    "createdAt": "2026-05-21T14:35:55.409818"
+  },
+  {
+    "id": "loc-5f31f0a70b",
+    "lat": 24.944877113981587,
+    "lon": 121.36960974162415,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "崇越館飲水機",
+    "timestamp": "2026-05-21T03:24:42.812Z",
+    "createdAt": "2026-05-21T11:24:46.192445"
+  },
+  {
+    "id": "loc-e48f43a0b1",
+    "lat": 24.942383565222997,
+    "lon": 121.36703745146704,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "長椅",
+    "timestamp": "2026-05-21T03:13:38.357Z",
+    "createdAt": "2026-05-21T11:13:40.211630"
+  },
+  {
+    "id": "loc-179ecd9058",
+    "lat": 24.943899657491666,
+    "lon": 121.37111174143271,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "龍恩里",
+    "timestamp": "2026-05-20T02:57:57.804Z",
+    "createdAt": "2026-05-20T10:58:00.072183"
+  },
+  {
+    "id": "loc-e40ddd7dcc",
+    "lat": 25.00270308741286,
+    "lon": 121.4176375621703,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "(25.0027, 121.4176)",
+    "timestamp": "2026-05-19T13:26:13.953Z",
+    "createdAt": "2026-05-19T21:26:14.556227"
+  },
+  {
+    "id": "loc-1f3c2dcc37",
+    "lat": 24.943549016859066,
+    "lon": 121.36787469467004,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "長椅",
+    "timestamp": "2026-05-19T13:02:44.023Z",
+    "createdAt": "2026-05-19T21:02:45.592768"
+  },
+  {
+    "id": "loc-d6715a5154",
+    "lat": 24.943477857455136,
+    "lon": 121.3688401711786,
+    "zoom": 17,
+    "source": "my_map.html",
+    "place_name": "長椅",
+    "timestamp": "2026-05-19T10:06:40.813Z",
+    "createdAt": "2026-05-19T18:06:42.354611"
+  },
+  {
     "id": "loc-eda789843c",
     "lat": 25.014431509761046,
     "lon": 121.42227172851564,

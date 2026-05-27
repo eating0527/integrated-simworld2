@@ -1,9 +1,11 @@
+import { readOriginFromEnv } from './origin-env';
+
 export const NTPU_CONFIG = {
-  observer: {
-    lat: 24.942349,
-    lon: 121.367164,
+  observer: readOriginFromEnv('NTPU', {
+    lat: 24.943476,
+    lon: 121.370054,
     alt: 0,
-  },
+  }),
   scene: {
     modelPath: '/scenes/NTPU.glb',
     position: [0, 0, 0] as [number, number, number],

@@ -29,7 +29,7 @@ from typing import Dict, Optional, List, Any, Literal
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 # 資料夾設定
 # ──────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
+REPO_ROOT = BASE_DIR.parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
@@ -83,6 +84,12 @@ app.mount("/simulations", StaticFiles(directory=str(SIMULATION_OUT_DIR)), name="
 
 # 靜態檔案：動態生成場景（Blender/blosm）
 app.mount("/generated-scenes", StaticFiles(directory=str(SCENE_DIR)), name="generated-scenes")
+
+ADB_EXE = REPO_ROOT / "tools" / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
+DEFAULT_CONTROLLER_SERIAL = os.environ.get("ALIGN_CONTROLLER_SERIAL", "58e9dd83")
+ADB_HOME_DIR = UPLOAD_DIR / "adb-home"
+ADB_HOME_DIR.mkdir(parents=True, exist_ok=True)
+FFMPEG_EXE = shutil.which("ffmpeg") or "ffmpeg"
 
 
 # ──────────────────────────────────────────────
@@ -148,6 +155,177 @@ gps_manager = GPSConnectionManager()
 @app.get("/ping")
 async def ping():
     return {"message": "pong", "connections": len(gps_manager.connections)}
+
+
+def _run_adb_command(args: List[str], timeout: float = 12.0) -> subprocess.CompletedProcess[bytes]:
+    if not ADB_EXE.exists():
+        raise FileNotFoundError(f"adb not found: {ADB_EXE}")
+    env = _adb_env()
+    return subprocess.run(
+        [str(ADB_EXE), *args],
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env=env,
+    )
+
+
+def _adb_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    env["HOME"] = str(ADB_HOME_DIR)
+    env["USERPROFILE"] = str(ADB_HOME_DIR)
+    env["ANDROID_PREFS_ROOT"] = str(ADB_HOME_DIR)
+    env["ANDROID_USER_HOME"] = str(ADB_HOME_DIR)
+    env["APPDATA"] = str(ADB_HOME_DIR)
+    env["LOCALAPPDATA"] = str(ADB_HOME_DIR)
+    if os.name == "nt" and len(ADB_HOME_DIR.drive) >= 2:
+        env["HOMEDRIVE"] = ADB_HOME_DIR.drive
+        env["HOMEPATH"] = "\\"
+    return env
+
+
+@app.get("/api/controller-screen")
+async def controller_screen(serial: str = Query(DEFAULT_CONTROLLER_SERIAL)) -> Response:
+    try:
+        devices = await asyncio.to_thread(_run_adb_command, ["devices"], 8.0)
+        devices_text = devices.stdout.decode("utf-8", errors="ignore")
+        if f"{serial}\tdevice" not in devices_text:
+            return JSONResponse(
+                {"success": False, "error": f"controller not connected over adb: {serial}"},
+                status_code=503,
+            )
+
+        capture = await asyncio.to_thread(
+            _run_adb_command,
+            ["-s", serial, "exec-out", "screencap", "-p"],
+            15.0,
+        )
+        if capture.returncode != 0:
+            stderr = capture.stderr.decode("utf-8", errors="ignore").strip()
+            return JSONResponse(
+                {"success": False, "error": stderr or "adb screencap failed"},
+                status_code=500,
+            )
+
+        png_bytes = capture.stdout
+        if not png_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return JSONResponse(
+                {"success": False, "error": "controller screen capture did not return a PNG"},
+                status_code=500,
+            )
+
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"success": False, "error": "controller screen capture timed out"}, status_code=504)
+    except FileNotFoundError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+    except Exception as exc:
+        logger.exception("Controller screen capture failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+def _iter_controller_stream(serial: str):
+    adb_env = _adb_env()
+    ffmpeg_args = [
+        FFMPEG_EXE,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "h264",
+        "-i",
+        "pipe:0",
+        "-vf",
+        "fps=10,scale=640:-1",
+        "-an",
+        "-c:v",
+        "mjpeg",
+        "-q:v",
+        "12",
+        "-f",
+        "mpjpeg",
+        "-boundary_tag",
+        "frame",
+        "pipe:1",
+    ]
+
+    # Some devices do not emit an endless screenrecord stream progressively.
+    # Using very short H.264 segments keeps latency manageable while still
+    # producing a browser-friendly MJPEG feed.
+    while True:
+        adb_args = [
+            str(ADB_EXE),
+            "-s",
+            serial,
+            "exec-out",
+            "screenrecord",
+            "--output-format=h264",
+            "--size",
+            "854x480",
+            "--bit-rate",
+            "2000000",
+            "--time-limit",
+            "1",
+            "-",
+        ]
+
+        adb_proc: subprocess.Popen[bytes] | None = None
+        ffmpeg_proc: subprocess.Popen[bytes] | None = None
+        try:
+            adb_proc = subprocess.Popen(
+                adb_args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=adb_env,
+            )
+            ffmpeg_proc = subprocess.Popen(
+                ffmpeg_args,
+                stdin=adb_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if adb_proc.stdout:
+                adb_proc.stdout.close()
+
+            if not ffmpeg_proc.stdout:
+                raise RuntimeError("ffmpeg stdout is not available")
+
+            while True:
+                chunk = ffmpeg_proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            for proc in (ffmpeg_proc, adb_proc):
+                if proc and proc.poll() is None:
+                    proc.kill()
+            for proc in (ffmpeg_proc, adb_proc):
+                if proc:
+                    try:
+                        proc.wait(timeout=1)
+                    except Exception:
+                        pass
+
+
+@app.get("/api/controller-stream.mjpg")
+async def controller_stream(serial: str = Query(DEFAULT_CONTROLLER_SERIAL)):
+    devices = await asyncio.to_thread(_run_adb_command, ["devices"], 8.0)
+    devices_text = devices.stdout.decode("utf-8", errors="ignore")
+    if f"{serial}\tdevice" not in devices_text:
+        return JSONResponse(
+            {"success": False, "error": f"controller not connected over adb: {serial}"},
+            status_code=503,
+        )
+
+    return StreamingResponse(
+        _iter_controller_stream(serial),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 # ──────────────────────────────────────────────

@@ -1,9 +1,11 @@
+import { readOriginFromEnv } from './origin-env';
+
 export const NYCU_CONFIG = {
-  observer: {
+  observer: readOriginFromEnv('NYCU', {
     lat: 24.967052,
     lon: 121.536335,
     alt: 0,
-  },
+  }),
   scene: {
     modelPath: '/scenes/NYCU.glb',
     position: [0, 0, 0] as [number, number, number],

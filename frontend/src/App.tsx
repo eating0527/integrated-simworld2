@@ -17,6 +17,7 @@ import { GPSStatus } from './components/ui/GPSStatus';
 import { useGPSSync } from './hooks/useGPSSync';
 import { useGeneratedScenes } from './hooks/useGeneratedScene';
 import { latLonToENU } from './utils/geo';
+import { ControllerScreenPanel } from './components/ui/ControllerScreenPanel';
 import { SimulationPanel } from './components/ui/SimulationPanel';
 import { SceneSwitcher, type SelectedScene } from './components/ui/SceneSwitcher';
 import { type SceneId, DEFAULT_SCENE_ID, getSceneById } from './config/scenes.config';
@@ -474,6 +475,8 @@ export function App() {
       )}
 
       {/* 場景切換器 */}
+      {!isMobile && <ControllerScreenPanel />}
+
       {!isMobile && (
         <SceneSwitcher
           selectedScene={selectedScene}
