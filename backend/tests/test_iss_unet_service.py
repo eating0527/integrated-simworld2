@@ -162,6 +162,155 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(int(sparse_mask.sum()), outdoor_pixels)
 
+    def test_real_sample_csv_files_exist_with_required_columns(self):
+        from app.iss_real import SAMPLE_GPS_PATH, SAMPLE_NOISE_PATH, parse_gps_csv, parse_noise_csv
+
+        gps_points = parse_gps_csv(SAMPLE_GPS_PATH)
+        noise_points = parse_noise_csv(SAMPLE_NOISE_PATH)
+
+        self.assertGreater(len(gps_points), 0)
+        self.assertGreater(len(noise_points), 0)
+        self.assertTrue({"time_stamp", "lat", "lon", "alt"}.issubset(gps_points[0].raw_columns))
+        self.assertTrue({"time_stamp", "noise_floor_db"}.issubset(noise_points[0].raw_columns))
+
+    def test_align_noise_to_most_recent_gps_within_one_second(self):
+        from app.iss_real import align_noise_to_gps, parse_gps_csv, parse_noise_csv
+
+        gps_path = self.root / "gps.csv"
+        noise_path = self.root / "noise.csv"
+        gps_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,lat,lon,alt",
+                    "2026-05-27T12:00:00.000Z,24.0,121.0,10",
+                    "2026-05-27T12:00:00.800Z,24.1,121.1,11",
+                    "2026-05-27T12:00:02.000Z,24.2,121.2,12",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        noise_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,noise_floor_db",
+                    "2026-05-27T12:00:00.900Z,-88.5",
+                    "2026-05-27T12:00:01.900Z,-77.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        aligned, skipped = align_noise_to_gps(parse_gps_csv(gps_path), parse_noise_csv(noise_path))
+
+        self.assertEqual(skipped, 1)
+        self.assertEqual(len(aligned), 1)
+        self.assertAlmostEqual(aligned[0].lat, 24.1)
+        self.assertAlmostEqual(aligned[0].noise_floor_db, -88.5)
+
+    def test_gps_mode_route_sparse_uses_simulated_iss_and_filters_blocked_pixels(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        meta = {
+            "center_lat": 24.0,
+            "center_lon": 121.0,
+            "area_m": 512.0,
+            "grid_res": 128,
+        }
+        (data_dir / "scene_meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        iss = np.full((128, 128), -100.0, dtype=np.float32)
+        iss[64, 64] = -81.0
+        iss[63, 65] = -72.0
+        np.save(data_dir / "sionna_iss.npy", iss)
+        building = np.zeros((128, 128), dtype=np.float32)
+        building[64, 62] = 9.0
+        np.save(data_dir / "building_height_128.npy", building)
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,lat,lon,alt",
+                    "2026-05-27T12:00:00Z,24.0,121.0,0",
+                    "2026-05-27T12:00:01Z,24.0000359324461,121.000039446262,0",
+                    "2026-05-27T12:00:02Z,24.0,120.999960553738,0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        arrays = {
+            "building": building,
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": iss,
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps",
+            gps_points=parse_gps_csv(gps_path),
+        )
+
+        self.assertEqual(int(result.sparse_mask.sum()), 2)
+        self.assertAlmostEqual(float(result.iss_sparse_dbm[64, 64]), -81.0)
+        self.assertAlmostEqual(float(result.iss_sparse_dbm[63, 65]), -72.0)
+        self.assertEqual(float(result.sparse_mask[64, 62]), 0.0)
+        self.assertEqual(result.metrics["route_points"], 3)
+        self.assertEqual(result.metrics["used_samples"], 2)
+
+    def test_gps_noise_mode_route_sparse_uses_aligned_noise_values(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,lat,lon,alt",
+                    "2026-05-27T12:00:00Z,24.0,121.0,0",
+                    "2026-05-27T12:00:01Z,24.0000359324461,121.000039446262,0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        noise_path = self.root / "noise.csv"
+        noise_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,noise_floor_db",
+                    "2026-05-27T12:00:00.500Z,-87.25",
+                    "2026-05-27T12:00:01.100Z,-66.5",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        arrays = {
+            "building": np.zeros((128, 128), dtype=np.float32),
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": np.full((128, 128), -100.0, dtype=np.float32),
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps_n",
+            gps_points=parse_gps_csv(gps_path),
+            noise_points=parse_noise_csv(noise_path),
+        )
+
+        self.assertEqual(int(result.sparse_mask.sum()), 2)
+        self.assertAlmostEqual(float(result.iss_sparse_dbm[64, 64]), -87.25)
+        self.assertAlmostEqual(float(result.iss_sparse_dbm[63, 65]), -66.5)
+        self.assertEqual(result.metrics["aligned_noise"], 2)
+        self.assertEqual(result.metrics["skipped_noise"], 0)
+
     def test_reconstruct_request_accepts_zero_sparse_ratio(self):
         req = main.ISSUNetReconstructRequest(scene="NTPU", sparse_ratio=0.0)
 

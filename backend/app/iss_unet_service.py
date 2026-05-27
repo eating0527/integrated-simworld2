@@ -29,6 +29,11 @@ REQUIRED_DATASET_FILES = (
 ISS_MIN_DBM = -140.0
 ISS_MAX_DBM = -35.0
 BUILDING_MAX_M = 60.0
+ISS_UNET_MODE_LABELS = {
+    "sim": "Sim",
+    "gps": "GPS",
+    "gps_n": "GPS with Noise",
+}
 
 
 def result_image_url(filename: str) -> str:
@@ -220,10 +225,11 @@ def _load_model(device: str):
     return model, torch_device
 
 
-def _render_reconstructed_png(reconstructed_iss: np.ndarray) -> bytes:
+def _render_reconstructed_png(reconstructed_iss: np.ndarray, mode_label: str = "Sim") -> bytes:
     fig, ax = plt.subplots(figsize=(5, 5))
     im = ax.imshow(reconstructed_iss, cmap="jet", origin="upper", vmin=-140, vmax=-40)
     ax.set_title("ISS_UNET Reconstructed ISS")
+    fig.suptitle(f"ISS_UNET - {mode_label}")
     ax.axis("off")
     plt.colorbar(im, ax=ax, label="Power (dBm)", shrink=0.8)
     fig.tight_layout()
@@ -236,16 +242,20 @@ def _render_comparison_png(
     sparse_mask: np.ndarray,
     outdoor_mask: np.ndarray,
     sparse_ratio: float,
+    mode_label: str = "Sim",
+    sparse_values_dbm: np.ndarray | None = None,
 ) -> bytes:
     error = np.abs(reconstructed_iss - arrays["iss"])
     outdoor_pixels = outdoor_mask > 0.5
     mae = float(error[outdoor_pixels].mean()) if np.any(outdoor_pixels) else 0.0
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    sparse_display = np.where(sparse_mask > 0.5, arrays["iss"], ISS_MIN_DBM)
+    sparse_source = arrays["iss"] if sparse_values_dbm is None else sparse_values_dbm
+    sparse_title = f"Sparse ISS Input ({sparse_ratio * 100:.0f}%)" if mode_label == "Sim" else f"Sparse ISS Input ({mode_label})"
+    sparse_display = np.where(sparse_mask > 0.5, sparse_source, ISS_MIN_DBM)
     panels = [
         (arrays["building"], "Building Height Map", "gray", None, None, "Height (m)"),
-        (sparse_display, f"Sparse ISS Input ({sparse_ratio * 100:.0f}%)", "jet", -140, -40, "Power (dBm)"),
+        (sparse_display, sparse_title, "jet", -140, -40, "Power (dBm)"),
         (arrays["iss"], "Ground Truth ISS", "jet", -140, -40, "Power (dBm)"),
         (reconstructed_iss, "Reconstructed ISS", "jet", -140, -40, "Power (dBm)"),
         (np.where(outdoor_pixels, error, 0.0), f"Error (Outdoor MAE: {mae:.2f} dB)", "Reds", 0, 10, "Error (dB)"),
@@ -257,6 +267,7 @@ def _render_comparison_png(
         ax.axis("off")
         if label:
             plt.colorbar(im, ax=ax, label=label, shrink=0.75)
+    fig.suptitle(f"ISS_UNET - {mode_label}")
     fig.tight_layout()
     return _figure_to_png(fig)
 
@@ -363,6 +374,7 @@ def _render_cfar_png(
     outdoor_mask: np.ndarray,
     building_map: np.ndarray,
     cfar_result: dict[str, Any],
+    mode_label: str = "Sim",
 ) -> bytes:
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     detection_map = cfar_result["detection_map"]
@@ -402,6 +414,7 @@ def _render_cfar_png(
 
     for ax in axes.flat[:3]:
         ax.axis("off")
+    fig.suptitle(f"ISS_UNET - {mode_label}")
     fig.tight_layout()
     return _figure_to_png(fig)
 
@@ -412,7 +425,14 @@ def reconstruct_iss_unet(
     cfar: ISSUNetCFARParams | None = None,
     seed: int = 41,
     device: str = "cuda",
+    mode: str = "sim",
+    gps_csv: Path | str | bytes | None = None,
+    noise_csv: Path | str | bytes | None = None,
 ) -> dict[str, Any]:
+    mode = mode.strip().lower()
+    if mode not in ISS_UNET_MODE_LABELS:
+        raise ValueError("mode must be one of: sim, gps, gps_n")
+    mode_label = ISS_UNET_MODE_LABELS[mode]
     sparse_ratio = _normalize_sparse_ratio(sparse_ratio)
     dataset = resolve_scene_dataset(scene)
     if not dataset.available:
@@ -422,7 +442,35 @@ def reconstruct_iss_unet(
         raise FileNotFoundError("ISS_UNET model artifact not found on the server. Please check the backend configuration.")
 
     arrays = load_scene_arrays(dataset)
-    inputs, sparse_mask, outdoor_mask = build_model_input(arrays, sparse_ratio=sparse_ratio, seed=seed)
+    sparse_values_dbm = None
+    real_metrics: dict[str, Any] = {
+        "mode": mode,
+        "route_points": 0,
+        "used_samples": 0,
+        "aligned_noise": 0,
+        "skipped_noise": 0,
+        "sample_used": False,
+    }
+    if mode == "sim":
+        inputs, sparse_mask, outdoor_mask = build_model_input(arrays, sparse_ratio=sparse_ratio, seed=seed)
+        real_metrics["used_samples"] = int(sparse_mask.sum())
+    else:
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+
+        gps_points = parse_gps_csv(gps_csv) if gps_csv is not None else None
+        noise_points = parse_noise_csv(noise_csv) if noise_csv is not None else None
+        route_sample = create_route_sparse_sample(
+            arrays,
+            dataset,
+            mode=mode,
+            gps_points=gps_points,
+            noise_points=noise_points,
+        )
+        inputs = route_sample.inputs
+        sparse_mask = route_sample.sparse_mask
+        outdoor_mask = route_sample.outdoor_mask
+        sparse_values_dbm = route_sample.iss_sparse_dbm
+        real_metrics = route_sample.metrics
 
     import torch
 
@@ -434,14 +482,28 @@ def reconstruct_iss_unet(
     reconstructed_iss = _clip_radio_map(_denormalize_iss(reconstructed_norm))
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"iss_unet_{dataset.scene.lower()}_{sparse_ratio_label(sparse_ratio)}"
+    if mode == "sim":
+        stem = f"iss_unet_{dataset.scene.lower()}_{sparse_ratio_label(sparse_ratio)}"
+    else:
+        stem = f"iss_unet_{dataset.scene.lower()}_{mode}"
     reconstructed_path = OUTPUT_DIR / f"{stem}_reconstructed.png"
     comparison_path = OUTPUT_DIR / f"{stem}_comparison.png"
     cfar_path = OUTPUT_DIR / f"{stem}_cfar.png"
     npy_path = OUTPUT_DIR / f"{stem}_reconstructed.npy"
 
-    reconstructed_png = _render_reconstructed_png(reconstructed_iss)
-    comparison_png = _render_comparison_png(arrays, reconstructed_iss, sparse_mask, outdoor_mask, sparse_ratio)
+    reconstructed_png = _render_reconstructed_png(reconstructed_iss, mode_label=mode_label)
+    if sparse_values_dbm is None and mode_label == "Sim":
+        comparison_png = _render_comparison_png(arrays, reconstructed_iss, sparse_mask, outdoor_mask, sparse_ratio)
+    else:
+        comparison_png = _render_comparison_png(
+            arrays,
+            reconstructed_iss,
+            sparse_mask,
+            outdoor_mask,
+            sparse_ratio,
+            mode_label=mode_label,
+            sparse_values_dbm=sparse_values_dbm,
+        )
     reconstructed_path.write_bytes(reconstructed_png)
     comparison_path.write_bytes(comparison_png)
     np.save(npy_path, reconstructed_iss.astype(np.float32))
@@ -451,7 +513,7 @@ def reconstruct_iss_unet(
         cfar = ISSUNetCFARParams(enabled=True)
     if cfar.enabled:
         cfar_result = _cfar_detect(reconstructed_iss, outdoor_mask, cfar)
-        cfar_path.write_bytes(_render_cfar_png(reconstructed_iss, outdoor_mask, arrays["building"], cfar_result))
+        cfar_path.write_bytes(_render_cfar_png(reconstructed_iss, outdoor_mask, arrays["building"], cfar_result, mode_label=mode_label))
 
     outdoor_pixels = outdoor_mask > 0.5
     error = np.abs(reconstructed_iss - arrays["iss"])
@@ -461,9 +523,12 @@ def reconstruct_iss_unet(
         "sparse_samples": int(sparse_mask.sum()),
         "outdoor_pixels": int(outdoor_pixels.sum()),
         "output_shape": list(reconstructed_iss.shape),
+        **real_metrics,
     }
     return {
         "scene": dataset.scene,
+        "mode": mode,
+        "mode_label": mode_label,
         "sparse_ratio": sparse_ratio,
         "metrics": metrics,
         "images": {

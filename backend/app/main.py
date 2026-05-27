@@ -1322,6 +1322,7 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             sparse_ratio=req.sparse_ratio,
             cfar=cfar_params,
             seed=req.seed,
+            mode="sim",
         )
         return {"success": True, **result}
     except FileNotFoundError as exc:
@@ -1347,12 +1348,77 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+@app.post("/api/iss-unet/reconstruct/upload")
+async def iss_unet_reconstruct_upload_post(
+    scene: str = Form(...),
+    mode: Literal["sim", "gps", "gps_n"] = Form("sim"),
+    sparse_ratio: float = Form(0.2),
+    seed: int = Form(41),
+    cfar_enabled: bool = Form(True),
+    gps_file: UploadFile | None = File(None),
+    noise_file: UploadFile | None = File(None),
+):
+    from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
+
+    dataset = resolve_scene_dataset(scene)
+    if not dataset.available:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "ISS_UNET dataset is missing for this scene",
+                "scene": dataset.scene,
+                "data_dir": str(dataset.data_dir),
+                "missing_files": dataset.missing_files,
+            },
+            status_code=409,
+        )
+
+    gps_csv = await gps_file.read() if gps_file is not None else None
+    noise_csv = await noise_file.read() if noise_file is not None else None
+    cfar_params = ISSUNetCFARParams(enabled=cfar_enabled)
+    try:
+        result = await asyncio.to_thread(
+            reconstruct_iss_unet,
+            scene=scene,
+            sparse_ratio=sparse_ratio,
+            cfar=cfar_params,
+            seed=seed,
+            mode=mode,
+            gps_csv=gps_csv,
+            noise_csv=noise_csv,
+        )
+        return {"success": True, **result}
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    except FileNotFoundError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_artifact_missing",
+            },
+            status_code=503,
+        )
+    except ImportError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc),
+                "error_type": "iss_unet_dependency_missing",
+            },
+            status_code=503,
+        )
+    except Exception as exc:
+        logger.exception("ISS_UNET upload reconstruction failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/iss-unet/images/{filename}")
 async def iss_unet_image_get(filename: str):
     from app.iss_unet_service import OUTPUT_DIR
 
     valid_iss_unet_image = re.fullmatch(
-        r"iss_unet_[A-Za-z0-9_-]+(?:_ratio_[0-9]+(?:p[0-9]+)?)?_(?:reconstructed|comparison|cfar)\.png",
+        r"iss_unet_[A-Za-z0-9_-]+(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar)\.png",
         filename,
     )
     if "/" in filename or "\\" in filename or not valid_iss_unet_image:

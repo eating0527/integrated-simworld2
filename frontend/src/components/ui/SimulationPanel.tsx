@@ -7,6 +7,7 @@ const API = import.meta.env.VITE_API_URL || '';
 type TabKey = 'sinr' | 'cfr' | 'doppler' | 'channel' | 'iss' | 'tss' | 'cfar' | 'iss_unet';
 type CFRModulation = 'qpsk' | '16qam';
 type ComputeImpact = 'low' | 'medium' | 'high';
+type ISSUNetMode = 'sim' | 'gps' | 'gps_n';
 
 interface CFRAdvancedParams {
   constellationBatchSize: number;
@@ -24,8 +25,11 @@ interface SINRParams {
 }
 
 interface ISSUNetParams {
+  mode: ISSUNetMode;
   sparseRatioPercent: number;
   cfar_enabled: boolean;
+  gpsFile: File | null;
+  noiseFile: File | null;
 }
 
 interface SimStatus {
@@ -42,6 +46,11 @@ const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
   subcarrierSpacingHz: 30000,
   ebn0Db: 20,
   rayTracingMaxDepth: 10,
+};
+const ISS_UNET_MODE_LABELS: Record<ISSUNetMode, string> = {
+  sim: 'Sim',
+  gps: 'GPS',
+  gps_n: 'GPS with Noise',
 };
 
 interface SimulationPanelProps {
@@ -75,8 +84,11 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     samples_per_tx: 100000000,
   });
   const [issUnetParams, setIssUnetParams] = useState<ISSUNetParams>({
+    mode: 'sim',
     sparseRatioPercent: 20,
     cfar_enabled: true,
+    gpsFile: null,
+    noiseFile: null,
   });
 
   const devices = useDeviceStore(state => state.devices);
@@ -139,17 +151,36 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           }),
         });
       } else if (key === 'iss_unet') {
-        res = await fetch(`${API}/api/iss-unet/reconstruct`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            scene: requestSceneId,
-            sparse_ratio: issUnetParams.sparseRatioPercent / 100,
-            cfar: {
-              enabled: issUnetParams.cfar_enabled,
-            },
-          }),
-        });
+        if (issUnetParams.mode === 'sim') {
+          res = await fetch(`${API}/api/iss-unet/reconstruct`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              scene: requestSceneId,
+              sparse_ratio: issUnetParams.sparseRatioPercent / 100,
+              cfar: {
+                enabled: issUnetParams.cfar_enabled,
+              },
+            }),
+          });
+        } else {
+          const form = new FormData();
+          form.append('scene', requestSceneId);
+          form.append('mode', issUnetParams.mode);
+          form.append('sparse_ratio', String(issUnetParams.sparseRatioPercent / 100));
+          form.append('seed', '41');
+          form.append('cfar_enabled', String(issUnetParams.cfar_enabled));
+          if (issUnetParams.gpsFile) {
+            form.append('gps_file', issUnetParams.gpsFile);
+          }
+          if (issUnetParams.mode === 'gps_n' && issUnetParams.noiseFile) {
+            form.append('noise_file', issUnetParams.noiseFile);
+          }
+          res = await fetch(`${API}/api/iss-unet/reconstruct/upload`, {
+            method: 'POST',
+            body: form,
+          });
+        }
       } else if (['iss', 'tss', 'cfar'].includes(key)) {
         res = await fetch(`${API}/api/simulate`, {
           method: 'POST',
@@ -213,6 +244,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           : issUnetParams.sparseRatioPercent;
         const cacheParams = new URLSearchParams({
           ratio: String(sparseRatioPercent),
+          mode: json.mode || issUnetParams.mode,
           t: String(Date.now()),
         });
         url = `${API}${imagePath}?${cacheParams.toString()}`;
@@ -388,8 +420,43 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                   <NumberInput
                     value={issUnetParams.sparseRatioPercent}
                     step={10} min={0} max={100}
+                    disabled={issUnetParams.mode !== 'sim'}
                     onChange={v => setIssUnetParams(p => ({ ...p, sparseRatioPercent: clampNumber(v, 0, 100) }))}
                   />
+                  <Label>Mode</Label>
+                  <SegmentedControl
+                    value={issUnetParams.mode}
+                    options={[
+                      { value: 'sim', label: 'Sim' },
+                      { value: 'gps', label: 'GPS' },
+                      { value: 'gps_n', label: 'GPS with Noise' },
+                    ]}
+                    onChange={mode => setIssUnetParams(p => ({ ...p, mode }))}
+                  />
+                  {issUnetParams.mode !== 'sim' && (
+                    <>
+                      <Label>GPS CSV</Label>
+                      <FileInput
+                        accept=".csv,text/csv"
+                        file={issUnetParams.gpsFile}
+                        onChange={file => setIssUnetParams(p => ({ ...p, gpsFile: file }))}
+                      />
+                      <div />
+                      <Hint>未選檔時使用 sample/gps.csv；route 樣本數由 GPS 點位決定。</Hint>
+                    </>
+                  )}
+                  {issUnetParams.mode === 'gps_n' && (
+                    <>
+                      <Label>Noise CSV</Label>
+                      <FileInput
+                        accept=".csv,text/csv"
+                        file={issUnetParams.noiseFile}
+                        onChange={file => setIssUnetParams(p => ({ ...p, noiseFile: file }))}
+                      />
+                      <div />
+                      <Hint>未選檔時使用 sample/noise.csv；noise 會對齊 1 秒內最近 GPS。</Hint>
+                    </>
+                  )}
                   <Label>OS-CFAR</Label>
                   <ToggleSwitch
                     checked={issUnetParams.cfar_enabled}
@@ -565,7 +632,10 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                   src={cur.imageUrl}
                   alt={tab}
                   style={{ width: '100%', display: 'block', cursor: 'zoom-in' }}
-                  onClick={() => setPreview({ url: cur.imageUrl!, title: tab.toUpperCase() })}
+                  onClick={() => setPreview({
+                    url: cur.imageUrl!,
+                    title: tab === 'iss_unet' ? `ISS_UNET - ${ISS_UNET_MODE_LABELS[issUnetParams.mode]}` : tab.toUpperCase(),
+                  })}
                   title="點擊查看完整圖片"
                 />
               </div>
@@ -618,6 +688,113 @@ function ParamGrid({ children }: { children: React.ReactNode }) {
 
 function Label({ children }: { children: React.ReactNode }) {
   return <div style={{ color: 'rgba(255,255,255,.6)', fontSize: 12 }}>{children}</div>;
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return <div style={{ color: 'rgba(255,255,255,.36)', fontSize: 11, lineHeight: 1.35 }}>{children}</div>;
+}
+
+function SegmentedControl<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+      gap: 3,
+      background: 'rgba(0,0,0,.28)',
+      border: '1px solid rgba(255,255,255,.1)',
+      borderRadius: 8,
+      padding: 3,
+    }}>
+      {options.map(option => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            style={{
+              minHeight: 25,
+              padding: '4px 6px',
+              border: active ? '1px solid rgba(0,255,255,.45)' : '1px solid transparent',
+              borderRadius: 6,
+              background: active ? 'rgba(0,255,255,.18)' : 'transparent',
+              color: active ? '#0ff' : 'rgba(255,255,255,.56)',
+              fontSize: 11,
+              fontWeight: active ? 700 : 500,
+              cursor: 'pointer',
+              whiteSpace: 'normal',
+              lineHeight: 1.15,
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FileInput({
+  file,
+  accept,
+  onChange,
+}: {
+  file: File | null;
+  accept: string;
+  onChange: (file: File | null) => void;
+}) {
+  return (
+    <label style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      minHeight: 30,
+      background: 'rgba(0,0,0,.3)',
+      border: '1px solid rgba(255,255,255,.1)',
+      color: file ? 'rgba(255,255,255,.82)' : 'rgba(255,255,255,.42)',
+      padding: '4px 8px',
+      borderRadius: 6,
+      fontSize: 12,
+      cursor: 'pointer',
+      overflow: 'hidden',
+    }}>
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {file ? file.name : 'Use sample'}
+      </span>
+      {file && (
+        <button
+          type="button"
+          onClick={event => {
+            event.preventDefault();
+            onChange(null);
+          }}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: 'rgba(255,255,255,.45)',
+            cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          x
+        </button>
+      )}
+      <input
+        type="file"
+        accept={accept}
+        onChange={event => onChange(event.currentTarget.files?.[0] ?? null)}
+        style={{ display: 'none' }}
+      />
+    </label>
+  );
 }
 
 function ImpactBadge({ impact }: { impact: ComputeImpact }) {
@@ -702,13 +879,32 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function NumberInput({ value, step, min, max, onChange }: { value: number, step: number, min: number, max: number, onChange: (v: number) => void }) {
+function NumberInput({
+  value,
+  step,
+  min,
+  max,
+  disabled = false,
+  onChange,
+}: {
+  value: number,
+  step: number,
+  min: number,
+  max: number,
+  disabled?: boolean,
+  onChange: (v: number) => void,
+}) {
   return (
-    <input type="number" step={step} min={min} max={max} value={value}
+    <input type="number" step={step} min={min} max={max} value={value} disabled={disabled}
       onChange={e => onChange(Number(e.target.value))}
       style={{
         background: 'rgba(0,0,0,.3)', border: '1px solid rgba(255,255,255,.1)',
-        color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12, width: '100%'
+        color: disabled ? 'rgba(255,255,255,.32)' : '#fff',
+        padding: '4px 8px',
+        borderRadius: 6,
+        fontSize: 12,
+        width: '100%',
+        cursor: disabled ? 'not-allowed' : 'text',
       }}
     />
   );
