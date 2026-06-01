@@ -91,6 +91,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     mode: 'sim',
     sparseRatioPercent: 20,
     cfar_enabled: true,
+    apply_building_mask: true,
+    focusSamplingPoints: true,
     gpsFile: null,
     noiseFile: null,
   });
@@ -165,6 +167,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               cfar: {
                 enabled: issUnetParams.cfar_enabled,
               },
+              apply_building_mask: issUnetParams.apply_building_mask,
+              focus_sampling_points: issUnetParams.focusSamplingPoints,
             }),
           });
         } else {
@@ -174,6 +178,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           form.append('sparse_ratio', String(issUnetParams.sparseRatioPercent / 100));
           form.append('seed', '41');
           form.append('cfar_enabled', String(issUnetParams.cfar_enabled));
+          form.append('apply_building_mask', String(issUnetParams.apply_building_mask));
+          form.append('focus_sampling_points', String(issUnetParams.focusSamplingPoints));
           if (issUnetParams.gpsFile) {
             form.append('gps_file', issUnetParams.gpsFile);
           }
@@ -457,7 +463,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                         onChange={file => setIssUnetParams(p => ({ ...p, gpsFile: file }))}
                       />
                       <div />
-                      <Hint>未選檔時使用 sample/gps.csv；route 樣本數由 GPS 點位決定。</Hint>
+                      <Hint></Hint>
                     </>
                   )}
                   {issUnetParams.mode === 'gps_n' && (
@@ -469,7 +475,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                         onChange={file => setIssUnetParams(p => ({ ...p, noiseFile: file }))}
                       />
                       <div />
-                      <Hint>未選檔時使用 sample/noise.csv；noise 會對齊 1 秒內最近 GPS。</Hint>
+                      <Hint>Noise 會依據時間序與 GPS 採樣點對齊。</Hint>
                     </>
                   )}
                   <Label>OS-CFAR</Label>
@@ -477,6 +483,23 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     checked={issUnetParams.cfar_enabled}
                     onChange={v => setIssUnetParams(p => ({ ...p, cfar_enabled: v }))}
                   />
+                  <div />
+                  <Hint>預測並標示干擾源位置。</Hint>
+                  <Label>Building Mask</Label>
+                  <ToggleSwitch
+                    checked={issUnetParams.apply_building_mask}
+                    onChange={v => setIssUnetParams(p => ({ ...p, apply_building_mask: v }))}
+                  />
+                  <div />
+                  <Hint>顯示建築物的遮蔽效果。</Hint>
+                  <Label>聚焦採樣點</Label>
+                  <ToggleSwitch
+                    checked={issUnetParams.focusSamplingPoints}
+                    disabled={issUnetParams.mode !== 'gps_n'}
+                    onChange={v => setIssUnetParams(p => ({ ...p, focusSamplingPoints: v }))}
+                  />
+                  <div />
+                  <Hint>僅 Noise with GPS 模式可用。聚焦 GPS 採樣點周遭的像素（若顯示異常請關閉）。</Hint>
                 </ParamGrid>
               </div>
             )}

@@ -485,6 +485,7 @@ def reconstruct_iss_unet(
     gps_csv: Path | str | bytes | None = None,
     noise_csv: Path | str | bytes | None = None,
     apply_building_mask: bool = True,
+    focus_sampling_points: bool = True,
 ) -> dict[str, Any]:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:

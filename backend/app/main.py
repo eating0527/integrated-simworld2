@@ -1398,6 +1398,7 @@ class ISSUNetReconstructRequest(BaseModel):
     cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
     seed: int = Field(default=41)
     apply_building_mask: bool = Field(default=True)
+    focus_sampling_points: bool = Field(default=True)
 
 
 class ISSUNetDatasetPrepareRequest(BaseModel):
@@ -1581,6 +1582,19 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             cfar=cfar_params,
             seed=req.seed,
             mode="sim",
+            apply_building_mask=req.apply_building_mask,
+            focus_sampling_points=req.focus_sampling_points,
+        )
+        logger.info(
+            "ISS_UNET completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s focus_sampling_points=%s",
+            result.get("scene"),
+            result.get("mode"),
+            result.get("metrics", {}).get("aligned_noise"),
+            result.get("metrics", {}).get("skipped_noise"),
+            result.get("metrics", {}).get("used_samples"),
+            result.get("metrics", {}).get("sparse_samples"),
+            result.get("options", {}).get("apply_building_mask"),
+            req.focus_sampling_points,
         )
         return {"success": True, **result}
     except FileNotFoundError as exc:
@@ -1613,6 +1627,8 @@ async def iss_unet_reconstruct_upload_post(
     sparse_ratio: float = Form(0.2),
     seed: int = Form(41),
     cfar_enabled: bool = Form(True),
+    apply_building_mask: bool = Form(True),
+    focus_sampling_points: bool = Form(True),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
 ):
@@ -1644,6 +1660,19 @@ async def iss_unet_reconstruct_upload_post(
             mode=mode,
             gps_csv=gps_csv,
             noise_csv=noise_csv,
+            apply_building_mask=apply_building_mask,
+            focus_sampling_points=focus_sampling_points,
+        )
+        logger.info(
+            "ISS_UNET upload completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s focus_sampling_points=%s",
+            result.get("scene"),
+            result.get("mode"),
+            result.get("metrics", {}).get("aligned_noise"),
+            result.get("metrics", {}).get("skipped_noise"),
+            result.get("metrics", {}).get("used_samples"),
+            result.get("metrics", {}).get("sparse_samples"),
+            result.get("options", {}).get("apply_building_mask"),
+            focus_sampling_points,
         )
         return {"success": True, **result}
     except ValueError as exc:
