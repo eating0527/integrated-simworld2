@@ -29,10 +29,11 @@ REQUIRED_DATASET_FILES = (
 ISS_MIN_DBM = -140.0
 ISS_MAX_DBM = -35.0
 BUILDING_MAX_M = 60.0
+NOISE_CONFIDENCE_SIGMA_PX = 8.0
 ISS_UNET_MODE_LABELS = {
     "sim": "Sim",
     "gps": "GPS",
-    "gps_n": "GPS with Noise",
+    "gps_n": "Noise with GPS",
 }
 
 
@@ -208,6 +209,61 @@ def build_model_input(
         axis=0,
     ).astype(np.float32)
     return inputs, sparse_mask, outdoor_mask
+
+
+def _empty_confidence_stats(applied: bool) -> dict[str, Any]:
+    return {
+        "confidence_applied": applied,
+        "confidence_sigma_px": NOISE_CONFIDENCE_SIGMA_PX,
+        "confidence_background_dbm": ISS_MIN_DBM,
+        "confidence_pixels_gt_0_5": 0,
+        "confidence_mean_outdoor": 0.0,
+    }
+
+
+def apply_noise_confidence_weighting(
+    reconstructed_iss: np.ndarray,
+    sparse_mask: np.ndarray,
+    outdoor_mask: np.ndarray,
+    sigma_px: float = NOISE_CONFIDENCE_SIGMA_PX,
+    background_dbm: float = ISS_MIN_DBM,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if reconstructed_iss.shape != sparse_mask.shape or reconstructed_iss.shape != outdoor_mask.shape:
+        raise ValueError("reconstructed_iss, sparse_mask, and outdoor_mask must have the same shape")
+    sigma_px = float(sigma_px)
+    if not np.isfinite(sigma_px) or sigma_px <= 0.0:
+        raise ValueError("sigma_px must be a positive finite value")
+
+    outdoor_pixels = outdoor_mask > 0.5
+    reference_points = np.argwhere((sparse_mask > 0.5) & outdoor_pixels)
+    if len(reference_points) == 0:
+        weighted = np.full_like(reconstructed_iss, background_dbm, dtype=np.float32)
+        return weighted, {
+            **_empty_confidence_stats(applied=True),
+            "confidence_sigma_px": sigma_px,
+            "confidence_background_dbm": float(background_dbm),
+        }
+
+    coords = np.argwhere(np.ones_like(reconstructed_iss, dtype=bool)).astype(np.float32)
+    min_dist_sq = np.full(len(coords), np.inf, dtype=np.float32)
+    refs = reference_points.astype(np.float32)
+    for start in range(0, len(refs), 512):
+        chunk = refs[start : start + 512]
+        diff = coords[:, None, :] - chunk[None, :, :]
+        dist_sq = np.sum(diff * diff, axis=2)
+        min_dist_sq = np.minimum(min_dist_sq, dist_sq.min(axis=1))
+
+    confidence = np.exp(-min_dist_sq.reshape(reconstructed_iss.shape) / (sigma_px * sigma_px)).astype(np.float32)
+    weighted = background_dbm + confidence * (reconstructed_iss.astype(np.float32) - background_dbm)
+    weighted = np.where(outdoor_pixels, weighted, background_dbm).astype(np.float32)
+    confidence = np.where(outdoor_pixels, confidence, 0.0).astype(np.float32)
+    return weighted, {
+        "confidence_applied": True,
+        "confidence_sigma_px": sigma_px,
+        "confidence_background_dbm": float(background_dbm),
+        "confidence_pixels_gt_0_5": int((confidence > 0.5).sum()),
+        "confidence_mean_outdoor": float(confidence[outdoor_pixels].mean()) if np.any(outdoor_pixels) else 0.0,
+    }
 
 
 def _load_model(device: str):
@@ -428,6 +484,7 @@ def reconstruct_iss_unet(
     mode: str = "sim",
     gps_csv: Path | str | bytes | None = None,
     noise_csv: Path | str | bytes | None = None,
+    focus_sampling_points: bool = True,
 ) -> dict[str, Any]:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
@@ -480,6 +537,13 @@ def reconstruct_iss_unet(
         output = model(tensor)
     reconstructed_norm = output[0, 0].detach().cpu().numpy()
     reconstructed_iss = _clip_radio_map(_denormalize_iss(reconstructed_norm))
+    confidence_metrics = _empty_confidence_stats(applied=False)
+    if mode == "gps_n" and focus_sampling_points:
+        reconstructed_iss, confidence_metrics = apply_noise_confidence_weighting(
+            reconstructed_iss,
+            sparse_mask,
+            outdoor_mask,
+        )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if mode == "sim":
@@ -524,6 +588,7 @@ def reconstruct_iss_unet(
         "outdoor_pixels": int(outdoor_pixels.sum()),
         "output_shape": list(reconstructed_iss.shape),
         **real_metrics,
+        **confidence_metrics,
     }
     return {
         "scene": dataset.scene,

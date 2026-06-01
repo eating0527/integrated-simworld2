@@ -28,6 +28,7 @@ interface ISSUNetParams {
   mode: ISSUNetMode;
   sparseRatioPercent: number;
   cfar_enabled: boolean;
+  focusSamplingPoints: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
 }
@@ -50,7 +51,7 @@ const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
 const ISS_UNET_MODE_LABELS: Record<ISSUNetMode, string> = {
   sim: 'Sim',
   gps: 'GPS',
-  gps_n: 'GPS with Noise',
+  gps_n: 'Noise with GPS',
 };
 
 interface SimulationPanelProps {
@@ -87,6 +88,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     mode: 'sim',
     sparseRatioPercent: 20,
     cfar_enabled: true,
+    focusSamplingPoints: true,
     gpsFile: null,
     noiseFile: null,
   });
@@ -161,6 +163,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               cfar: {
                 enabled: issUnetParams.cfar_enabled,
               },
+              focus_sampling_points: issUnetParams.focusSamplingPoints,
             }),
           });
         } else {
@@ -170,6 +173,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           form.append('sparse_ratio', String(issUnetParams.sparseRatioPercent / 100));
           form.append('seed', '41');
           form.append('cfar_enabled', String(issUnetParams.cfar_enabled));
+          form.append('focus_sampling_points', String(issUnetParams.focusSamplingPoints));
           if (issUnetParams.gpsFile) {
             form.append('gps_file', issUnetParams.gpsFile);
           }
@@ -429,7 +433,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     options={[
                       { value: 'sim', label: 'Sim' },
                       { value: 'gps', label: 'GPS' },
-                      { value: 'gps_n', label: 'GPS with Noise' },
+                      { value: 'gps_n', label: 'Noise with GPS' },
                     ]}
                     onChange={mode => setIssUnetParams(p => ({ ...p, mode }))}
                   />
@@ -462,6 +466,16 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     checked={issUnetParams.cfar_enabled}
                     onChange={v => setIssUnetParams(p => ({ ...p, cfar_enabled: v }))}
                   />
+                  <div />
+                  <Hint>使用 OS-CFAR 演算法預測干擾源位置。</Hint>
+                  <Label>聚焦採樣點</Label>
+                  <ToggleSwitch
+                    checked={issUnetParams.focusSamplingPoints}
+                    disabled={issUnetParams.mode !== 'gps_n'}
+                    onChange={v => setIssUnetParams(p => ({ ...p, focusSamplingPoints: v }))}
+                  />
+                  <div />
+                  <Hint>僅 Noise with GPS 模式可用。聚焦 GPS 採樣點周遭的像素（若顯示異常請關閉）。</Hint>
                 </ParamGrid>
               </div>
             )}
@@ -910,34 +924,50 @@ function NumberInput({
   );
 }
 
-function ToggleSwitch({ checked, onChange }: { checked: boolean, onChange: (v: boolean) => void }) {
+function ToggleSwitch({
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  checked: boolean,
+  disabled?: boolean,
+  onChange: (v: boolean) => void,
+}) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!checked)}
+      onClick={() => {
+        if (!disabled) {
+          onChange(!checked);
+        }
+      }}
       aria-pressed={checked}
+      disabled={disabled}
       style={{
         width: 40,
         height: 20,
-        border: checked ? '1px solid rgba(0,255,255,.55)' : '1px solid rgba(255,255,255,.16)',
+        border: checked && !disabled ? '1px solid rgba(0,255,255,.55)' : '1px solid rgba(255,255,255,.16)',
         borderRadius: 12,
-        background: checked ? 'rgba(0, 255, 0, 0.22)' : 'rgba(255, 0, 0, 0.25)',
+        background: disabled
+          ? 'rgba(255,255,255,.08)'
+          : (checked ? 'rgba(0, 255, 0, 0.22)' : 'rgba(255, 0, 0, 0.25)'),
         padding: 2,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         display: 'flex',
         alignItems: 'center',
         justifyContent: checked ? 'flex-end' : 'flex-start',
         transition: 'all .15s',
+        opacity: disabled ? 0.55 : 1,
       }}
-      title={checked ? 'On' : 'Off'}
+      title={disabled ? 'Noise with GPS only' : (checked ? 'On' : 'Off')}
     >
       <span
         style={{
           width: 15,
           height: 15,
           borderRadius: 12,
-          background: checked ? '#0ff' : 'rgba(255,255,255,.45)',
-          boxShadow: checked ? '0 0 10px rgba(0,255,255,.45)' : 'none',
+          background: checked && !disabled ? '#0ff' : 'rgba(255,255,255,.45)',
+          boxShadow: checked && !disabled ? '0 0 10px rgba(0,255,255,.45)' : 'none',
           display: 'block',
         }}
       />

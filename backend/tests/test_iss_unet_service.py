@@ -162,6 +162,37 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(int(sparse_mask.sum()), outdoor_pixels)
 
+    def test_confidence_weighting_keeps_sparse_pixel_and_suppresses_far_pixels(self):
+        from app.iss_unet_service import ISS_MIN_DBM, apply_noise_confidence_weighting
+
+        reconstructed = np.full((16, 16), -40.0, dtype=np.float32)
+        sparse_mask = np.zeros((16, 16), dtype=np.float32)
+        sparse_mask[8, 8] = 1.0
+        outdoor_mask = np.ones((16, 16), dtype=np.float32)
+
+        weighted, stats = apply_noise_confidence_weighting(reconstructed, sparse_mask, outdoor_mask, sigma_px=2.0)
+
+        self.assertAlmostEqual(float(weighted[8, 8]), -40.0, places=4)
+        self.assertLess(float(weighted[0, 0]), -139.0)
+        self.assertEqual(stats["confidence_applied"], True)
+        self.assertEqual(stats["confidence_pixels_gt_0_5"], 9)
+        self.assertGreater(stats["confidence_mean_outdoor"], 0.0)
+        self.assertEqual(stats["confidence_background_dbm"], ISS_MIN_DBM)
+
+    def test_confidence_weighting_without_sparse_points_returns_background(self):
+        from app.iss_unet_service import ISS_MIN_DBM, apply_noise_confidence_weighting
+
+        reconstructed = np.full((8, 8), -40.0, dtype=np.float32)
+        sparse_mask = np.zeros((8, 8), dtype=np.float32)
+        outdoor_mask = np.ones((8, 8), dtype=np.float32)
+
+        weighted, stats = apply_noise_confidence_weighting(reconstructed, sparse_mask, outdoor_mask)
+
+        np.testing.assert_array_equal(weighted, np.full((8, 8), ISS_MIN_DBM, dtype=np.float32))
+        self.assertEqual(stats["confidence_applied"], True)
+        self.assertEqual(stats["confidence_pixels_gt_0_5"], 0)
+        self.assertEqual(stats["confidence_mean_outdoor"], 0.0)
+
     def test_real_sample_csv_files_exist_with_required_columns(self):
         from app.iss_real import SAMPLE_GPS_PATH, SAMPLE_NOISE_PATH, parse_gps_csv, parse_noise_csv
 
@@ -316,6 +347,46 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(req.sparse_ratio, 0.0)
 
+    def test_reconstruct_request_accepts_focus_sampling_points_toggle(self):
+        req = main.ISSUNetReconstructRequest(scene="NTPU", focus_sampling_points=False)
+
+        self.assertEqual(req.focus_sampling_points, False)
+
+    def test_upload_endpoint_forwards_focus_sampling_points_toggle(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+        captured = {}
+
+        def fake_reconstruct_iss_unet(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "gps_n",
+                "mode_label": "Noise with GPS",
+                "sparse_ratio": 0.2,
+                "metrics": {},
+                "images": {},
+                "files": {},
+                "cfar": {"detections": 0, "clusters": []},
+            }
+
+        with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+            with patch("app.iss_unet_service.reconstruct_iss_unet", side_effect=fake_reconstruct_iss_unet):
+                response = asyncio.run(
+                    main.iss_unet_reconstruct_upload_post(
+                        scene="NTPU",
+                        mode="gps_n",
+                        focus_sampling_points=False,
+                        gps_file=None,
+                        noise_file=None,
+                    )
+                )
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(captured["focus_sampling_points"], False)
+
     def test_reconstruct_uses_ratio_bearing_outputs_and_render_ratio(self):
         self._write_ntpu_dataset()
         model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
@@ -386,6 +457,201 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.png").exists())
         self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_comparison.png").exists())
         self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.npy").exists())
+
+    def test_gps_noise_reconstruct_applies_confidence_before_outputs_and_cfar(self):
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
+        model_path.write_bytes(b"model")
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,lat,lon,alt",
+                    "2026-05-27T12:00:00Z,24.0,121.0,0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        noise_path = self.root / "noise.csv"
+        noise_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,noise_floor_db",
+                    "2026-05-27T12:00:00.500Z,-70.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        class FakeTensor:
+            def float(self):
+                return self
+
+            def unsqueeze(self, _dim):
+                return self
+
+            def to(self, _device):
+                return self
+
+        class FakePrediction:
+            def __getitem__(self, _key):
+                return self
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return np.ones((128, 128), dtype=np.float32)
+
+        class FakeNoGrad:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, *_args):
+                return False
+
+        fake_torch = types.SimpleNamespace(
+            from_numpy=lambda _value: FakeTensor(),
+            no_grad=lambda: FakeNoGrad(),
+        )
+
+        class FakeModel:
+            def __call__(self, _tensor):
+                return FakePrediction()
+
+        captured = {}
+
+        def fake_render_reconstructed(reconstructed_iss, mode_label="Sim"):
+            captured["render_reconstructed"] = reconstructed_iss.copy()
+            return b"reconstructed"
+
+        def fake_render_comparison(_arrays, reconstructed_iss, _sparse_mask, _outdoor_mask, _sparse_ratio, **_kwargs):
+            captured["render_comparison"] = reconstructed_iss.copy()
+            return b"comparison"
+
+        def fake_cfar_detect(signal_map, _outdoor_mask, _params):
+            captured["cfar_signal"] = signal_map.copy()
+            return {"detection_map": np.zeros((128, 128), dtype=np.float32), "threshold_map": np.zeros((128, 128), dtype=np.float32), "clusters": [], "detections": []}
+
+        from app.iss_unet_service import ISSUNetCFARParams, ISS_MIN_DBM, reconstruct_iss_unet, resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+                with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+                    with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                        with patch.dict(sys.modules, {"torch": fake_torch}):
+                            with patch("app.iss_unet_service._load_model", return_value=(FakeModel(), "cpu")):
+                                with patch("app.iss_unet_service._render_reconstructed_png", side_effect=fake_render_reconstructed):
+                                    with patch("app.iss_unet_service._render_comparison_png", side_effect=fake_render_comparison):
+                                        with patch("app.iss_unet_service._cfar_detect", side_effect=fake_cfar_detect):
+                                            result = reconstruct_iss_unet(
+                                                "NTPU",
+                                                cfar=ISSUNetCFARParams(enabled=True),
+                                                mode="gps_n",
+                                                gps_csv=gps_path,
+                                                noise_csv=noise_path,
+                                            )
+
+        saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
+        self.assertAlmostEqual(float(saved[64, 64]), -35.0, places=4)
+        self.assertLess(float(saved[0, 0]), -139.9)
+        self.assertEqual(float(saved[0, 0]), float(captured["render_reconstructed"][0, 0]))
+        self.assertEqual(float(saved[0, 0]), float(captured["render_comparison"][0, 0]))
+        self.assertEqual(float(saved[0, 0]), float(captured["cfar_signal"][0, 0]))
+        self.assertEqual(result["metrics"]["confidence_applied"], True)
+        self.assertEqual(result["metrics"]["confidence_sigma_px"], 8.0)
+        self.assertEqual(result["metrics"]["confidence_background_dbm"], ISS_MIN_DBM)
+
+    def test_gps_noise_reconstruct_can_disable_confidence_weighting(self):
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
+        model_path.write_bytes(b"model")
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "time_stamp,lat,lon,alt\n2026-05-27T12:00:00Z,24.0,121.0,0",
+            encoding="utf-8",
+        )
+        noise_path = self.root / "noise.csv"
+        noise_path.write_text(
+            "time_stamp,noise_floor_db\n2026-05-27T12:00:00.500Z,-70.0",
+            encoding="utf-8",
+        )
+
+        class FakeTensor:
+            def float(self):
+                return self
+
+            def unsqueeze(self, _dim):
+                return self
+
+            def to(self, _device):
+                return self
+
+        class FakePrediction:
+            def __getitem__(self, _key):
+                return self
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return np.ones((128, 128), dtype=np.float32)
+
+        class FakeNoGrad:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, *_args):
+                return False
+
+        fake_torch = types.SimpleNamespace(
+            from_numpy=lambda _value: FakeTensor(),
+            no_grad=lambda: FakeNoGrad(),
+        )
+
+        class FakeModel:
+            def __call__(self, _tensor):
+                return FakePrediction()
+
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+
+        with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+            with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+                with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                    with patch.dict(sys.modules, {"torch": fake_torch}):
+                        with patch("app.iss_unet_service._load_model", return_value=(FakeModel(), "cpu")):
+                            with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                                with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                                    result = reconstruct_iss_unet(
+                                        "NTPU",
+                                        cfar=ISSUNetCFARParams(enabled=False),
+                                        mode="gps_n",
+                                        gps_csv=gps_path,
+                                        noise_csv=noise_path,
+                                        focus_sampling_points=False,
+                                    )
+
+        saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
+        self.assertAlmostEqual(float(saved[0, 0]), -35.0, places=4)
+        self.assertEqual(result["metrics"]["confidence_applied"], False)
 
     def test_image_endpoint_serves_generated_png_from_api_route(self):
         image_path = self.output_dir / "iss_unet_ntpu_comparison.png"

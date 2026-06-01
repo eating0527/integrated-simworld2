@@ -1376,6 +1376,7 @@ class ISSUNetReconstructRequest(BaseModel):
     sparse_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
     seed: int = Field(default=41)
+    focus_sampling_points: bool = Field(default=True)
 
 
 class ISSUNetDatasetPrepareRequest(BaseModel):
@@ -1501,6 +1502,7 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             cfar=cfar_params,
             seed=req.seed,
             mode="sim",
+            focus_sampling_points=req.focus_sampling_points,
         )
         return {"success": True, **result}
     except FileNotFoundError as exc:
@@ -1533,6 +1535,7 @@ async def iss_unet_reconstruct_upload_post(
     sparse_ratio: float = Form(0.2),
     seed: int = Form(41),
     cfar_enabled: bool = Form(True),
+    focus_sampling_points: bool = Form(True),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
 ):
@@ -1564,6 +1567,7 @@ async def iss_unet_reconstruct_upload_post(
             mode=mode,
             gps_csv=gps_csv,
             noise_csv=noise_csv,
+            focus_sampling_points=focus_sampling_points,
         )
         return {"success": True, **result}
     except ValueError as exc:
