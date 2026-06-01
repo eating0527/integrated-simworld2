@@ -50,6 +50,8 @@ backend/app/static/scenes/generated/
 
 # Local ISS_UNET model artifacts
 backend/app/model_artifacts/
+*.pt
+*.pth
 
 # Local Android platform-tools install for AP3 telemetry bridge
 tools/platform-tools/

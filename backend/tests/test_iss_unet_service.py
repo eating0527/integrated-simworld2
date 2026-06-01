@@ -193,6 +193,77 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(stats["confidence_pixels_gt_0_5"], 0)
         self.assertEqual(stats["confidence_mean_outdoor"], 0.0)
 
+    def test_reconstruct_without_model_returns_clipped_sionna_map(self):
+        from app.iss_unet_service import _reconstruct_without_model
+
+        arrays = {"iss": np.array([[-200.0, -60.0], [-20.0, -35.0]], dtype=np.float32)}
+
+        result = _reconstruct_without_model(arrays, "sim")
+        expected = np.array([[-140.0, -60.0], [-35.0, -35.0]], dtype=np.float32)
+
+        np.testing.assert_allclose(result, expected)
+
+    def test_gpsn_rss_normalization_uses_bundle_range(self):
+        from app.iss_unet_service import _denormalize_gpsn_rss, _normalize_gpsn_rss
+
+        values = np.array([-120.0, -90.0, -52.5, -15.0, 0.0], dtype=np.float32)
+
+        norm = _normalize_gpsn_rss(values)
+        expected = np.array([0.0, 0.0, 0.5, 1.0, 1.0], dtype=np.float32)
+
+        np.testing.assert_allclose(norm, expected)
+        np.testing.assert_allclose(
+            _denormalize_gpsn_rss(np.array([0.0, 0.5, 1.0], dtype=np.float32)),
+            np.array([-90.0, -52.5, -15.0], dtype=np.float32),
+        )
+
+    def test_build_gpsn_unet_input_uses_expected_channel_order(self):
+        from app.iss_unet_service import build_gpsn_unet_input
+
+        sparse_values = np.full((128, 128), -90.0, dtype=np.float32)
+        sparse_values[3, 4] = -52.5
+        sparse_mask = np.zeros((128, 128), dtype=np.float32)
+        sparse_mask[3, 4] = 1.0
+        building = np.zeros((128, 128), dtype=np.float32)
+        building[3, 4] = 30.0
+
+        inputs = build_gpsn_unet_input(sparse_values, sparse_mask, building)
+
+        self.assertEqual(inputs.shape, (3, 128, 128))
+        self.assertAlmostEqual(float(inputs[0, 3, 4]), 0.5)
+        self.assertAlmostEqual(float(inputs[1, 3, 4]), 1.0)
+        self.assertAlmostEqual(float(inputs[2, 3, 4]), 0.5)
+        self.assertAlmostEqual(float(inputs[0, 0, 0]), 0.0)
+
+    def test_build_gpsn_unet_input_rejects_shape_mismatch(self):
+        from app.iss_unet_service import build_gpsn_unet_input
+
+        with self.assertRaisesRegex(ValueError, "same shape"):
+            build_gpsn_unet_input(
+                np.zeros((128, 128), dtype=np.float32),
+                np.zeros((64, 64), dtype=np.float32),
+                np.zeros((128, 128), dtype=np.float32),
+            )
+
+    def test_run_gpsn_unet_denormalizes_model_output(self):
+        from app.iss_unet_service import _run_gpsn_unet
+
+        class FakeModel:
+            def __call__(self, tensor):
+                import torch
+
+                return torch.full((1, 1, 128, 128), 0.5, dtype=torch.float32, device=tensor.device)
+
+        sparse_values = np.full((128, 128), -90.0, dtype=np.float32)
+        sparse_mask = np.zeros((128, 128), dtype=np.float32)
+        building = np.zeros((128, 128), dtype=np.float32)
+
+        with patch("app.iss_unet_service._load_gpsn_model", return_value=(FakeModel(), "cpu"), create=True):
+            result = _run_gpsn_unet(sparse_values, sparse_mask, building, "cpu")
+
+        self.assertEqual(result.shape, (128, 128))
+        self.assertAlmostEqual(float(result[0, 0]), -52.5)
+
     def test_real_sample_csv_files_exist_with_required_columns(self):
         from app.iss_real import SAMPLE_GPS_PATH, SAMPLE_NOISE_PATH, parse_gps_csv, parse_noise_csv
 
@@ -342,6 +413,18 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(result.metrics["aligned_noise"], 2)
         self.assertEqual(result.metrics["skipped_noise"], 0)
 
+    def test_single_input_unet_accepts_three_channels(self):
+        import torch
+
+        from app.model_unet_single import UNet
+
+        model = UNet(in_channels=3, out_channels=1)
+        model.eval()
+        with torch.no_grad():
+            output = model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
+
+        self.assertEqual(tuple(output.shape), (1, 1, 128, 128))
+
     def test_reconstruct_request_accepts_zero_sparse_ratio(self):
         req = main.ISSUNetReconstructRequest(scene="NTPU", sparse_ratio=0.0)
 
@@ -386,6 +469,134 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(response["success"], True)
         self.assertEqual(captured["focus_sampling_points"], False)
+
+    def test_sim_reconstruction_does_not_load_unet_model(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        model_path = self.artifact_dir / "legacy_model.pth"
+        model_path.write_bytes(b"legacy")
+
+        with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+            with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+                with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                    with patch(
+                        "app.iss_unet_service._load_model",
+                        side_effect=AssertionError("UNet should not load for sim"),
+                    ):
+                        with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                            with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                                result = reconstruct_iss_unet(
+                                    scene="NTPU",
+                                    mode="sim",
+                                    cfar=ISSUNetCFARParams(enabled=False),
+                                )
+
+        self.assertEqual(result["mode"], "sim")
+        self.assertFalse(result["metrics"]["model_inference"])
+
+    def test_gps_reconstruction_does_not_load_unet_model(self):
+        self._write_ntpu_dataset()
+        from app.iss_real import RouteSparseResult
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        model_path = self.artifact_dir / "legacy_model.pth"
+        model_path.write_bytes(b"legacy")
+        shape = (128, 128)
+        sparse_mask = np.zeros(shape, dtype=np.float32)
+        sparse_mask[4, 5] = 1.0
+        outdoor_mask = np.ones(shape, dtype=np.float32)
+        sparse_values = np.full(shape, -140.0, dtype=np.float32)
+        sparse_values[4, 5] = -60.0
+        route_sample = RouteSparseResult(
+            sparse_mask=sparse_mask,
+            outdoor_mask=outdoor_mask,
+            iss_sparse_dbm=sparse_values,
+            inputs=np.zeros((5, 128, 128), dtype=np.float32),
+            metrics={
+                "mode": "gps",
+                "route_points": 1,
+                "used_samples": 1,
+                "aligned_noise": 0,
+                "skipped_noise": 0,
+                "sample_used": False,
+            },
+        )
+
+        with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+            with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+                with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                    with patch("app.iss_real.create_route_sparse_sample", return_value=route_sample):
+                        with patch(
+                            "app.iss_unet_service._load_model",
+                            side_effect=AssertionError("UNet should not load for gps"),
+                        ):
+                            with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                                with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                                    result = reconstruct_iss_unet(
+                                        scene="NTPU",
+                                        mode="gps",
+                                        cfar=ISSUNetCFARParams(enabled=False),
+                                    )
+
+        self.assertEqual(result["mode"], "gps")
+        self.assertFalse(result["metrics"]["model_inference"])
+
+    def test_gpsn_reconstruction_uses_new_gpsn_model_loader(self):
+        self._write_ntpu_dataset()
+        from app.iss_real import RouteSparseResult
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        shape = (128, 128)
+        sparse_mask = np.zeros(shape, dtype=np.float32)
+        sparse_mask[10, 11] = 1.0
+        outdoor_mask = np.ones(shape, dtype=np.float32)
+        sparse_values = np.full(shape, -90.0, dtype=np.float32)
+        sparse_values[10, 11] = -55.0
+        route_sample = RouteSparseResult(
+            sparse_mask=sparse_mask,
+            outdoor_mask=outdoor_mask,
+            iss_sparse_dbm=sparse_values,
+            inputs=np.zeros((5, 128, 128), dtype=np.float32),
+            metrics={
+                "mode": "gps_n",
+                "route_points": 1,
+                "used_samples": 1,
+                "aligned_noise": 1,
+                "skipped_noise": 0,
+                "sample_used": False,
+            },
+        )
+
+        class FakeModel:
+            def __call__(self, tensor):
+                import torch
+
+                return torch.full((1, 1, 128, 128), 0.5, dtype=torch.float32, device=tensor.device)
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                with patch("app.iss_real.create_route_sparse_sample", return_value=route_sample):
+                    with patch(
+                        "app.iss_unet_service._load_model",
+                        side_effect=AssertionError("legacy UNet should not load for gps_n"),
+                    ):
+                        with patch(
+                            "app.iss_unet_service._load_gpsn_model",
+                            return_value=(FakeModel(), "cpu"),
+                            create=True,
+                        ):
+                            with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                                with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                                    result = reconstruct_iss_unet(
+                                        scene="NTPU",
+                                        mode="gps_n",
+                                        cfar=ISSUNetCFARParams(enabled=False),
+                                        focus_sampling_points=False,
+                                    )
+
+        self.assertEqual(result["mode"], "gps_n")
+        self.assertTrue(result["metrics"]["model_inference"])
 
     def test_reconstruct_uses_ratio_bearing_outputs_and_render_ratio(self):
         self._write_ntpu_dataset()
@@ -546,10 +757,10 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
             with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
-                with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+                with patch("app.iss_unet_service.GPSN_MODEL_ARTIFACT_PATH", model_path):
                     with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
                         with patch.dict(sys.modules, {"torch": fake_torch}):
-                            with patch("app.iss_unet_service._load_model", return_value=(FakeModel(), "cpu")):
+                            with patch("app.iss_unet_service._load_gpsn_model", return_value=(FakeModel(), "cpu")):
                                 with patch("app.iss_unet_service._render_reconstructed_png", side_effect=fake_render_reconstructed):
                                     with patch("app.iss_unet_service._render_comparison_png", side_effect=fake_render_comparison):
                                         with patch("app.iss_unet_service._cfar_detect", side_effect=fake_cfar_detect):
@@ -562,7 +773,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                                             )
 
         saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
-        self.assertAlmostEqual(float(saved[64, 64]), -35.0, places=4)
+        self.assertAlmostEqual(float(saved[64, 64]), -15.0, places=4)
         self.assertLess(float(saved[0, 0]), -139.9)
         self.assertEqual(float(saved[0, 0]), float(captured["render_reconstructed"][0, 0]))
         self.assertEqual(float(saved[0, 0]), float(captured["render_comparison"][0, 0]))
@@ -634,10 +845,10 @@ class ISSUNetServiceTests(unittest.TestCase):
         dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
 
         with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
-            with patch("app.iss_unet_service.MODEL_ARTIFACT_PATH", model_path):
+            with patch("app.iss_unet_service.GPSN_MODEL_ARTIFACT_PATH", model_path):
                 with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
                     with patch.dict(sys.modules, {"torch": fake_torch}):
-                        with patch("app.iss_unet_service._load_model", return_value=(FakeModel(), "cpu")):
+                        with patch("app.iss_unet_service._load_gpsn_model", return_value=(FakeModel(), "cpu")):
                             with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
                                 with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
                                     result = reconstruct_iss_unet(
@@ -650,7 +861,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                                     )
 
         saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
-        self.assertAlmostEqual(float(saved[0, 0]), -35.0, places=4)
+        self.assertAlmostEqual(float(saved[0, 0]), -15.0, places=4)
         self.assertEqual(result["metrics"]["confidence_applied"], False)
 
     def test_image_endpoint_serves_generated_png_from_api_route(self):

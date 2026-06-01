@@ -18,6 +18,7 @@ BASE_DIR = Path(__file__).parent
 SCENE_DIR = BASE_DIR / "static" / "scenes"
 OUTPUT_DIR = BASE_DIR / "static" / "images"
 MODEL_ARTIFACT_PATH = BASE_DIR / "model_artifacts" / "best_iss_reconstruction_model.pth"
+GPSN_MODEL_ARTIFACT_PATH = BASE_DIR / "model_artifacts" / "unet_single" / "best_model.pt"
 
 REQUIRED_DATASET_FILES = (
     "building_height_128.npy",
@@ -28,6 +29,8 @@ REQUIRED_DATASET_FILES = (
 
 ISS_MIN_DBM = -140.0
 ISS_MAX_DBM = -35.0
+GPSN_RSS_MIN_DBM = -90.0
+GPSN_RSS_MAX_DBM = -15.0
 BUILDING_MAX_M = 60.0
 NOISE_CONFIDENCE_SIGMA_PX = 8.0
 ISS_UNET_MODE_LABELS = {
@@ -101,6 +104,7 @@ def iss_unet_status() -> dict[str, Any]:
         }
 
     model_available = MODEL_ARTIFACT_PATH.exists()
+    gpsn_model_available = GPSN_MODEL_ARTIFACT_PATH.exists()
     try:
         import torch  # noqa: F401
 
@@ -114,6 +118,12 @@ def iss_unet_status() -> dict[str, Any]:
         "available": model_available and torch_available,
         "model": {
             "available": model_available,
+        },
+        "legacy_model": {
+            "available": model_available,
+        },
+        "gpsn_model": {
+            "available": gpsn_model_available,
         },
         "torch": {
             "available": torch_available,
@@ -133,6 +143,15 @@ def _normalize_radio_map(values: np.ndarray) -> np.ndarray:
 
 def _denormalize_iss(values: np.ndarray) -> np.ndarray:
     return values * (ISS_MAX_DBM - ISS_MIN_DBM) + ISS_MIN_DBM
+
+
+def _normalize_gpsn_rss(values: np.ndarray) -> np.ndarray:
+    clipped = np.clip(values.astype(np.float32), GPSN_RSS_MIN_DBM, GPSN_RSS_MAX_DBM)
+    return (clipped - GPSN_RSS_MIN_DBM) / (GPSN_RSS_MAX_DBM - GPSN_RSS_MIN_DBM)
+
+
+def _denormalize_gpsn_rss(values: np.ndarray) -> np.ndarray:
+    return values.astype(np.float32) * (GPSN_RSS_MAX_DBM - GPSN_RSS_MIN_DBM) + GPSN_RSS_MIN_DBM
 
 
 def _normalize_sparse_ratio(sparse_ratio: float) -> float:
@@ -211,6 +230,19 @@ def build_model_input(
     return inputs, sparse_mask, outdoor_mask
 
 
+def build_gpsn_unet_input(
+    sparse_values_dbm: np.ndarray,
+    sparse_mask: np.ndarray,
+    building_map: np.ndarray,
+) -> np.ndarray:
+    if sparse_values_dbm.shape != sparse_mask.shape or sparse_values_dbm.shape != building_map.shape:
+        raise ValueError("sparse_values_dbm, sparse_mask, and building_map must have the same shape")
+    building_norm = np.clip(building_map.astype(np.float32) / BUILDING_MAX_M, 0.0, 1.0)
+    mask = sparse_mask.astype(np.float32)
+    sparse_rss = _normalize_gpsn_rss(sparse_values_dbm) * mask
+    return np.stack([sparse_rss, mask, building_norm], axis=0).astype(np.float32)
+
+
 def _empty_confidence_stats(applied: bool) -> dict[str, Any]:
     return {
         "confidence_applied": applied,
@@ -279,6 +311,46 @@ def _load_model(device: str):
     model.to(torch_device)
     model.eval()
     return model, torch_device
+
+
+def _load_gpsn_model(device: str):
+    import torch
+
+    from app.model_unet_single import UNet
+
+    torch_device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
+    checkpoint = torch.load(GPSN_MODEL_ARTIFACT_PATH, map_location=torch_device, weights_only=True)
+    model = UNet(in_channels=3, out_channels=1).to(torch_device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    return model, torch_device
+
+
+def _reconstruct_without_model(
+    arrays: dict[str, np.ndarray],
+    mode: str,
+) -> np.ndarray:
+    if mode not in {"sim", "gps"}:
+        raise ValueError("mode must be sim or gps")
+    return _clip_radio_map(arrays["iss"])
+
+
+def _run_gpsn_unet(
+    sparse_values_dbm: np.ndarray,
+    sparse_mask: np.ndarray,
+    building_map: np.ndarray,
+    device: str,
+) -> np.ndarray:
+    import torch
+
+    model, torch_device = _load_gpsn_model(device)
+    inputs = build_gpsn_unet_input(sparse_values_dbm, sparse_mask, building_map)
+    tensor = torch.from_numpy(inputs).float().unsqueeze(0).to(torch_device)
+    with torch.no_grad():
+        output = model(tensor)
+    prediction = output[0, 0].detach().cpu().numpy()
+    prediction = np.clip(prediction, 0.0, 1.0)
+    return _denormalize_gpsn_rss(prediction).astype(np.float32)
 
 
 def _render_reconstructed_png(reconstructed_iss: np.ndarray, mode_label: str = "Sim") -> bytes:
@@ -495,9 +567,9 @@ def reconstruct_iss_unet(
     dataset = resolve_scene_dataset(scene)
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))
-    if not MODEL_ARTIFACT_PATH.exists():
-        logger.error(f"ISS_UNET model artifact not found at: {MODEL_ARTIFACT_PATH}")
-        raise FileNotFoundError("ISS_UNET model artifact not found on the server. Please check the backend configuration.")
+    if mode == "gps_n" and not GPSN_MODEL_ARTIFACT_PATH.exists():
+        logger.error(f"GPS_N model artifact not found at: {GPSN_MODEL_ARTIFACT_PATH}")
+        raise FileNotFoundError("GPS_N model artifact not found on the server. Please check the backend configuration.")
 
     arrays = load_scene_arrays(dataset)
     sparse_values_dbm = None
@@ -512,6 +584,24 @@ def reconstruct_iss_unet(
     if mode == "sim":
         inputs, sparse_mask, outdoor_mask = build_model_input(arrays, sparse_ratio=sparse_ratio, seed=seed)
         real_metrics["used_samples"] = int(sparse_mask.sum())
+    elif mode == "gps":
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+
+        gps_points = parse_gps_csv(gps_csv) if gps_csv is not None else None
+        noise_points = parse_noise_csv(noise_csv) if noise_csv is not None else None
+        route_sample = create_route_sparse_sample(
+            arrays,
+            dataset,
+            mode=mode,
+            gps_points=gps_points,
+            noise_points=noise_points,
+            apply_building_mask=apply_building_mask,
+        )
+        inputs = route_sample.inputs
+        sparse_mask = route_sample.sparse_mask
+        outdoor_mask = route_sample.outdoor_mask
+        sparse_values_dbm = route_sample.iss_sparse_dbm
+        real_metrics = route_sample.metrics
     else:
         from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
 
@@ -531,14 +621,19 @@ def reconstruct_iss_unet(
         sparse_values_dbm = route_sample.iss_sparse_dbm
         real_metrics = route_sample.metrics
 
-    import torch
-
-    model, torch_device = _load_model(device)
-    tensor = torch.from_numpy(inputs).float().unsqueeze(0).to(torch_device)
-    with torch.no_grad():
-        output = model(tensor)
-    reconstructed_norm = output[0, 0].detach().cpu().numpy()
-    reconstructed_iss = _clip_radio_map(_denormalize_iss(reconstructed_norm))
+    model_inference = False
+    if mode in {"sim", "gps"}:
+        reconstructed_iss = _reconstruct_without_model(arrays, mode)
+    else:
+        if sparse_values_dbm is None:
+            raise RuntimeError("gps_n sparse values are required for UNet inference")
+        reconstructed_iss = _run_gpsn_unet(
+            sparse_values_dbm=sparse_values_dbm,
+            sparse_mask=sparse_mask,
+            building_map=arrays["building"],
+            device=device,
+        )
+        model_inference = True
     confidence_metrics = _empty_confidence_stats(applied=False)
     if mode == "gps_n" and focus_sampling_points:
         reconstructed_iss, confidence_metrics = apply_noise_confidence_weighting(
@@ -589,6 +684,7 @@ def reconstruct_iss_unet(
         "sparse_samples": int(sparse_mask.sum()),
         "outdoor_pixels": int(outdoor_pixels.sum()),
         "output_shape": list(reconstructed_iss.shape),
+        "model_inference": model_inference,
         **real_metrics,
         **confidence_metrics,
     }
