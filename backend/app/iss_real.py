@@ -244,6 +244,7 @@ def create_route_sparse_sample(
     mode: str,
     gps_points: list[GPSPoint] | None = None,
     noise_points: list[NoisePoint] | None = None,
+    apply_building_mask: bool = True,
 ) -> RouteSparseResult:
     sample_used = gps_points is None or (mode == "gps_n" and noise_points is None)
     if gps_points is None:
@@ -261,13 +262,17 @@ def create_route_sparse_sample(
     iss_sparse_dbm = np.full_like(building, ISS_MIN_DBM, dtype=np.float32)
     area_m = _scene_area_m(dataset)
     route_points, aligned_noise, skipped_noise = _route_points_for_mode(mode, gps_points, noise_points)
+    out_of_bounds = 0
+    indoor_filtered = 0
 
     for point in route_points:
         pixel = _latlon_to_pixel(point.lat, point.lon, center[0], center[1], area_m, building.shape)
         if pixel is None:
+            out_of_bounds += 1
             continue
         row, col = pixel
-        if outdoor_mask[row, col] < 0.5:
+        if apply_building_mask and outdoor_mask[row, col] < 0.5:
+            indoor_filtered += 1
             continue
         sparse_mask[row, col] = 1.0
         if isinstance(point, AlignedNoisePoint):
@@ -294,6 +299,9 @@ def create_route_sparse_sample(
         "aligned_noise": aligned_noise,
         "skipped_noise": skipped_noise,
         "sample_used": sample_used,
+        "apply_building_mask": apply_building_mask,
+        "out_of_bounds": out_of_bounds,
+        "indoor_filtered": indoor_filtered,
     }
     return RouteSparseResult(
         sparse_mask=sparse_mask,

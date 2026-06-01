@@ -43,6 +43,8 @@ BASE_DIR = Path(__file__).parent
 REPO_ROOT = BASE_DIR.parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+INCOMING_CSV_DIR = REPO_ROOT / "incoming"
+INCOMING_CSV_DIR.mkdir(parents=True, exist_ok=True)
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
@@ -60,6 +62,8 @@ OVERPASS_ENDPOINTS = [
     "https://z.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
+SCENE_SCALE = float(os.environ.get("VITE_SCENE_SCALE", "1") or "1")
+SIMULATION_ALT_GAIN = float(os.environ.get("SIMULATION_ALT_GAIN", "2.14") or "2.14")
 
 # ──────────────────────────────────────────────
 # FastAPI App
@@ -185,20 +189,34 @@ def _adb_env() -> Dict[str, str]:
     return env
 
 
+def _list_connected_adb_devices() -> list[str]:
+    devices = _run_adb_command(["devices"], 8.0)
+    devices_text = devices.stdout.decode("utf-8", errors="ignore")
+    connected: list[str] = []
+    for line in devices_text.splitlines()[1:]:
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1] == "device":
+            connected.append(parts[0])
+    return connected
+
+
+def _resolve_controller_serial(requested_serial: str | None) -> str:
+    connected = _list_connected_adb_devices()
+    if not connected:
+        raise RuntimeError("no controller connected over adb")
+    if requested_serial and requested_serial in connected:
+        return requested_serial
+    return connected[0]
+
+
 @app.get("/api/controller-screen")
-async def controller_screen(serial: str = Query(DEFAULT_CONTROLLER_SERIAL)) -> Response:
+async def controller_screen(serial: str | None = Query(None)) -> Response:
     try:
-        devices = await asyncio.to_thread(_run_adb_command, ["devices"], 8.0)
-        devices_text = devices.stdout.decode("utf-8", errors="ignore")
-        if f"{serial}\tdevice" not in devices_text:
-            return JSONResponse(
-                {"success": False, "error": f"controller not connected over adb: {serial}"},
-                status_code=503,
-            )
+        resolved_serial = await asyncio.to_thread(_resolve_controller_serial, serial or DEFAULT_CONTROLLER_SERIAL)
 
         capture = await asyncio.to_thread(
             _run_adb_command,
-            ["-s", serial, "exec-out", "screencap", "-p"],
+            ["-s", resolved_serial, "exec-out", "screencap", "-p"],
             15.0,
         )
         if capture.returncode != 0:
@@ -218,8 +236,10 @@ async def controller_screen(serial: str = Query(DEFAULT_CONTROLLER_SERIAL)) -> R
         return Response(
             content=png_bytes,
             media_type="image/png",
-            headers={"Cache-Control": "no-store, max-age=0"},
+            headers={"Cache-Control": "no-store, max-age=0", "X-Controller-Serial": resolved_serial},
         )
+    except RuntimeError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=503)
     except subprocess.TimeoutExpired:
         return JSONResponse({"success": False, "error": "controller screen capture timed out"}, status_code=504)
     except FileNotFoundError as exc:
@@ -313,19 +333,16 @@ def _iter_controller_stream(serial: str):
 
 
 @app.get("/api/controller-stream.mjpg")
-async def controller_stream(serial: str = Query(DEFAULT_CONTROLLER_SERIAL)):
-    devices = await asyncio.to_thread(_run_adb_command, ["devices"], 8.0)
-    devices_text = devices.stdout.decode("utf-8", errors="ignore")
-    if f"{serial}\tdevice" not in devices_text:
-        return JSONResponse(
-            {"success": False, "error": f"controller not connected over adb: {serial}"},
-            status_code=503,
-        )
+async def controller_stream(serial: str | None = Query(None)):
+    try:
+        resolved_serial = await asyncio.to_thread(_resolve_controller_serial, serial or DEFAULT_CONTROLLER_SERIAL)
+    except RuntimeError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=503)
 
     return StreamingResponse(
-        _iter_controller_stream(serial),
+        _iter_controller_stream(resolved_serial),
         media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-store, max-age=0"},
+        headers={"Cache-Control": "no-store, max-age=0", "X-Controller-Serial": resolved_serial},
     )
 
 
@@ -1347,6 +1364,10 @@ DEFAULT_POWER_DBM_BY_ROLE = {
     "tx": 80.0,
     "jammer": 80.0,
 }
+BUILTIN_SCENE_NAMES = {
+    "ntpu": "NTPU",
+    "nycu": "NYCU",
+}
 
 class DeviceIn(BaseModel):
     name: str
@@ -1376,6 +1397,7 @@ class ISSUNetReconstructRequest(BaseModel):
     sparse_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
     seed: int = Field(default=41)
+    apply_building_mask: bool = Field(default=True)
 
 
 class ISSUNetDatasetPrepareRequest(BaseModel):
@@ -1397,10 +1419,68 @@ class SINRMapRequest(BaseSionnaRequest):
     samples_per_tx: int = Field(default=100000000)
 
 
+class USRPMeasurementRequest(BaseModel):
+    scene: Optional[str] = Field(default=None)
+    device_id: str = Field(default="usrp-b210-sensor")
+    device_name: str = Field(default="USRP B210 Sensor")
+    device_type: str = Field(default="uav")
+    role: Literal["rx", "tx", "jammer"] = Field(default="rx")
+    lat: Optional[float] = Field(default=None)
+    lon: Optional[float] = Field(default=None)
+    alt: float = Field(default=0.0)
+    accuracy: float = Field(default=1.0)
+    x: Optional[float] = Field(default=None)
+    y: Optional[float] = Field(default=None)
+    z: Optional[float] = Field(default=None)
+    timestamp: Optional[float] = Field(default=None)
+    center_freq_hz: Optional[float] = Field(default=None)
+    sample_rate_hz: Optional[float] = Field(default=None)
+    gain_db: Optional[float] = Field(default=None)
+    bandwidth_hz: Optional[float] = Field(default=None)
+    channel: Optional[int] = Field(default=None)
+    sample_count: Optional[int] = Field(default=None)
+    capture_seconds: Optional[float] = Field(default=None)
+    mean_power_dbfs: Optional[float] = Field(default=None)
+    peak_power_dbfs: Optional[float] = Field(default=None)
+    rms_dbfs: Optional[float] = Field(default=None)
+    max_iq_abs: Optional[float] = Field(default=None)
+    derived_power_dbm: Optional[float] = Field(default=None)
+    auto_simulate: bool = Field(default=False)
+    map_type: Literal["sinr", "iss", "tss", "cfar"] = Field(default="iss")
+    cell_size: float = Field(default=4.0, gt=0)
+    samples_per_tx: int = Field(default=100000000, ge=10000)
+    sinr_vmin: float = Field(default=-20.0)
+    sinr_vmax: float = Field(default=40.0)
+    overlay_scene: bool = Field(default=False)
+    devices: List[DeviceIn] = Field(default_factory=list)
+
+
 def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
     return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
+
+
+def _read_scene_origin_from_env(scene_name: str, fallback: dict[str, float]) -> dict[str, float]:
+    prefix = scene_name.upper()
+    lat = os.environ.get(f"VITE_{prefix}_ORIGIN_LAT") or os.environ.get("VITE_ORIGIN_LAT")
+    lon = os.environ.get(f"VITE_{prefix}_ORIGIN_LON") or os.environ.get("VITE_ORIGIN_LON")
+    alt = os.environ.get(f"VITE_{prefix}_ORIGIN_ALT") or os.environ.get("VITE_ORIGIN_ALT")
+
+    def _coerce(raw: Optional[str], default: float) -> float:
+        if raw in (None, ""):
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        return value if math.isfinite(value) else default
+
+    return {
+        "lat": _coerce(lat, fallback["lat"]),
+        "lon": _coerce(lon, fallback["lon"]),
+        "alt": _coerce(alt, fallback["alt"]),
+    }
 
 
 @app.get("/api/iss-unet/status")
@@ -1501,6 +1581,17 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             cfar=cfar_params,
             seed=req.seed,
             mode="sim",
+            apply_building_mask=req.apply_building_mask,
+        )
+        logger.info(
+            "ISS_UNET completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s",
+            result.get("scene"),
+            result.get("mode"),
+            result.get("metrics", {}).get("aligned_noise"),
+            result.get("metrics", {}).get("skipped_noise"),
+            result.get("metrics", {}).get("used_samples"),
+            result.get("metrics", {}).get("sparse_samples"),
+            result.get("options", {}).get("apply_building_mask"),
         )
         return {"success": True, **result}
     except FileNotFoundError as exc:
@@ -1533,6 +1624,7 @@ async def iss_unet_reconstruct_upload_post(
     sparse_ratio: float = Form(0.2),
     seed: int = Form(41),
     cfar_enabled: bool = Form(True),
+    apply_building_mask: bool = Form(True),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
 ):
@@ -1564,6 +1656,17 @@ async def iss_unet_reconstruct_upload_post(
             mode=mode,
             gps_csv=gps_csv,
             noise_csv=noise_csv,
+            apply_building_mask=apply_building_mask,
+        )
+        logger.info(
+            "ISS_UNET upload completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s",
+            result.get("scene"),
+            result.get("mode"),
+            result.get("metrics", {}).get("aligned_noise"),
+            result.get("metrics", {}).get("skipped_noise"),
+            result.get("metrics", {}).get("used_samples"),
+            result.get("metrics", {}).get("sparse_samples"),
+            result.get("options", {}).get("apply_building_mask"),
         )
         return {"success": True, **result}
     except ValueError as exc:
@@ -1589,6 +1692,178 @@ async def iss_unet_reconstruct_upload_post(
     except Exception as exc:
         logger.exception("ISS_UNET upload reconstruction failed")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/usrp/upload-csv-bundle")
+async def usrp_upload_csv_bundle_post(
+    scene: str = Form("NTPU"),
+    mission_id: str = Form(""),
+    map_type: Literal["sinr", "iss", "tss", "cfar"] = Form("iss"),
+    auto_simulate_last: bool = Form(True),
+    device_id: str = Form("usrp-b210-sensor"),
+    device_name: str = Form("USRP B210 Sensor"),
+    device_type: str = Form("uav"),
+    role: Literal["rx", "tx", "jammer"] = Form("rx"),
+    devices_json: str = Form(""),
+    gps_file: UploadFile = File(...),
+    noise_file: UploadFile | None = File(None),
+):
+    if not gps_file.filename:
+        return JSONResponse({"success": False, "error": "gps_file filename is required"}, status_code=422)
+
+    bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    bundle_dir = INCOMING_CSV_DIR / bundle_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    gps_bytes = await gps_file.read()
+    noise_bytes = await noise_file.read() if noise_file is not None else None
+    (bundle_dir / "gps.csv").write_bytes(gps_bytes)
+    if noise_bytes is not None:
+        (bundle_dir / "noise.csv").write_bytes(noise_bytes)
+
+    metadata: dict[str, Any] = {
+        "scene": scene,
+        "mission_id": bundle_id,
+        "map_type": map_type,
+        "auto_simulate_last": auto_simulate_last,
+        "device_id": device_id,
+        "device_name": device_name,
+        "device_type": device_type,
+        "role": role,
+        "received_at": datetime.now().isoformat(),
+        "gps_filename": gps_file.filename,
+        "noise_filename": noise_file.filename if noise_file is not None else None,
+    }
+    if devices_json.strip():
+        try:
+            metadata["devices"] = json.loads(devices_json)
+        except json.JSONDecodeError as exc:
+            return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
+
+    (bundle_dir / "bundle.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    logger.info("Stored uploaded CSV bundle: mission_id=%s scene=%s dir=%s", bundle_id, scene, bundle_dir)
+    return {
+        "success": True,
+        "mission_id": bundle_id,
+        "bundle_dir": str(bundle_dir),
+        "watch_dir": str(INCOMING_CSV_DIR),
+        "metadata": metadata,
+    }
+
+
+def _merge_bundle_metadata(bundle_dir: Path, updates: dict[str, Any]) -> dict[str, Any]:
+    metadata_path = bundle_dir / "bundle.json"
+    existing: dict[str, Any] = {}
+    if metadata_path.exists():
+        try:
+            existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+    merged = {**existing, **updates}
+    metadata_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    return merged
+
+
+@app.post("/api/usrp/upload-gps-csv")
+async def usrp_upload_gps_csv_post(
+    scene: str = Form("NTPU"),
+    mission_id: str = Form(""),
+    map_type: Literal["sinr", "iss", "tss", "cfar"] = Form("iss"),
+    auto_simulate_last: bool = Form(True),
+    device_id: str = Form("align-m4p-top-aircraft"),
+    device_name: str = Form("M4P TOP Aircraft"),
+    device_type: str = Form("uav"),
+    role: Literal["rx", "tx", "jammer"] = Form("rx"),
+    devices_json: str = Form(""),
+    gps_file: UploadFile = File(...),
+):
+    if not gps_file.filename:
+        return JSONResponse({"success": False, "error": "gps_file filename is required"}, status_code=422)
+
+    bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    bundle_dir = INCOMING_CSV_DIR / bundle_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "gps.csv").write_bytes(await gps_file.read())
+
+    updates: dict[str, Any] = {
+        "scene": scene,
+        "mission_id": bundle_id,
+        "map_type": map_type,
+        "auto_simulate_last": auto_simulate_last,
+        "device_id": device_id,
+        "device_name": device_name,
+        "device_type": device_type,
+        "role": role,
+        "received_gps_at": datetime.now().isoformat(),
+        "gps_filename": gps_file.filename,
+    }
+    if devices_json.strip():
+        try:
+            updates["devices"] = json.loads(devices_json)
+        except json.JSONDecodeError as exc:
+            return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
+
+    metadata = _merge_bundle_metadata(bundle_dir, updates)
+    return {
+        "success": True,
+        "mission_id": bundle_id,
+        "bundle_dir": str(bundle_dir),
+        "watch_dir": str(INCOMING_CSV_DIR),
+        "metadata": metadata,
+    }
+
+
+@app.post("/api/usrp/upload-noise-csv")
+async def usrp_upload_noise_csv_post(
+    scene: str = Form("NTPU"),
+    mission_id: str = Form(""),
+    map_type: Literal["sinr", "iss", "tss", "cfar"] = Form("iss"),
+    auto_simulate_last: bool = Form(True),
+    device_id: str = Form("usrp-b210-sensor"),
+    device_name: str = Form("USRP B210 Sensor"),
+    device_type: str = Form("uav"),
+    role: Literal["rx", "tx", "jammer"] = Form("rx"),
+    devices_json: str = Form(""),
+    noise_file: UploadFile = File(...),
+):
+    if not noise_file.filename:
+        return JSONResponse({"success": False, "error": "noise_file filename is required"}, status_code=422)
+
+    bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    bundle_dir = INCOMING_CSV_DIR / bundle_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "noise.csv").write_bytes(await noise_file.read())
+
+    updates: dict[str, Any] = {
+        "scene": scene,
+        "mission_id": bundle_id,
+        "map_type": map_type,
+        "auto_simulate_last": auto_simulate_last,
+        "device_id": device_id,
+        "device_name": device_name,
+        "device_type": device_type,
+        "role": role,
+        "received_noise_at": datetime.now().isoformat(),
+        "noise_filename": noise_file.filename,
+    }
+    if devices_json.strip():
+        try:
+            updates["devices"] = json.loads(devices_json)
+        except json.JSONDecodeError as exc:
+            return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
+
+    metadata = _merge_bundle_metadata(bundle_dir, updates)
+    return {
+        "success": True,
+        "mission_id": bundle_id,
+        "bundle_dir": str(bundle_dir),
+        "watch_dir": str(INCOMING_CSV_DIR),
+        "metadata": metadata,
+    }
 
 
 @app.get("/api/iss-unet/images/{filename}")
@@ -1624,22 +1899,125 @@ class CFRPlotRequest(BaseModel):
     advanced: CFRAdvancedParams = Field(default_factory=CFRAdvancedParams)
 
 
-def _resolve_sionna_scene_xml(scene: str) -> Path:
+def _resolve_scene_name(scene: str) -> str:
     scene_id = scene.strip()
     if not scene_id:
         raise HTTPException(status_code=422, detail="scene is required")
     if any(part in scene_id for part in ("/", "\\", "..")):
         raise HTTPException(status_code=422, detail=f"Invalid scene id: {scene_id}")
 
-    builtins = {
-        "ntpu": "NTPU",
-        "nycu": "NYCU",
-    }
-    scene_name = builtins.get(scene_id.lower(), scene_id.upper())
+    return BUILTIN_SCENE_NAMES.get(scene_id.lower(), scene_id.upper())
+
+
+def _resolve_sionna_scene_xml(scene: str) -> Path:
+    scene_name = _resolve_scene_name(scene)
     scene_xml = BASE_DIR / "static" / "scenes" / scene_name / f"{scene_name}.xml"
     if not scene_xml.exists():
         raise HTTPException(status_code=404, detail=f"Scene XML not found: {scene_xml}")
     return scene_xml
+
+
+def _resolve_scene_origin(scene: str) -> dict[str, float]:
+    scene_name = _resolve_scene_name(scene)
+    builtins = {
+        "NTPU": {"lat": 24.943476, "lon": 121.370054, "alt": 0.0},
+        "NYCU": {"lat": 24.967052, "lon": 121.536335, "alt": 0.0},
+    }
+    if scene_name in builtins:
+        return _read_scene_origin_from_env(scene_name, builtins[scene_name])
+
+    metadata_path = BASE_DIR / "static" / "scenes" / scene_name / "scene_metadata.json"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            lat = metadata.get("lat")
+            lon = metadata.get("lon")
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                alt = metadata.get("alt", 0.0)
+                return {
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "alt": float(alt) if isinstance(alt, (int, float)) else 0.0,
+                }
+        except Exception:
+            logger.exception("Failed to read scene origin from metadata: %s", metadata_path)
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Scene origin metadata not found for scene: {scene_name}",
+    )
+
+
+def _latlon_to_enu(
+    lat: float,
+    lon: float,
+    alt: float,
+    origin: dict[str, float],
+) -> tuple[float, float, float]:
+    radius = 6_378_137.0
+    d_lat = (lat - origin["lat"]) * (math.pi / 180.0)
+    d_lon = (lon - origin["lon"]) * (math.pi / 180.0)
+    x = d_lon * radius * math.cos(origin["lat"] * (math.pi / 180.0))
+    y = -d_lat * radius
+    z = alt - origin["alt"]
+    return x, y, z
+
+
+def _resolve_measurement_position(
+    req: USRPMeasurementRequest,
+) -> tuple[float, float, float, Optional[dict[str, float]]]:
+    if req.x is not None and req.y is not None and req.z is not None:
+        return req.x, req.y, req.z, None
+
+    if req.lat is None or req.lon is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either x/y/z or lat/lon with scene",
+        )
+    if not req.scene:
+        raise HTTPException(
+            status_code=422,
+            detail="scene is required when converting lat/lon to simulator coordinates",
+        )
+
+    origin = _resolve_scene_origin(req.scene)
+    east, north, up = _latlon_to_enu(req.lat, req.lon, req.alt, origin)
+    x = east * SCENE_SCALE
+    z = north * SCENE_SCALE
+    y = max(up * SIMULATION_ALT_GAIN, 10.0)
+    return x, y, z, origin
+
+
+def _upsert_measurement_device(
+    devices: List[DeviceIn],
+    req: USRPMeasurementRequest,
+    x: float,
+    y: float,
+    z: float,
+) -> List[DeviceIn]:
+    next_devices = [DeviceIn.model_validate(device.model_dump()) for device in devices]
+    measurement_device = DeviceIn(
+        name=req.device_name,
+        role=req.role,
+        x=x,
+        y=y,
+        z=z,
+        power_dbm=req.derived_power_dbm,
+    )
+
+    replace_index = next(
+        (
+            index
+            for index, device in enumerate(next_devices)
+            if device.name == req.device_name or (req.role == "rx" and device.role == "rx")
+        ),
+        None,
+    )
+    if replace_index is None:
+        next_devices.append(measurement_device)
+    else:
+        next_devices[replace_index] = measurement_device
+    return next_devices
 
 
 def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
@@ -1809,6 +2187,149 @@ class SimulateRequest(BaseModel):
     sinr_vmax: float = Field(default=40.0)
     overlay_scene: bool = Field(default=False)
     devices: List[DeviceIn]
+
+
+async def _run_auto_simulation(
+    req: USRPMeasurementRequest,
+    devices: List[DeviceIn],
+) -> dict[str, Any]:
+    if not req.scene:
+        raise HTTPException(status_code=422, detail="scene is required for auto_simulate")
+
+    if req.map_type == "sinr":
+        from app.sionna_service import generate_sinr_map
+
+        scene_xml = _resolve_sionna_scene_xml(req.scene)
+        tx_list, rx_config = _sionna_device_config(devices)
+        await generate_sinr_map(
+            tx_list=tx_list,
+            rx_config=rx_config,
+            scene_xml=str(scene_xml),
+            scene_name=str(scene_xml.parent.name),
+            sinr_vmin=req.sinr_vmin,
+            sinr_vmax=req.sinr_vmax,
+            cell_size=req.cell_size,
+            samples_per_tx=req.samples_per_tx,
+        )
+        return {
+            "scene": req.scene,
+            "map_type": req.map_type,
+            "device_count": len(devices),
+        }
+
+    scene_xml = _resolve_sionna_scene_xml(req.scene)
+    output_dir = str(BASE_DIR / "static" / "maps" / req.scene.lower())
+    os.makedirs(output_dir, exist_ok=True)
+    devices_dicts = []
+    for device in devices:
+        power_dbm = _device_power_dbm(device)
+        payload = {
+            "name": device.name,
+            "role": device.role,
+            "x": device.x,
+            "y": device.y,
+            "z": device.z,
+        }
+        if power_dbm is not None:
+            payload["power_dbm"] = power_dbm
+        devices_dicts.append(payload)
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        _run_generate_maps,
+        str(scene_xml),
+        devices_dicts,
+        output_dir,
+        req.scene,
+        req.map_type,
+        req.cell_size,
+        req.samples_per_tx,
+        req.sinr_vmin,
+        req.sinr_vmax,
+        req.overlay_scene,
+    )
+    return {
+        "scene": req.scene,
+        "map_type": req.map_type,
+        "device_count": len(devices),
+        "output_dir": output_dir,
+    }
+
+
+@app.post("/api/usrp/measurement")
+async def usrp_measurement_post(req: USRPMeasurementRequest):
+    x, y, z, origin = _resolve_measurement_position(req)
+    timestamp = req.timestamp if req.timestamp is not None else time.time()
+    gps_broadcast = False
+
+    gps_manager.names[req.device_id] = req.device_name
+    if req.lat is not None and req.lon is not None:
+        gps_payload = {
+            "lat": req.lat,
+            "lon": req.lon,
+            "alt": req.alt,
+            "accuracy": req.accuracy,
+            "deviceId": req.device_id,
+            "deviceName": req.device_name,
+            "deviceType": req.device_type,
+            "timestamp": timestamp,
+        }
+        gps_manager.update_gps(req.device_id, gps_payload)
+        await gps_manager.broadcast(json.dumps(gps_payload))
+        gps_broadcast = True
+
+    spectrum_payload = {
+        "type": "usrp-spectrum",
+        "deviceId": req.device_id,
+        "deviceName": req.device_name,
+        "deviceType": req.device_type,
+        "role": req.role,
+        "timestamp": timestamp,
+        "scene": req.scene,
+        "lat": req.lat,
+        "lon": req.lon,
+        "alt": req.alt,
+        "accuracy": req.accuracy,
+        "x": x,
+        "y": y,
+        "z": z,
+        "center_freq_hz": req.center_freq_hz,
+        "sample_rate_hz": req.sample_rate_hz,
+        "gain_db": req.gain_db,
+        "bandwidth_hz": req.bandwidth_hz,
+        "channel": req.channel,
+        "sample_count": req.sample_count,
+        "capture_seconds": req.capture_seconds,
+        "mean_power_dbfs": req.mean_power_dbfs,
+        "peak_power_dbfs": req.peak_power_dbfs,
+        "rms_dbfs": req.rms_dbfs,
+        "max_iq_abs": req.max_iq_abs,
+        "derived_power_dbm": req.derived_power_dbm,
+    }
+    await gps_manager.broadcast(json.dumps(spectrum_payload))
+
+    simulation = None
+    if req.auto_simulate:
+        devices = _upsert_measurement_device(req.devices, req, x, y, z)
+        simulation = await _run_auto_simulation(req, devices)
+
+    return {
+        "success": True,
+        "device": {
+            "device_id": req.device_id,
+            "device_name": req.device_name,
+            "device_type": req.device_type,
+            "role": req.role,
+            "x": x,
+            "y": y,
+            "z": z,
+        },
+        "gps_broadcast": gps_broadcast,
+        "origin": origin,
+        "auto_simulated": simulation is not None,
+        "simulation": simulation,
+    }
 
 @app.post("/api/simulate")
 async def simulate(req: SimulateRequest):
