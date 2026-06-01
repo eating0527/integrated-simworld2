@@ -4,7 +4,20 @@
 #        .\start.ps1 -NoAP3
 #        .\start.ps1 -Reload
 
-param([switch]$NoTunnel, [switch]$NoAP3, [switch]$Reload)
+param(
+    [switch]$NoTunnel,
+    [switch]$NoAP3,
+    [switch]$Reload,
+    [switch]$CsvWatch,
+    [switch]$GpsCsv,
+    [string]$CsvWatchPath = "",
+    [string]$CsvWatchScene = "NTPU",
+    [string]$CsvDevicesFile = "",
+    [string]$CsvMapType = "iss",
+    [string]$GpsMissionId = "",
+    [string]$GpsAltitude = "relative",
+    [string]$GpsMavlinkUrl = ""
+)
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir  = Join-Path $ScriptDir "backend"
@@ -12,6 +25,7 @@ $FrontendDir = Join-Path $ScriptDir "frontend"
 $LogDir      = Join-Path $ScriptDir ".logs"
 $EnvFile     = Join-Path $ScriptDir ".env"
 $ToolsDir    = Join-Path $ScriptDir "tools"
+$IncomingDir = if ($CsvWatchPath) { $CsvWatchPath } else { Join-Path $ScriptDir "incoming" }
 
 # Reload PATH so winget-installed tools are visible
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
@@ -110,8 +124,18 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $jobs = @()
 $ap3BridgeJob = $null
+$csvWatchJob = $null
+$gpsCsvJob = $null
 $ap3BridgeScript = Join-Path $ToolsDir "ap3_to_simulator.py"
 $ap3BridgeLog = Join-Path $LogDir "ap3_bridge.log"
+$csvWatchScript = Join-Path $ToolsDir "watch_csv_incoming.py"
+$csvWatchLog = Join-Path $LogDir "csv_watch.log"
+$gpsCsvScript = Join-Path $ToolsDir "ap3_to_gps_csv.py"
+$gpsCsvLog = Join-Path $LogDir "ap3_gps_csv.log"
+
+if (-not $GpsMissionId) {
+    $GpsMissionId = Get-Date -Format "yyyyMMdd_HHmmss"
+}
 
 # Ensure required ports are free before startup.
 Stop-PortListeners -Ports @(5173, 8888)
@@ -225,6 +249,39 @@ function Start-Ap3Bridge {
         -NoNewWindow -PassThru
 }
 
+function Start-Ap3GpsCsvWriter {
+    param(
+        [string]$PythonExe,
+        [string]$WriterScript,
+        [string]$WorkingDir,
+        [string]$LogPath,
+        [string]$MissionId,
+        [string]$IncomingDir,
+        [string]$Altitude,
+        [string]$MavlinkUrl
+    )
+
+    $writerArgs = @(
+        "-u",
+        $WriterScript,
+        "--mission-id",
+        $MissionId,
+        "--incoming-dir",
+        $IncomingDir,
+        "--altitude",
+        $Altitude
+    )
+    if ($MavlinkUrl) {
+        $writerArgs += @("--mavlink-url", $MavlinkUrl)
+    }
+    return Start-Process -FilePath $PythonExe `
+        -ArgumentList $writerArgs `
+        -WorkingDirectory $WorkingDir `
+        -RedirectStandardOutput $LogPath `
+        -RedirectStandardError  ($LogPath + ".err") `
+        -NoNewWindow -PassThru
+}
+
 if (-not $NoAP3) {
     $adbExe = Join-Path $ToolsDir "platform-tools\adb.exe"
     if ((Test-Path $adbExe) -and (Test-Path $ap3BridgeScript)) {
@@ -253,6 +310,72 @@ if (-not $NoAP3) {
     }
 }
 
+# --- AP3 GPS CSV writer ---
+if ($GpsCsv) {
+    if (Test-Path $gpsCsvScript) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $IncomingDir $GpsMissionId) | Out-Null
+        Info "Starting AP3 GPS CSV writer..."
+        $gpsCsvJob = Start-Ap3GpsCsvWriter `
+            -PythonExe $pythonExe `
+            -WriterScript $gpsCsvScript `
+            -WorkingDir $ScriptDir `
+            -LogPath $gpsCsvLog `
+            -MissionId $GpsMissionId `
+            -IncomingDir $IncomingDir `
+            -Altitude $GpsAltitude `
+            -MavlinkUrl $GpsMavlinkUrl
+        $jobs += $gpsCsvJob
+        Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
+        Info "   GPS CSV target: $(Join-Path (Join-Path $IncomingDir $GpsMissionId) 'gps.csv')"
+        if ($gpsCsvJob.HasExited) {
+            Warn "AP3 GPS CSV writer exited immediately; it will be restarted by the monitor loop."
+        } else {
+            Info "   AP3 GPS CSV auto-restart monitor enabled"
+        }
+    } else {
+        Warn "AP3 GPS CSV writer script not found, skipping GPS CSV worker"
+    }
+}
+
+# --- CSV watch / replay worker ---
+if ($CsvWatch) {
+    if (Test-Path $csvWatchScript) {
+        New-Item -ItemType Directory -Force -Path $IncomingDir | Out-Null
+        Info "Starting CSV watch worker..."
+        $csvWatchArgs = @(
+            "-u",
+            $csvWatchScript,
+            "--watch-dir",
+            $IncomingDir,
+            "--python-exe",
+            $pythonExe,
+            "--replay-script",
+            (Join-Path $ToolsDir "replay_csv_to_simulator.py"),
+            "--scene",
+            $CsvWatchScene,
+            "--map-type",
+            $CsvMapType,
+            "--api-url",
+            "http://127.0.0.1:8888/api/usrp/measurement",
+            "--auto-simulate-last"
+        )
+        if ($CsvDevicesFile) {
+            $csvWatchArgs += @("--devices-file", $CsvDevicesFile)
+        }
+        $csvWatchJob = Start-Process -FilePath $pythonExe `
+            -ArgumentList $csvWatchArgs `
+            -WorkingDirectory $ScriptDir `
+            -RedirectStandardOutput $csvWatchLog `
+            -RedirectStandardError ($csvWatchLog + ".err") `
+            -NoNewWindow -PassThru
+        $jobs += $csvWatchJob
+        Info "   CSV watch PID: $($csvWatchJob.Id)  log: .logs\csv_watch.log"
+        Info "   CSV watch dir: $IncomingDir"
+    } else {
+        Warn "CSV watch script not found, skipping CSV watch"
+    }
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Frontend : http://localhost:5173"
@@ -261,6 +384,12 @@ if (-not $NoTunnel) {
 }
 if (-not $NoAP3) {
     Write-Host "  AP3 GPS  : bridge auto-start enabled"
+}
+if ($GpsCsv) {
+    Write-Host "  GPS CSV  : enabled (mission: $GpsMissionId)"
+}
+if ($CsvWatch) {
+    Write-Host "  CSV Watch: enabled ($IncomingDir)"
 }
 Write-Host "  Press Ctrl+C to stop all services"
 Write-Host "============================================" -ForegroundColor Cyan
@@ -291,6 +420,67 @@ try {
                     -LogPath $ap3BridgeLog
                 $jobs += $ap3BridgeJob
                 Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
+            }
+        }
+        if ($GpsCsv -and $gpsCsvJob) {
+            if ($gpsCsvJob.HasExited) {
+                Warn "AP3 GPS CSV writer exited, restarting..."
+                try {
+                    $jobs = @($jobs | Where-Object { $_.Id -ne $gpsCsvJob.Id })
+                } catch {
+                    $jobs = @($jobs)
+                }
+                Start-Sleep -Seconds 2
+                $gpsCsvJob = Start-Ap3GpsCsvWriter `
+                    -PythonExe $pythonExe `
+                    -WriterScript $gpsCsvScript `
+                    -WorkingDir $ScriptDir `
+                    -LogPath $gpsCsvLog `
+                    -MissionId $GpsMissionId `
+                    -IncomingDir $IncomingDir `
+                    -Altitude $GpsAltitude `
+                    -MavlinkUrl $GpsMavlinkUrl
+                $jobs += $gpsCsvJob
+                Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
+            }
+        }
+        if ($CsvWatch -and $csvWatchJob) {
+            if ($csvWatchJob.HasExited) {
+                Warn "CSV watch worker exited, restarting..."
+                try {
+                    $jobs = @($jobs | Where-Object { $_.Id -ne $csvWatchJob.Id })
+                } catch {
+                    $jobs = @($jobs)
+                }
+                Start-Sleep -Seconds 2
+                $csvWatchArgs = @(
+                    "-u",
+                    $csvWatchScript,
+                    "--watch-dir",
+                    $IncomingDir,
+                    "--python-exe",
+                    $pythonExe,
+                    "--replay-script",
+                    (Join-Path $ToolsDir "replay_csv_to_simulator.py"),
+                    "--scene",
+                    $CsvWatchScene,
+                    "--map-type",
+                    $CsvMapType,
+                    "--api-url",
+                    "http://127.0.0.1:8888/api/usrp/measurement",
+                    "--auto-simulate-last"
+                )
+                if ($CsvDevicesFile) {
+                    $csvWatchArgs += @("--devices-file", $CsvDevicesFile)
+                }
+                $csvWatchJob = Start-Process -FilePath $pythonExe `
+                    -ArgumentList $csvWatchArgs `
+                    -WorkingDirectory $ScriptDir `
+                    -RedirectStandardOutput $csvWatchLog `
+                    -RedirectStandardError ($csvWatchLog + ".err") `
+                    -NoNewWindow -PassThru
+                $jobs += $csvWatchJob
+                Info "   CSV watch PID: $($csvWatchJob.Id)  log: .logs\csv_watch.log"
             }
         }
     }

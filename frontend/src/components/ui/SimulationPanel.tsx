@@ -28,6 +28,7 @@ interface ISSUNetParams {
   mode: ISSUNetMode;
   sparseRatioPercent: number;
   cfar_enabled: boolean;
+  apply_building_mask: boolean;
   focusSamplingPoints: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
@@ -37,9 +38,11 @@ interface SimStatus {
   loading: boolean;
   imageUrl: string | null;
   error: string | null;
+  metrics?: Record<string, unknown> | null;
+  options?: Record<string, unknown> | null;
 }
 
-const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null };
+const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null, metrics: null, options: null };
 const GENERATED_SCENE_TABS: TabKey[] = ['sinr', 'cfr', 'doppler', 'channel', 'iss', 'tss', 'cfar', 'iss_unet'];
 const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
   constellationBatchSize: 1,
@@ -88,7 +91,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     mode: 'sim',
     sparseRatioPercent: 20,
     cfar_enabled: true,
-    focusSamplingPoints: true,
     gpsFile: null,
     noiseFile: null,
   });
@@ -121,7 +123,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       return;
     }
 
-    setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null } }));
+      setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null, metrics: null, options: null } }));
 
     try {
       let res;
@@ -163,7 +165,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               cfar: {
                 enabled: issUnetParams.cfar_enabled,
               },
-              focus_sampling_points: issUnetParams.focusSamplingPoints,
             }),
           });
         } else {
@@ -173,7 +174,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           form.append('sparse_ratio', String(issUnetParams.sparseRatioPercent / 100));
           form.append('seed', '41');
           form.append('cfar_enabled', String(issUnetParams.cfar_enabled));
-          form.append('focus_sampling_points', String(issUnetParams.focusSamplingPoints));
           if (issUnetParams.gpsFile) {
             form.append('gps_file', issUnetParams.gpsFile);
           }
@@ -252,14 +252,25 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           t: String(Date.now()),
         });
         url = `${API}${imagePath}?${cacheParams.toString()}`;
+        setStatus(prev => ({
+          ...prev,
+          [key]: {
+            loading: false,
+            imageUrl: url,
+            error: null,
+            metrics: json.metrics ?? null,
+            options: json.options ?? null,
+          },
+        }));
+        return;
       } else {
         const blob = await res.blob();
         url = URL.createObjectURL(blob);
       }
-      setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: url, error: null } }));
+      setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: url, error: null, metrics: null, options: null } }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg } }));
+      setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
   }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams]);
 
@@ -466,16 +477,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     checked={issUnetParams.cfar_enabled}
                     onChange={v => setIssUnetParams(p => ({ ...p, cfar_enabled: v }))}
                   />
-                  <div />
-                  <Hint>使用 OS-CFAR 演算法預測干擾源位置。</Hint>
-                  <Label>聚焦採樣點</Label>
-                  <ToggleSwitch
-                    checked={issUnetParams.focusSamplingPoints}
-                    disabled={issUnetParams.mode !== 'gps_n'}
-                    onChange={v => setIssUnetParams(p => ({ ...p, focusSamplingPoints: v }))}
-                  />
-                  <div />
-                  <Hint>僅 Noise with GPS 模式可用。聚焦 GPS 採樣點周遭的像素（若顯示異常請關閉）。</Hint>
                 </ParamGrid>
               </div>
             )}
@@ -641,17 +642,40 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             )}
 
             {cur.imageUrl && (
-              <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(0,255,255,.15)', boxShadow: '0 4px 20px rgba(0,0,0,.4)' }}>
-                <img
-                  src={cur.imageUrl}
-                  alt={tab}
-                  style={{ width: '100%', display: 'block', cursor: 'zoom-in' }}
-                  onClick={() => setPreview({
-                    url: cur.imageUrl!,
-                    title: tab === 'iss_unet' ? `ISS_UNET - ${ISS_UNET_MODE_LABELS[issUnetParams.mode]}` : tab.toUpperCase(),
-                  })}
-                  title="點擊查看完整圖片"
-                />
+              <div>
+                <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(0,255,255,.15)', boxShadow: '0 4px 20px rgba(0,0,0,.4)' }}>
+                  <img
+                    src={cur.imageUrl}
+                    alt={tab}
+                    style={{ width: '100%', display: 'block', cursor: 'zoom-in' }}
+                    onClick={() => setPreview({
+                      url: cur.imageUrl!,
+                      title: tab === 'iss_unet' ? `ISS_UNET - ${ISS_UNET_MODE_LABELS[issUnetParams.mode]}` : tab.toUpperCase(),
+                    })}
+                    title="點擊查看完整圖片"
+                  />
+                </div>
+                {tab === 'iss_unet' && cur.metrics && (
+                  <div style={{
+                    marginTop: 10,
+                    background: 'rgba(0,0,0,.22)',
+                    border: '1px solid rgba(255,255,255,.08)',
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                    gap: '6px 12px',
+                    color: 'rgba(255,255,255,.72)',
+                    fontSize: 12,
+                  }}>
+                    <div>Aligned Noise: {String(cur.metrics.aligned_noise ?? '-')}</div>
+                    <div>Skipped Noise: {String(cur.metrics.skipped_noise ?? '-')}</div>
+                    <div>Used Samples: {String(cur.metrics.used_samples ?? '-')}</div>
+                    <div>Sparse Samples: {String(cur.metrics.sparse_samples ?? '-')}</div>
+                    <div>Route Points: {String(cur.metrics.route_points ?? '-')}</div>
+                    <div>Mask: {cur.options?.apply_building_mask === false ? 'Off' : 'On'}</div>
+                  </div>
+                )}
               </div>
             )}
 

@@ -1,12 +1,11 @@
 import { useState } from 'react';
 
 const API = import.meta.env.VITE_API_URL || '';
-const DEFAULT_SERIAL = '58e9dd83';
 
 export function ControllerScreenPanel() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
-  const streamUrl = `${API}/api/controller-stream.mjpg?serial=${encodeURIComponent(DEFAULT_SERIAL)}`;
+  const streamUrl = `${API}/api/controller-stream.mjpg`;
 
   return (
     <div className="controller-screen-panel">

@@ -309,3 +309,248 @@ The bridge sends two messages per capture cycle:
 
 - a normal GPS update so the simulator can place the sensor in the scene
 - a `usrp-spectrum` event with `mean_power_dbfs`, `peak_power_dbfs`, frequency, rate, and sample count
+
+## GNU Radio auto-upload
+
+Use `tools/gnuradio_to_simulator.py` when your GNU Radio flowgraph finishes a capture and you want to push the result into the backend automatically.
+
+Direct CLI example:
+
+```powershell
+backend\.venv\Scripts\python.exe .\tools\gnuradio_to_simulator.py `
+  --scene NTPU `
+  --device-id usrp-b210-1 `
+  --device-name "USRP B210 Sensor" `
+  --lat 24.9438 `
+  --lon 121.3687 `
+  --alt 30 `
+  --center-freq-hz 2450000000 `
+  --sample-rate-hz 1000000 `
+  --sample-count 200000 `
+  --mean-power-dbfs -42.1 `
+  --peak-power-dbfs -18.3
+```
+
+If you also want the backend to generate a map immediately after upload:
+
+```powershell
+backend\.venv\Scripts\python.exe .\tools\gnuradio_to_simulator.py `
+  --scene NTPU `
+  --lat 24.9438 `
+  --lon 121.3687 `
+  --alt 30 `
+  --mean-power-dbfs -42.1 `
+  --peak-power-dbfs -18.3 `
+  --auto-simulate `
+  --map-type iss `
+  --devices-file .\tools\simulator_devices.example.json
+```
+
+The measurement API endpoint is:
+
+```text
+POST /api/usrp/measurement
+```
+
+It accepts either:
+
+- `lat/lon/alt` plus `scene`, and the backend converts to simulator coordinates
+- direct `x/y/z` if your GNU Radio side already knows simulator coordinates
+
+For GNU Radio Python blocks, you can import the helper in `tools/gnuradio_callback_example.py` and call `upload_measurement(...)` after a capture completes.
+
+If your flowgraph already writes a JSON payload, you can upload it directly:
+
+```powershell
+Get-Content .\measurement.json | backend\.venv\Scripts\python.exe .\tools\gnuradio_to_simulator.py --stdin-json
+```
+
+If your returned files are CSV like `backend/app/sample/gps.csv` and `backend/app/sample/noise.csv`, you can replay them into the simulator:
+
+```powershell
+backend\.venv\Scripts\python.exe .\tools\replay_csv_to_simulator.py `
+  --scene NTPU `
+  --gps-csv .\backend\app\sample\gps.csv `
+  --noise-csv .\backend\app\sample\noise.csv `
+  --replay-delay 0.2
+```
+
+To generate a map automatically after the last CSV point is uploaded:
+
+```powershell
+backend\.venv\Scripts\python.exe .\tools\replay_csv_to_simulator.py `
+  --scene NTPU `
+  --gps-csv .\backend\app\sample\gps.csv `
+  --noise-csv .\backend\app\sample\noise.csv `
+  --devices-file .\tools\simulator_devices.example.json `
+  --auto-simulate-last `
+  --map-type iss
+```
+
+## Network CSV upload from Raspberry Pi
+
+If the Raspberry Pi should send completed CSV bundles to the laptop over the network, start the laptop with CSV watch enabled:
+
+```powershell
+.\start.ps1 -NoTunnel -NoAP3 -CsvWatch `
+  -CsvDevicesFile .\tools\simulator_devices.example.json `
+  -CsvMapType iss
+```
+
+The laptop backend also exposes:
+
+```text
+POST /api/usrp/upload-csv-bundle
+```
+
+Use `tools/upload_csv_bundle.py` on the Raspberry Pi to send `gps.csv` and `noise.csv` directly to the laptop:
+
+```bash
+python tools/upload_csv_bundle.py \
+  --api-url http://<laptop-ip>:8888/api/usrp/upload-csv-bundle \
+  --scene NTPU \
+  --mission-id flight_001 \
+  --gps-csv /path/to/gps.csv \
+  --noise-csv /path/to/noise.csv \
+  --auto-simulate-last
+```
+
+The backend stores the uploaded bundle under `incoming/<mission-id>/`, writes `bundle.json`, and the CSV watch worker automatically replays it into `/api/usrp/measurement`.
+
+## Split GPS / Noise workflow
+
+If the laptop is connected to AP3 and should write `gps.csv`, while the Raspberry Pi only uploads `noise.csv`, use the split mission flow:
+
+1. Laptop starts CSV watch:
+
+```powershell
+.\start.ps1 -NoTunnel -NoAP3 -CsvWatch `
+  -CsvDevicesFile .\tools\simulator_devices.example.json `
+  -CsvMapType iss
+```
+
+2. Laptop writes AP3 GPS into `incoming/<mission-id>/gps.csv`:
+
+```powershell
+backend\.venv\Scripts\python.exe .\tools\ap3_to_gps_csv.py `
+  --mission-id flight_001
+```
+
+3. Raspberry Pi uploads only `noise.csv` with the same `mission-id`:
+
+```bash
+python upload_noise_csv.py \
+  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
+  --scene NTPU \
+  --mission-id flight_001 \
+  --noise-csv /path/to/noise.csv \
+  --auto-simulate-last
+```
+
+The watcher waits until both of these files exist:
+
+```text
+incoming/flight_001/gps.csv
+incoming/flight_001/noise.csv
+```
+
+Only then will it replay the mission automatically.
+
+### Raspberry Pi auto-watch and upload
+
+If the Raspberry Pi should start after boot, keep watching `noise.csv`, and upload automatically when the file stops changing, use `tools/watch_and_upload_noise.py`:
+
+```bash
+python watch_and_upload_noise.py \
+  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv \
+  --uploader-script /home/user/upload_noise_csv.py \
+  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
+  --scene NTPU \
+  --mission-id flight_001 \
+  --auto-simulate-last
+```
+
+Behavior:
+
+- it polls `noise.csv`
+- when the file changes, it waits until the file is stable for a few seconds
+- then it calls `upload_noise_csv.py`
+- if the same file is rewritten again for the next mission, it uploads again automatically
+
+To keep it running continuously on the Raspberry Pi right now:
+
+```bash
+python /home/user/watch_and_upload_noise.py \
+  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv \
+  --uploader-script /home/user/upload_noise_csv.py \
+  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
+  --scene NTPU \
+  --mission-id flight_001 \
+  --auto-simulate-last
+```
+
+To make it start automatically after boot, copy `tools/watch_and_upload_noise.service.example` to `/etc/systemd/system/watch-and-upload-noise.service`, update the laptop IP and mission id, then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable watch-and-upload-noise.service
+sudo systemctl start watch-and-upload-noise.service
+sudo systemctl status watch-and-upload-noise.service
+```
+
+### Raspberry Pi run capture and upload
+
+If your current GNU Radio / `noise.py` workflow only writes a complete `noise.csv` after the capture process exits, use `tools/run_capture_and_upload_noise.py` instead:
+
+```bash
+python run_capture_and_upload_noise.py \
+  --capture-cmd "python noise.py" \
+  --capture-workdir /home/user/digitaltwin-modulation/USRP_transmit/noise_detect \
+  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv \
+  --uploader-script /home/user/upload_noise_csv.py \
+  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
+  --scene NTPU \
+  --mission-id flight_001 \
+  --auto-simulate-last
+```
+
+Behavior:
+
+- it starts your capture command
+- waits until the command exits
+- waits for `noise.csv` to stop changing
+- uploads the finished CSV automatically
+
+## Raspberry Pi boot noise logging
+
+Your current `noise.py` publishes complex samples to GNU Radio ZMQ:
+
+- `tcp://127.0.0.1:49301`
+
+It does not write `noise.csv` by itself. To keep appending:
+
+```csv
+time_stamp,noise_floor_db
+```
+
+use `tools/zmq_to_noise_csv.py` on the Raspberry Pi:
+
+```bash
+python /home/user/zmq_to_noise_csv.py \
+  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv
+```
+
+If you want both `noise.py` and the CSV logger to start automatically after boot, use `tools/noise_stack.service.example` as a systemd service template.
+
+If the Raspberry Pi should boot and start all three GNU Radio programs together:
+
+- `chan_est_rx.py`
+- `chan_est_tx.py`
+- `noise.py`
+
+use these files:
+
+- `tools/pi_radio_stack.sh`
+- `tools/pi_radio_stack.service.example`
+
+The stack script starts RX, then TX, then jammer, and can also start the `noise.csv` logger automatically.

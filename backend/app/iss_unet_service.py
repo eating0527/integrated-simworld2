@@ -484,7 +484,7 @@ def reconstruct_iss_unet(
     mode: str = "sim",
     gps_csv: Path | str | bytes | None = None,
     noise_csv: Path | str | bytes | None = None,
-    focus_sampling_points: bool = True,
+    apply_building_mask: bool = True,
 ) -> dict[str, Any]:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
@@ -522,6 +522,7 @@ def reconstruct_iss_unet(
             mode=mode,
             gps_points=gps_points,
             noise_points=noise_points,
+            apply_building_mask=apply_building_mask,
         )
         inputs = route_sample.inputs
         sparse_mask = route_sample.sparse_mask
@@ -596,6 +597,9 @@ def reconstruct_iss_unet(
         "mode_label": mode_label,
         "sparse_ratio": sparse_ratio,
         "metrics": metrics,
+        "options": {
+            "apply_building_mask": apply_building_mask,
+        },
         "images": {
             "reconstructed": result_image_url(reconstructed_path.name),
             "comparison": result_image_url(comparison_path.name),
