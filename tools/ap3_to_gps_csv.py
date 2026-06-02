@@ -65,13 +65,12 @@ def ensure_csv(csv_path: Path) -> None:
 
 def main() -> int:
     args = parse_args()
-    mav_url = resolve_mavlink_url(args)
     bundle_dir = Path(args.incoming_dir) / args.mission_id
     csv_path = bundle_dir / "gps.csv"
     ensure_csv(csv_path)
+    mav_url = resolve_mavlink_url(args)
     output_tz = timezone(timedelta(hours=args.utc_offset_hours))
 
-    mav = mavutil.mavlink_connection(mav_url, source_system=255)
     print(f"writing GPS CSV to {csv_path}")
     print(f"reading AP3 MAVLink from {mav_url}")
 
@@ -79,22 +78,32 @@ def main() -> int:
     with csv_path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         while True:
-            msg = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=2)
-            if msg is None:
-                continue
-            lat = msg.lat / 1e7
-            lon = msg.lon / 1e7
-            amsl_alt = msg.alt / 1000.0
-            rel_alt = msg.relative_alt / 1000.0
-            alt = rel_alt if args.altitude == "relative" else amsl_alt
-            timestamp = datetime.now(output_tz).isoformat(timespec="milliseconds")
-            writer.writerow([timestamp, lat, lon, alt])
-            written += 1
-            if written % max(1, args.flush_every) == 0:
-                handle.flush()
-            print(f"wrote #{written}: lat={lat:.7f} lon={lon:.7f} alt={alt:.2f}m")
-            if args.max_messages and written >= args.max_messages:
-                break
+            mav = mavutil.mavlink_connection(mav_url, source_system=255)
+            try:
+                while True:
+                    try:
+                        msg = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=2)
+                    except TypeError as exc:
+                        print(f"mavlink parse error, reconnecting: {exc}")
+                        break
+                    if msg is None:
+                        continue
+                    lat = msg.lat / 1e7
+                    lon = msg.lon / 1e7
+                    amsl_alt = msg.alt / 1000.0
+                    rel_alt = msg.relative_alt / 1000.0
+                    alt = rel_alt if args.altitude == "relative" else amsl_alt
+                    timestamp = datetime.now(output_tz).replace(tzinfo=None).isoformat(timespec="milliseconds")
+                    writer.writerow([timestamp, lat, lon, alt])
+                    written += 1
+                    if written % max(1, args.flush_every) == 0:
+                        handle.flush()
+                    print(f"wrote #{written}: lat={lat:.7f} lon={lon:.7f} alt={alt:.2f}m")
+                    if args.max_messages and written >= args.max_messages:
+                        return 0
+            finally:
+                mav.close()
+            time.sleep(1)
     return 0
 
 

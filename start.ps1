@@ -2,11 +2,13 @@
 # Usage: .\start.ps1
 #        .\start.ps1 -NoTunnel
 #        .\start.ps1 -NoAP3
+#        .\start.ps1 -NoGpsCsv
 #        .\start.ps1 -Reload
 
 param(
     [switch]$NoTunnel,
     [switch]$NoAP3,
+    [switch]$NoGpsCsv,
     [switch]$Reload,
     [switch]$CsvWatch,
     [switch]$GpsCsv,
@@ -16,7 +18,21 @@ param(
     [string]$CsvMapType = "iss",
     [string]$GpsMissionId = "",
     [string]$GpsAltitude = "relative",
-    [string]$GpsMavlinkUrl = ""
+    [string]$GpsMavlinkUrl = "",
+    [switch]$UsrpAutoStart,
+    [string]$UsrpPiHost = "",
+    [string]$UsrpPiUser = "user",
+    [int]$UsrpPiPort = 22,
+    [string]$UsrpSshKey = "",
+    [string]$UsrpUploadApiUrl = "",
+    [string]$UsrpScene = "",
+    [string]$UsrpRemoteWorkDir = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect",
+    [string]$UsrpRemoteStackScript = "/home/user/pi_radio_stack.sh",
+    [string]$UsrpRemoteNoiseCsv = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv",
+    [string]$UsrpRemoteUploaderScript = "/home/user/watch_and_upload_noise.py",
+    [string]$UsrpRemoteUploadHelper = "/home/user/upload_noise_csv.py",
+    [string]$UsrpRemotePython = "/usr/bin/python3",
+    [string]$UsrpDevicesFile = ""
 )
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -26,6 +42,8 @@ $LogDir      = Join-Path $ScriptDir ".logs"
 $EnvFile     = Join-Path $ScriptDir ".env"
 $ToolsDir    = Join-Path $ScriptDir "tools"
 $IncomingDir = if ($CsvWatchPath) { $CsvWatchPath } else { Join-Path $ScriptDir "incoming" }
+$MissionStateDir = Join-Path $ScriptDir ".logs"
+$CurrentMissionFile = Join-Path $MissionStateDir "current_mission_id.txt"
 
 # Reload PATH so winget-installed tools are visible
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
@@ -55,6 +73,101 @@ if (-not $env:BLENDER_PATH) {
 function Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
 function Err   { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
+
+function Initialize-GpsCsvTarget {
+    param(
+        [string]$IncomingRoot,
+        [string]$MissionId
+    )
+
+    $missionDir = Join-Path $IncomingRoot $MissionId
+    $gpsCsvPath = Join-Path $missionDir "gps.csv"
+    New-Item -ItemType Directory -Force -Path $missionDir | Out-Null
+    if (-not (Test-Path $gpsCsvPath)) {
+        Set-Content -Path $gpsCsvPath -Value "time_stamp,lat,lon,alt" -Encoding ASCII
+    }
+    return $gpsCsvPath
+}
+
+function Resolve-LaptopIPv4 {
+    $candidates = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -notlike "127.*" -and
+            $_.IPAddress -notlike "169.254.*" -and
+            $_.PrefixOrigin -ne "WellKnown"
+        } |
+        Sort-Object -Property InterfaceMetric
+    return ($candidates | Select-Object -First 1 -ExpandProperty IPAddress)
+}
+
+function ConvertTo-BashDoubleQuoted {
+    param([string]$Value)
+    $escaped = $Value.Replace('\', '\\').Replace('"', '\"').Replace('$', '\$').Replace('`', '\`')
+    return [string][char]34 + $escaped + [char]34
+}
+
+function Start-UsrpRemoteMission {
+    param(
+        [string]$SshExe,
+        [string]$Host,
+        [string]$User,
+        [int]$Port,
+        [string]$SshKeyPath,
+        [string]$MissionId,
+        [string]$Scene,
+        [string]$MapType,
+        [string]$ApiUrl,
+        [string]$RemoteWorkDir,
+        [string]$RemoteStackScript,
+        [string]$RemoteNoiseCsv,
+        [string]$RemoteUploaderScript,
+        [string]$RemoteUploadHelper,
+        [string]$RemotePython,
+        [string]$DevicesFile,
+        [string]$LogPath
+    )
+
+    $watcherArgs = @(
+        "--noise-csv", $RemoteNoiseCsv,
+        "--uploader-script", $RemoteUploadHelper,
+        "--api-url", $ApiUrl,
+        "--scene", $Scene,
+        "--mission-id", $MissionId,
+        "--map-type", $MapType,
+        "--auto-simulate-last"
+    )
+    if ($DevicesFile) {
+        $watcherArgs += @("--devices-file", $DevicesFile)
+    }
+
+    $watcherArgString = ($watcherArgs | ForEach-Object { ConvertTo-BashDoubleQuoted $_ }) -join " "
+    $remoteEnv = @(
+        "WORKDIR=" + (ConvertTo-BashDoubleQuoted $RemoteWorkDir),
+        "NOISE_CSV=" + (ConvertTo-BashDoubleQuoted $RemoteNoiseCsv),
+        "START_NOISE_LOGGER=1",
+        "START_NOISE_UPLOADER=1",
+        "NOISE_UPLOADER_SCRIPT=" + (ConvertTo-BashDoubleQuoted $RemoteUploaderScript),
+        "NOISE_UPLOADER_ARGS=" + (ConvertTo-BashDoubleQuoted $watcherArgString),
+        "PYTHON_BIN=" + (ConvertTo-BashDoubleQuoted $RemotePython)
+    ) -join " "
+
+    $remoteCommand = "nohup env $remoteEnv /bin/bash " + (ConvertTo-BashDoubleQuoted $RemoteStackScript) + " >/tmp/pi_radio_stack_${MissionId}.log 2>&1 &"
+    $sshArgs = @("-p", "$Port")
+    if ($SshKeyPath) {
+        $sshArgs += @("-i", $SshKeyPath)
+    }
+    $sshArgs += @(
+        "-o", "StrictHostKeyChecking=accept-new",
+        "$User@$Host",
+        $remoteCommand
+    )
+
+    return Start-Process -FilePath $SshExe `
+        -ArgumentList $sshArgs `
+        -RedirectStandardOutput $LogPath `
+        -RedirectStandardError ($LogPath + ".err") `
+        -NoNewWindow -PassThru
+}
 
 function Stop-PortListeners {
     param(
@@ -132,10 +245,18 @@ $csvWatchScript = Join-Path $ToolsDir "watch_csv_incoming.py"
 $csvWatchLog = Join-Path $LogDir "csv_watch.log"
 $gpsCsvScript = Join-Path $ToolsDir "ap3_to_gps_csv.py"
 $gpsCsvLog = Join-Path $LogDir "ap3_gps_csv.log"
+$usrpRemoteJob = $null
+$usrpRemoteLog = Join-Path $LogDir "usrp_remote_start.log"
+$enableGpsCsv = $GpsCsv -or (-not $NoAP3 -and -not $NoGpsCsv)
 
 if (-not $GpsMissionId) {
     $GpsMissionId = Get-Date -Format "yyyyMMdd_HHmmss"
 }
+
+New-Item -ItemType Directory -Force -Path $MissionStateDir | Out-Null
+$GpsMissionId | Set-Content -Path $CurrentMissionFile -Encoding ASCII
+Info "Current mission id: $GpsMissionId"
+Info "   Saved to: .logs\current_mission_id.txt"
 
 # Ensure required ports are free before startup.
 Stop-PortListeners -Ports @(5173, 8888)
@@ -311,9 +432,9 @@ if (-not $NoAP3) {
 }
 
 # --- AP3 GPS CSV writer ---
-if ($GpsCsv) {
+if ($enableGpsCsv) {
     if (Test-Path $gpsCsvScript) {
-        New-Item -ItemType Directory -Force -Path (Join-Path $IncomingDir $GpsMissionId) | Out-Null
+        $gpsCsvTarget = Initialize-GpsCsvTarget -IncomingRoot $IncomingDir -MissionId $GpsMissionId
         Info "Starting AP3 GPS CSV writer..."
         $gpsCsvJob = Start-Ap3GpsCsvWriter `
             -PythonExe $pythonExe `
@@ -326,7 +447,7 @@ if ($GpsCsv) {
             -MavlinkUrl $GpsMavlinkUrl
         $jobs += $gpsCsvJob
         Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
-        Info "   GPS CSV target: $(Join-Path (Join-Path $IncomingDir $GpsMissionId) 'gps.csv')"
+        Info "   GPS CSV target: $gpsCsvTarget"
         if ($gpsCsvJob.HasExited) {
             Warn "AP3 GPS CSV writer exited immediately; it will be restarted by the monitor loop."
         } else {
@@ -376,6 +497,56 @@ if ($CsvWatch) {
     }
 }
 
+# --- Remote USRP auto-start / upload mission ---
+if ($UsrpAutoStart) {
+    if (-not $UsrpPiHost) {
+        Warn "UsrpAutoStart requested but UsrpPiHost is empty, skipping remote USRP startup"
+    } else {
+        $sshExe = (Get-Command ssh -ErrorAction SilentlyContinue).Source
+        if (-not $sshExe) {
+            Warn "OpenSSH client not found on PATH, skipping remote USRP startup"
+        } else {
+            $resolvedApiUrl = $UsrpUploadApiUrl
+            if (-not $resolvedApiUrl) {
+                $laptopIp = Resolve-LaptopIPv4
+                if ($laptopIp) {
+                    $resolvedApiUrl = "http://${laptopIp}:8888/api/usrp/upload-noise-csv"
+                }
+            }
+
+            $resolvedScene = if ($UsrpScene) { $UsrpScene } else { $CsvWatchScene }
+            if (-not $resolvedApiUrl) {
+                Warn "Could not resolve laptop upload API URL for remote USRP startup, skipping"
+            } else {
+                Info "Starting remote USRP mission over SSH..."
+                Info "   USRP host : $UsrpPiUser@$UsrpPiHost`:$UsrpPiPort"
+                Info "   Mission   : $GpsMissionId"
+                Info "   Upload API: $resolvedApiUrl"
+                $usrpRemoteJob = Start-UsrpRemoteMission `
+                    -SshExe $sshExe `
+                    -Host $UsrpPiHost `
+                    -User $UsrpPiUser `
+                    -Port $UsrpPiPort `
+                    -SshKeyPath $UsrpSshKey `
+                    -MissionId $GpsMissionId `
+                    -Scene $resolvedScene `
+                    -MapType $CsvMapType `
+                    -ApiUrl $resolvedApiUrl `
+                    -RemoteWorkDir $UsrpRemoteWorkDir `
+                    -RemoteStackScript $UsrpRemoteStackScript `
+                    -RemoteNoiseCsv $UsrpRemoteNoiseCsv `
+                    -RemoteUploaderScript $UsrpRemoteUploaderScript `
+                    -RemoteUploadHelper $UsrpRemoteUploadHelper `
+                    -RemotePython $UsrpRemotePython `
+                    -DevicesFile $UsrpDevicesFile `
+                    -LogPath $usrpRemoteLog
+                $jobs += $usrpRemoteJob
+                Info "   Remote start PID: $($usrpRemoteJob.Id)  log: .logs\usrp_remote_start.log"
+            }
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Frontend : http://localhost:5173"
@@ -385,12 +556,16 @@ if (-not $NoTunnel) {
 if (-not $NoAP3) {
     Write-Host "  AP3 GPS  : bridge auto-start enabled"
 }
-if ($GpsCsv) {
+if ($enableGpsCsv) {
     Write-Host "  GPS CSV  : enabled (mission: $GpsMissionId)"
 }
 if ($CsvWatch) {
     Write-Host "  CSV Watch: enabled ($IncomingDir)"
 }
+if ($UsrpAutoStart) {
+    Write-Host "  USRP SSH : requested"
+}
+Write-Host "  Mission  : $GpsMissionId"
 Write-Host "  Press Ctrl+C to stop all services"
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
@@ -422,7 +597,7 @@ try {
                 Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
             }
         }
-        if ($GpsCsv -and $gpsCsvJob) {
+        if ($enableGpsCsv -and $gpsCsvJob) {
             if ($gpsCsvJob.HasExited) {
                 Warn "AP3 GPS CSV writer exited, restarting..."
                 try {
@@ -431,6 +606,7 @@ try {
                     $jobs = @($jobs)
                 }
                 Start-Sleep -Seconds 2
+                Initialize-GpsCsvTarget -IncomingRoot $IncomingDir -MissionId $GpsMissionId | Out-Null
                 $gpsCsvJob = Start-Ap3GpsCsvWriter `
                     -PythonExe $pythonExe `
                     -WriterScript $gpsCsvScript `
