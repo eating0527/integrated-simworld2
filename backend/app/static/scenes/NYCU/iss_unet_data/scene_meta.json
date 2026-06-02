@@ -1,0 +1,40 @@
+{
+  "scene": "NYCU",
+  "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\NYCU.xml",
+  "grid_res": 128,
+  "area_m": 512.0,
+  "pixel_size_m": 4.0,
+  "frequency_hz": 3500000000.0,
+  "tx_list": [
+    {
+      "role": "desired",
+      "position_px": [
+        64,
+        64
+      ],
+      "ptx_dbm": 40.0,
+      "height_m": 40.0
+    },
+    {
+      "role": "jammer",
+      "position_px": [
+        30,
+        30
+      ],
+      "ptx_dbm": 40.0,
+      "height_m": 40.0
+    }
+  ],
+  "rx_height": 1.5,
+  "sionna": {
+    "max_depth": 10,
+    "samples_per_tx": 1000000
+  },
+  "outputs": {
+    "building_map": "building_height_128.npy",
+    "dss": "sionna_dss.npy",
+    "iss": "sionna_iss.npy",
+    "tss": "sionna_tss.npy"
+  },
+  "prepared_at": "2026-06-02T10:21:38.355240"
+}
