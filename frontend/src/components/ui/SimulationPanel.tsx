@@ -1,4 +1,4 @@
-﻿import { useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useDeviceStore } from '../../store/useDeviceStore';
 import { useEffect } from 'react';
 
@@ -34,15 +34,30 @@ interface ISSUNetParams {
   noiseFile: File | null;
 }
 
+type ISSUNetViewKey = 'reconstructed' | 'comparison' | 'cfar';
+
+interface ISSUNetImages {
+  reconstructed: string | null;
+  comparison: string | null;
+  cfar: string | null;
+}
+
+const ISS_UNET_VIEW_LABELS: Record<ISSUNetViewKey, string> = {
+  reconstructed: 'Reconstructed',
+  comparison: '干擾地圖',
+  cfar: 'CFAR',
+};
+
 interface SimStatus {
   loading: boolean;
   imageUrl: string | null;
   error: string | null;
   metrics?: Record<string, unknown> | null;
   options?: Record<string, unknown> | null;
+  issUnetImages?: ISSUNetImages | null;
 }
 
-const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null, metrics: null, options: null };
+const EMPTY: SimStatus = { loading: false, imageUrl: null, error: null, metrics: null, options: null, issUnetImages: null };
 const GENERATED_SCENE_TABS: TabKey[] = ['sinr', 'cfr', 'doppler', 'channel', 'iss', 'tss', 'cfar', 'iss_unet'];
 const DEFAULT_CFR_ADVANCED: CFRAdvancedParams = {
   constellationBatchSize: 1,
@@ -66,6 +81,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
+  const [issUnetActiveView, setIssUnetActiveView] = useState<ISSUNetViewKey>('comparison');
   const [overlayScene, setOverlayScene] = useState(false);
   const [cfrModulation, setCfrModulation] = useState<CFRModulation>('qpsk');
   const [cfrAdvancedOpen, setCfrAdvancedOpen] = useState(false);
@@ -248,7 +264,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       let url: string;
       if (key === 'iss_unet') {
         const json = await res.json();
-        const imagePath = json.images?.comparison || json.images?.reconstructed;
         const sparseRatioPercent = typeof json.sparse_ratio === 'number'
           ? json.sparse_ratio * 100
           : issUnetParams.sparseRatioPercent;
@@ -257,7 +272,15 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           mode: json.mode || issUnetParams.mode,
           t: String(Date.now()),
         });
-        url = `${API}${imagePath}?${cacheParams.toString()}`;
+        const cacheSuffix = cacheParams.toString();
+        const buildUrl = (path: string | null) =>
+          path ? `${API}${path}?${cacheSuffix}` : null;
+        const unetImages: ISSUNetImages = {
+          reconstructed: buildUrl(json.images?.reconstructed ?? null),
+          comparison: buildUrl(json.images?.comparison ?? null),
+          cfar: buildUrl(json.images?.cfar ?? null),
+        };
+        url = unetImages.comparison || unetImages.reconstructed || '';
         setStatus(prev => ({
           ...prev,
           [key]: {
@@ -266,6 +289,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             error: null,
             metrics: json.metrics ?? null,
             options: json.options ?? null,
+            issUnetImages: unetImages,
           },
         }));
         return;
@@ -664,7 +688,18 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               }}>⚠ {cur.error}</div>
             )}
 
-            {cur.imageUrl && (
+            {cur.imageUrl && tab === 'iss_unet' && cur.issUnetImages ? (
+              <ISSUNetResultView
+                images={cur.issUnetImages}
+                cfarEnabled={issUnetParams.cfar_enabled}
+                mode={issUnetParams.mode}
+                metrics={cur.metrics}
+                options={cur.options}
+                activeView={issUnetActiveView}
+                onViewChange={setIssUnetActiveView}
+                onPreview={(url, title) => setPreview({ url, title })}
+              />
+            ) : cur.imageUrl ? (
               <div>
                 <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(0,255,255,.15)', boxShadow: '0 4px 20px rgba(0,0,0,.4)' }}>
                   <img
@@ -678,29 +713,8 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     title="點擊查看完整圖片"
                   />
                 </div>
-                {tab === 'iss_unet' && cur.metrics && (
-                  <div style={{
-                    marginTop: 10,
-                    background: 'rgba(0,0,0,.22)',
-                    border: '1px solid rgba(255,255,255,.08)',
-                    borderRadius: 10,
-                    padding: '10px 12px',
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                    gap: '6px 12px',
-                    color: 'rgba(255,255,255,.72)',
-                    fontSize: 12,
-                  }}>
-                    <div>Aligned Noise: {String(cur.metrics.aligned_noise ?? '-')}</div>
-                    <div>Skipped Noise: {String(cur.metrics.skipped_noise ?? '-')}</div>
-                    <div>Used Samples: {String(cur.metrics.used_samples ?? '-')}</div>
-                    <div>Sparse Samples: {String(cur.metrics.sparse_samples ?? '-')}</div>
-                    <div>Route Points: {String(cur.metrics.route_points ?? '-')}</div>
-                    <div>Mask: {cur.options?.apply_building_mask === false ? 'Off' : 'On'}</div>
-                  </div>
-                )}
               </div>
-            )}
+            ) : null}
 
             {!cur.loading && !cur.imageUrl && !cur.error && (
               <p style={{ textAlign: 'center', color: 'rgba(255,255,255,.25)', fontSize: 12, marginTop: 16 }}>
@@ -733,6 +747,125 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
         </div>
       )}
     </>
+  );
+}
+
+function ISSUNetResultView({
+  images,
+  cfarEnabled,
+  mode,
+  metrics,
+  options,
+  activeView,
+  onViewChange,
+  onPreview,
+}: {
+  images: ISSUNetImages;
+  cfarEnabled: boolean;
+  mode: ISSUNetMode;
+  metrics?: Record<string, unknown> | null;
+  options?: Record<string, unknown> | null;
+  activeView: ISSUNetViewKey;
+  onViewChange: (v: ISSUNetViewKey) => void;
+  onPreview: (url: string, title: string) => void;
+}) {
+  const cfarAvailable = cfarEnabled && images.cfar !== null;
+  const url = images[activeView];
+
+  // 如果 CFAR 沒開，但目前 activeView 是 cfar，自動切回 comparison
+  useEffect(() => {
+    if (activeView === 'cfar' && !cfarAvailable) {
+      onViewChange('comparison');
+    }
+  }, [activeView, cfarAvailable, onViewChange]);
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+        <button
+          onClick={() => onViewChange('comparison')}
+          style={{
+            padding: '6px 0',
+            background: activeView === 'comparison' ? 'rgba(0,255,255,.18)' : 'rgba(0,0,0,.4)',
+            border: activeView === 'comparison' ? '1px solid rgba(0,255,255,.6)' : '1px solid rgba(255,255,255,.1)',
+            borderRadius: 6,
+            color: activeView === 'comparison' ? '#0ff' : 'rgba(255,255,255,.6)',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'all .2s',
+          }}
+        >
+          {ISS_UNET_VIEW_LABELS['comparison']}
+        </button>
+        <button
+          onClick={() => { if (cfarAvailable) onViewChange('cfar') }}
+          disabled={!cfarAvailable}
+          style={{
+            padding: '6px 0',
+            background: activeView === 'cfar' ? 'rgba(0,255,255,.18)' : 'rgba(0,0,0,.4)',
+            border: activeView === 'cfar' ? '1px solid rgba(0,255,255,.6)' : '1px solid rgba(255,255,255,.1)',
+            borderRadius: 6,
+            color: activeView === 'cfar' ? '#0ff' : (cfarAvailable ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.2)'),
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: cfarAvailable ? 'pointer' : 'not-allowed',
+            transition: 'all .2s',
+          }}
+          title={!cfarAvailable ? '請先啟用 CFAR' : ''}
+        >
+          {ISS_UNET_VIEW_LABELS['cfar']}{!cfarAvailable && ' (未啟用)'}
+        </button>
+      </div>
+
+      <div style={{
+        borderRadius: 6,
+        overflow: 'hidden',
+        border: '1px solid rgba(0,255,255,.12)',
+        boxShadow: '0 2px 12px rgba(0,0,0,.35)',
+        background: 'rgba(0,0,0,.3)',
+        minHeight: 120,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 8,
+      }}>
+        {url ? (
+          <img
+            src={url}
+            alt={ISS_UNET_VIEW_LABELS[activeView]}
+            style={{ width: '100%', display: 'block', cursor: 'zoom-in' }}
+            onClick={() => onPreview(url, `ISS_UNET - ${ISS_UNET_VIEW_LABELS[activeView]} (${ISS_UNET_MODE_LABELS[mode]})`)}
+            title="點擊查看完整圖片"
+          />
+        ) : (
+          <span style={{ color: 'rgba(255,255,255,.3)', fontSize: 11, padding: 16, textAlign: 'center' }}>
+            {activeView === 'cfar' && !cfarAvailable ? 'CFAR 未啟用' : '無圖片'}
+          </span>
+        )}
+      </div>
+
+      {metrics && (
+        <div style={{
+          background: 'rgba(0,0,0,.22)',
+          border: '1px solid rgba(255,255,255,.08)',
+          borderRadius: 10,
+          padding: '10px 12px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: '6px 12px',
+          color: 'rgba(255,255,255,.72)',
+          fontSize: 12,
+        }}>
+          <div>Aligned Noise: {String(metrics.aligned_noise ?? '-')}</div>
+          <div>Skipped Noise: {String(metrics.skipped_noise ?? '-')}</div>
+          <div>Used Samples: {String(metrics.used_samples ?? '-')}</div>
+          <div>Sparse Samples: {String(metrics.sparse_samples ?? '-')}</div>
+          <div>Route Points: {String(metrics.route_points ?? '-')}</div>
+          <div>Mask: {options?.apply_building_mask === false ? 'Off' : 'On'}</div>
+        </div>
+      )}
+    </div>
   );
 }
 
