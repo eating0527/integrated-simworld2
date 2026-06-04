@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
-import { useDeviceStore } from '../../store/useDeviceStore';
 import { useEffect } from 'react';
+import { getCurrentDevicePayload } from '../../utils/devicePayload';
+import { buildIssUnetSimRequestBody, buildIssUnetUploadFormData } from '../../utils/issUnetRequest';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -113,8 +114,6 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     noiseFile: null,
   });
 
-  const devices = useDeviceStore(state => state.devices);
-
   useEffect(() => {
     if (generatedScene && !GENERATED_SCENE_TABS.includes(tab)) {
       setTab('iss');
@@ -146,14 +145,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     try {
       let res;
       const requestSceneId = sceneId ?? 'NTPU';
-      const devicePayload = devices.map(d => ({
-        name: d.name,
-        role: d.role,
-        x: d.x,
-        y: d.y,
-        z: d.z,
-        power_dbm: d.powerDbm ?? null,
-      }));
+      const devicePayload = getCurrentDevicePayload();
 
       if (key === 'cfr') {
         res = await fetch(`${API}/api/sionna/cfr-plot`, {
@@ -177,31 +169,27 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           res = await fetch(`${API}/api/iss-unet/reconstruct`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            body: JSON.stringify(buildIssUnetSimRequestBody({
               scene: requestSceneId,
-              sparse_ratio: issUnetParams.sparseRatioPercent / 100,
-              cfar: {
-                enabled: issUnetParams.cfar_enabled,
-              },
-              apply_building_mask: issUnetParams.apply_building_mask,
-              focus_sampling_points: issUnetParams.focusSamplingPoints,
-            }),
+              sparseRatioPercent: issUnetParams.sparseRatioPercent,
+              cfarEnabled: issUnetParams.cfar_enabled,
+              applyBuildingMask: issUnetParams.apply_building_mask,
+              focusSamplingPoints: issUnetParams.focusSamplingPoints,
+              devices: devicePayload,
+            })),
           });
         } else {
-          const form = new FormData();
-          form.append('scene', requestSceneId);
-          form.append('mode', issUnetParams.mode);
-          form.append('sparse_ratio', String(issUnetParams.sparseRatioPercent / 100));
-          form.append('seed', '41');
-          form.append('cfar_enabled', String(issUnetParams.cfar_enabled));
-          form.append('apply_building_mask', String(issUnetParams.apply_building_mask));
-          form.append('focus_sampling_points', String(issUnetParams.focusSamplingPoints));
-          if (issUnetParams.gpsFile) {
-            form.append('gps_file', issUnetParams.gpsFile);
-          }
-          if (issUnetParams.mode === 'gps_n' && issUnetParams.noiseFile) {
-            form.append('noise_file', issUnetParams.noiseFile);
-          }
+          const form = buildIssUnetUploadFormData({
+            scene: requestSceneId,
+            mode: issUnetParams.mode,
+            sparseRatioPercent: issUnetParams.sparseRatioPercent,
+            cfarEnabled: issUnetParams.cfar_enabled,
+            applyBuildingMask: issUnetParams.apply_building_mask,
+            focusSamplingPoints: issUnetParams.focusSamplingPoints,
+            gpsFile: issUnetParams.gpsFile,
+            noiseFile: issUnetParams.noiseFile,
+            devices: devicePayload,
+          });
           res = await fetch(`${API}/api/iss-unet/reconstruct/upload`, {
             method: 'POST',
             body: form,
@@ -302,7 +290,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
-  }, [sinrParams, sceneId, devices, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams]);
+  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams]);
 
   const cur = status[tab];
 

@@ -101,6 +101,29 @@ class ISSUNetServiceTests(unittest.TestCase):
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(set(payload["missing_files"]), REQUIRED_FILES)
 
+    def test_upload_endpoint_returns_409_for_missing_dataset(self):
+        from app.iss_unet_service import OUTPUT_DIR
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.OUTPUT_DIR", OUTPUT_DIR):
+                response = asyncio.run(
+                    main.iss_unet_reconstruct_upload_post(
+                        scene="NYCU",
+                        mode="gps",
+                        sparse_ratio=0.2,
+                        seed=41,
+                        cfar_enabled=True,
+                        apply_building_mask=True,
+                        focus_sampling_points=True,
+                        gps_file=None,
+                        noise_file=None,
+                    )
+                )
+
+        self.assertEqual(response.status_code, 409)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(set(payload["missing_files"]), REQUIRED_FILES)
+
     def test_result_image_urls_use_api_route(self):
         from app.iss_unet_service import result_image_url
 
@@ -194,12 +217,13 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(stats["confidence_mean_outdoor"], 0.0)
 
     def test_reconstruct_without_model_returns_clipped_sionna_map(self):
-        from app.iss_unet_service import _reconstruct_without_model
+        from app.iss_unet_service import ISS_MAX_DBM, _reconstruct_without_model
 
         arrays = {"iss": np.array([[-200.0, -60.0], [-20.0, -35.0]], dtype=np.float32)}
 
         result = _reconstruct_without_model(arrays, "sim")
-        expected = np.array([[-140.0, -60.0], [-35.0, -35.0]], dtype=np.float32)
+        expected = np.array([[-140.0, -60.0], [-20.0, -35.0]], dtype=np.float32)
+        expected[expected > ISS_MAX_DBM] = ISS_MAX_DBM
 
         np.testing.assert_allclose(result, expected)
 
@@ -435,6 +459,61 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(req.focus_sampling_points, False)
 
+    def test_reconstruct_request_accepts_devices(self):
+        req = main.ISSUNetReconstructRequest(
+            scene="NTPU",
+            devices=[
+                {
+                    "name": "jam-0",
+                    "role": "jammer",
+                    "x": 12.0,
+                    "y": 34.0,
+                    "z": 56.0,
+                    "power_dbm": 77.0,
+                }
+            ],
+        )
+
+        self.assertEqual(len(req.devices), 1)
+        self.assertEqual(req.devices[0].role, "jammer")
+        self.assertEqual(req.devices[0].x, 12.0)
+
+    def test_reconstruct_endpoint_forwards_devices_for_sim(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+        captured = {}
+
+        def fake_reconstruct_iss_unet(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "sim",
+                "mode_label": "Sim",
+                "sparse_ratio": 0.2,
+                "metrics": {},
+                "images": {},
+                "files": {},
+                "cfar": {"detections": 0, "clusters": []},
+            }
+
+        req = main.ISSUNetReconstructRequest(
+            scene="NTPU",
+            devices=[
+                main.DeviceIn(name="jam-0", role="jammer", x=11.0, y=22.0, z=33.0, power_dbm=44.0),
+            ],
+        )
+
+        with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+            with patch("app.iss_unet_service.reconstruct_iss_unet", side_effect=fake_reconstruct_iss_unet):
+                response = asyncio.run(main.iss_unet_reconstruct_post(req))
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(len(captured["devices"]), 1)
+        self.assertEqual(captured["devices"][0].role, "jammer")
+        self.assertEqual(captured["devices"][0].x, 11.0)
+
     def test_upload_endpoint_forwards_focus_sampling_points_toggle(self):
         self._write_ntpu_dataset()
         from app.iss_unet_service import resolve_scene_dataset
@@ -469,6 +548,56 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(response["success"], True)
         self.assertEqual(captured["focus_sampling_points"], False)
+
+    def test_upload_endpoint_forwards_devices_for_gps_modes(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+        captured = {}
+
+        def fake_reconstruct_iss_unet(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "gps",
+                "mode_label": "GPS",
+                "sparse_ratio": 0.2,
+                "metrics": {},
+                "images": {},
+                "files": {},
+                "cfar": {"detections": 0, "clusters": []},
+            }
+
+        devices_json = json.dumps(
+            [
+                {
+                    "name": "jam-0",
+                    "role": "jammer",
+                    "x": 111.0,
+                    "y": 0.0,
+                    "z": 22.0,
+                    "power_dbm": 55.0,
+                }
+            ]
+        )
+
+        with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+            with patch("app.iss_unet_service.reconstruct_iss_unet", side_effect=fake_reconstruct_iss_unet):
+                response = asyncio.run(
+                    main.iss_unet_reconstruct_upload_post(
+                        scene="NTPU",
+                        mode="gps",
+                        devices_json=devices_json,
+                        gps_file=None,
+                        noise_file=None,
+                    )
+                )
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(len(captured["devices"]), 1)
+        self.assertEqual(captured["devices"][0].role, "jammer")
+        self.assertEqual(captured["devices"][0].x, 111.0)
 
     def test_sim_reconstruction_does_not_load_unet_model(self):
         self._write_ntpu_dataset()
@@ -541,6 +670,134 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "gps")
         self.assertFalse(result["metrics"]["model_inference"])
+
+    def test_sim_reconstruction_uses_live_iss_when_devices_provided(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        live_iss = np.full((128, 128), -61.0, dtype=np.float32)
+        live_iss[0, 0] = -44.0
+        devices = [{"name": "jam-0", "role": "jammer", "x": 1.0, "y": 2.0, "z": 3.0, "power_dbm": 77.0}]
+        captured = {}
+
+        def fake_live_scene_arrays(*, scene_xml_path, devices, cell_size, samples_per_tx, target_shape, area_m):
+            captured["scene_xml_path"] = scene_xml_path
+            captured["devices"] = devices
+            captured["cell_size"] = cell_size
+            captured["samples_per_tx"] = samples_per_tx
+            captured["target_shape"] = target_shape
+            captured["area_m"] = area_m
+            return {"iss": live_iss}
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                with patch(
+                    "app.iss_unet_service.compute_live_scene_arrays",
+                    side_effect=fake_live_scene_arrays,
+                    create=True,
+                ):
+                    with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                        with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                            result = reconstruct_iss_unet(
+                                scene="NTPU",
+                                mode="sim",
+                                cfar=ISSUNetCFARParams(enabled=False),
+                                devices=devices,
+                                scene_xml_path=self.scene_dir / "NTPU" / "NTPU.xml",
+                            )
+
+        reconstructed = np.load(result["files"]["reconstructed_npy"])
+        self.assertEqual(captured["scene_xml_path"], self.scene_dir / "NTPU" / "NTPU.xml")
+        self.assertEqual(captured["devices"], devices)
+        self.assertEqual(captured["cell_size"], 4.0)
+        self.assertEqual(captured["samples_per_tx"], 100000000)
+        self.assertEqual(captured["target_shape"], (128, 128))
+        self.assertEqual(captured["area_m"], 512.0)
+        np.testing.assert_allclose(reconstructed, live_iss)
+
+    def test_gps_reconstruction_uses_live_iss_when_devices_provided(self):
+        self._write_ntpu_dataset()
+        from app.iss_real import RouteSparseResult
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        shape = (128, 128)
+        sparse_mask = np.zeros(shape, dtype=np.float32)
+        outdoor_mask = np.ones(shape, dtype=np.float32)
+        route_sample = RouteSparseResult(
+            sparse_mask=sparse_mask,
+            outdoor_mask=outdoor_mask,
+            iss_sparse_dbm=np.full(shape, -90.0, dtype=np.float32),
+            inputs=np.zeros((5, 128, 128), dtype=np.float32),
+            metrics={
+                "mode": "gps",
+                "route_points": 1,
+                "used_samples": 0,
+                "aligned_noise": 0,
+                "skipped_noise": 0,
+                "sample_used": False,
+            },
+        )
+        live_iss = np.full(shape, -58.0, dtype=np.float32)
+        devices = [{"name": "jam-0", "role": "jammer", "x": 1.0, "y": 2.0, "z": 3.0, "power_dbm": 77.0}]
+        captured = {}
+
+        def fake_live_scene_arrays(*, scene_xml_path, devices, cell_size, samples_per_tx, target_shape, area_m):
+            captured["scene_xml_path"] = scene_xml_path
+            captured["devices"] = devices
+            return {"iss": live_iss}
+
+        def fake_route_sample(arrays, *args, **kwargs):
+            captured["route_iss"] = arrays["iss"].copy()
+            return route_sample
+
+        with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+                with patch("app.iss_unet_service.compute_live_scene_arrays", side_effect=fake_live_scene_arrays, create=True):
+                    with patch("app.iss_real.create_route_sparse_sample", side_effect=fake_route_sample):
+                        with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                            with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                                reconstruct_iss_unet(
+                                    scene="NTPU",
+                                    mode="gps",
+                                    cfar=ISSUNetCFARParams(enabled=False),
+                                    devices=devices,
+                                    scene_xml_path=self.scene_dir / "NTPU" / "NTPU.xml",
+                                )
+
+        self.assertEqual(captured["scene_xml_path"], self.scene_dir / "NTPU" / "NTPU.xml")
+        self.assertEqual(captured["devices"], devices)
+        np.testing.assert_allclose(captured["route_iss"], live_iss)
+
+    def test_live_radio_map_resamples_to_top_down_scene_grid(self):
+        from app.iss_unet_service import _resample_live_radio_map_to_scene_grid
+
+        values = np.full((4, 4), -100.0, dtype=np.float32)
+        values[0, 1] = -40.0
+        x_coords = np.array([-1.5, -0.5, 0.5, 1.5], dtype=np.float32)
+        y_coords = np.array([-1.5, -0.5, 0.5, 1.5], dtype=np.float32)
+
+        result = _resample_live_radio_map_to_scene_grid(
+            values,
+            x_coords=x_coords,
+            y_coords=y_coords,
+            target_shape=(4, 4),
+            area_m=4.0,
+        )
+
+        self.assertEqual(np.unravel_index(int(np.argmax(result)), result.shape), (3, 1))
+        self.assertAlmostEqual(float(result[3, 1]), -40.0)
+
+    def test_reconstruct_uses_explicit_scene_dir_for_dataset_lookup(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        with self.assertRaises(FileNotFoundError):
+            reconstruct_iss_unet(
+                scene="NYCU",
+                scene_dir=self.scene_dir,
+                mode="sim",
+                cfar=ISSUNetCFARParams(enabled=False),
+            )
 
     def test_gpsn_reconstruction_uses_new_gpsn_model_loader(self):
         self._write_ntpu_dataset()

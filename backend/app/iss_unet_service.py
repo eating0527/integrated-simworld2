@@ -10,6 +10,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import zoom
 
 
 logger = logging.getLogger(__name__)
@@ -28,11 +30,14 @@ REQUIRED_DATASET_FILES = (
 )
 
 ISS_MIN_DBM = -140.0
-ISS_MAX_DBM = -35.0
+ISS_MAX_DBM = 0
 GPSN_RSS_MIN_DBM = -90.0
 GPSN_RSS_MAX_DBM = -15.0
 BUILDING_MAX_M = 60.0
 NOISE_CONFIDENCE_SIGMA_PX = 8.0
+DEFAULT_SCENE_AREA_M = 512.0
+LIVE_MAP_CELL_SIZE = 4.0
+LIVE_MAP_SAMPLES_PER_TX = 100000000
 ISS_UNET_MODE_LABELS = {
     "sim": "Sim",
     "gps": "GPS",
@@ -77,9 +82,10 @@ def _canonical_scene(scene: str) -> str:
     return builtins.get(scene_id.lower(), scene_id.upper())
 
 
-def resolve_scene_dataset(scene: str, scene_dir: Path = SCENE_DIR) -> SceneDataset:
+def resolve_scene_dataset(scene: str, scene_dir: Path | None = None) -> SceneDataset:
+    scene_root = SCENE_DIR if scene_dir is None else Path(scene_dir)
     scene_name = _canonical_scene(scene)
-    data_dir = scene_dir / scene_name / "iss_unet_data"
+    data_dir = scene_root / scene_name / "iss_unet_data"
     files = {name: data_dir / name for name in REQUIRED_DATASET_FILES}
     missing = [name for name, path in files.items() if not path.exists()]
     meta_path = data_dir / "scene_meta.json"
@@ -168,6 +174,135 @@ def sparse_ratio_label(sparse_ratio: float) -> str:
     else:
         value = f"{percent:.6f}".rstrip("0").rstrip(".").replace(".", "p")
     return f"ratio_{value}"
+
+
+def _normalize_live_devices(devices: list[Any] | None) -> list[dict[str, Any]]:
+    if not devices:
+        return []
+    normalized: list[dict[str, Any]] = []
+    for device in devices:
+        if isinstance(device, dict):
+            payload = device
+        else:
+            payload = {
+                "name": getattr(device, "name"),
+                "role": getattr(device, "role"),
+                "x": getattr(device, "x"),
+                "y": getattr(device, "y"),
+                "z": getattr(device, "z"),
+                "power_dbm": getattr(device, "power_dbm", None),
+            }
+        normalized.append(
+            {
+                "name": payload["name"],
+                "role": payload["role"],
+                "x": float(payload["x"]),
+                "y": float(payload["y"]),
+                "z": float(payload["z"]),
+                "power_dbm": None if payload.get("power_dbm") is None else float(payload["power_dbm"]),
+            }
+        )
+    return normalized
+
+
+def _resize_radio_map(values: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    if values.shape == shape:
+        return values.astype(np.float32)
+    row_scale = shape[0] / values.shape[0]
+    col_scale = shape[1] / values.shape[1]
+    return zoom(values.astype(np.float32), (row_scale, col_scale), order=1).astype(np.float32)
+
+
+def _scene_area_m(dataset: SceneDataset) -> float:
+    if dataset.meta_path is None:
+        return DEFAULT_SCENE_AREA_M
+    try:
+        meta = json.loads(dataset.meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return DEFAULT_SCENE_AREA_M
+    try:
+        area_m = float(meta.get("area_m", DEFAULT_SCENE_AREA_M))
+    except (TypeError, ValueError):
+        return DEFAULT_SCENE_AREA_M
+    return area_m if np.isfinite(area_m) and area_m > 0 else DEFAULT_SCENE_AREA_M
+
+
+def _resample_live_radio_map_to_scene_grid(
+    values: np.ndarray,
+    *,
+    x_coords: np.ndarray,
+    y_coords: np.ndarray,
+    target_shape: tuple[int, int],
+    area_m: float,
+) -> np.ndarray:
+    values = values.astype(np.float32)
+    x_coords = np.asarray(x_coords, dtype=np.float32)
+    y_coords = np.asarray(y_coords, dtype=np.float32)
+    if values.shape != (len(y_coords), len(x_coords)):
+        raise ValueError(
+            f"live radio map shape {values.shape} does not match coords "
+            f"({len(y_coords)}, {len(x_coords)})"
+        )
+
+    x_order = np.argsort(x_coords)
+    y_order = np.argsort(y_coords)
+    x_sorted = x_coords[x_order]
+    y_sorted = y_coords[y_order]
+    sorted_values = values[np.ix_(y_order, x_order)]
+
+    rows, cols = target_shape
+    pixel_x_m = float(area_m) / cols
+    pixel_y_m = float(area_m) / rows
+    target_x = -float(area_m) / 2.0 + (np.arange(cols, dtype=np.float32) + 0.5) * pixel_x_m
+    target_y = float(area_m) / 2.0 - (np.arange(rows, dtype=np.float32) + 0.5) * pixel_y_m
+    grid_y, grid_x = np.meshgrid(target_y, target_x, indexing="ij")
+
+    interpolator = RegularGridInterpolator(
+        (y_sorted, x_sorted),
+        sorted_values,
+        bounds_error=False,
+        fill_value=ISS_MIN_DBM,
+    )
+    points = np.column_stack([grid_y.ravel(), grid_x.ravel()])
+    return interpolator(points).reshape(target_shape).astype(np.float32)
+
+
+def compute_live_scene_arrays(
+    *,
+    scene_xml_path: Path | str,
+    devices: list[Any],
+    cell_size: float = LIVE_MAP_CELL_SIZE,
+    samples_per_tx: int = LIVE_MAP_SAMPLES_PER_TX,
+    target_shape: tuple[int, int] | None = None,
+    area_m: float | None = None,
+) -> dict[str, np.ndarray]:
+    from app.sionna_service_lite import compute_radio_maps
+
+    live_maps = compute_radio_maps(
+        scene_xml_path=str(scene_xml_path),
+        devices=_normalize_live_devices(devices),
+        cell_size=cell_size,
+        samples_per_tx=samples_per_tx,
+    )
+    arrays = {
+        "dss": _clip_radio_map(live_maps["dss_dbm"]),
+        "iss": _clip_radio_map(live_maps["iss_dbm"]),
+        "tss": _clip_radio_map(live_maps["tss_dbm"]),
+    }
+    if target_shape is None or area_m is None:
+        return arrays
+    return {
+        key: _clip_radio_map(
+            _resample_live_radio_map_to_scene_grid(
+                values,
+                x_coords=live_maps["x_coords"],
+                y_coords=live_maps["y_coords"],
+                target_shape=target_shape,
+                area_m=area_m,
+            )
+        )
+        for key, values in arrays.items()
+    }
 
 
 def load_scene_arrays(dataset: SceneDataset) -> dict[str, np.ndarray]:
@@ -384,8 +519,8 @@ def _render_comparison_png(
     panels = [
         (arrays["building"], "Building Height Map", "gray", None, None, "Height (m)"),
         (sparse_display, sparse_title, "jet", -140, -40, "Power (dBm)"),
-        (arrays["iss"], "Ground Truth ISS", "jet", -140, -40, "Power (dBm)"),
-        (reconstructed_iss, "Reconstructed ISS", "jet", -140, -40, "Power (dBm)"),
+        (arrays["iss"], "Ground Truth ISS", "jet", -90, -15, "Power (dBm)"),
+        (reconstructed_iss, "Reconstructed ISS", "jet", -90, -15, "Power (dBm)"),
         (np.where(outdoor_pixels, error, 0.0), f"Error (Outdoor MAE: {mae:.2f} dB)", "Reds", 0, 10, "Error (dB)"),
         (outdoor_mask, "Outdoor Mask", "gray", 0, 1, None),
     ]
@@ -558,13 +693,16 @@ def reconstruct_iss_unet(
     noise_csv: Path | str | bytes | None = None,
     apply_building_mask: bool = True,
     focus_sampling_points: bool = True,
+    scene_dir: Path | None = None,
+    devices: list[Any] | None = None,
+    scene_xml_path: Path | str | None = None,
 ) -> dict[str, Any]:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
         raise ValueError("mode must be one of: sim, gps, gps_n")
     mode_label = ISS_UNET_MODE_LABELS[mode]
     sparse_ratio = _normalize_sparse_ratio(sparse_ratio)
-    dataset = resolve_scene_dataset(scene)
+    dataset = resolve_scene_dataset(scene, scene_dir=scene_dir)
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))
     if mode == "gps_n" and not GPSN_MODEL_ARTIFACT_PATH.exists():
@@ -572,6 +710,21 @@ def reconstruct_iss_unet(
         raise FileNotFoundError("GPS_N model artifact not found on the server. Please check the backend configuration.")
 
     arrays = load_scene_arrays(dataset)
+    normalized_devices = _normalize_live_devices(devices)
+    if normalized_devices:
+        if scene_xml_path is None:
+            scene_xml_path = dataset.data_dir.parent / f"{dataset.scene}.xml"
+        live_arrays = compute_live_scene_arrays(
+            scene_xml_path=scene_xml_path,
+            devices=normalized_devices,
+            cell_size=LIVE_MAP_CELL_SIZE,
+            samples_per_tx=LIVE_MAP_SAMPLES_PER_TX,
+            target_shape=arrays["building"].shape,
+            area_m=_scene_area_m(dataset),
+        )
+        for key, values in live_arrays.items():
+            if key in arrays:
+                arrays[key] = _resize_radio_map(_clip_radio_map(values), arrays["building"].shape)
     sparse_values_dbm = None
     real_metrics: dict[str, Any] = {
         "mode": mode,

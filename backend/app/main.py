@@ -1399,6 +1399,7 @@ class ISSUNetReconstructRequest(BaseModel):
     seed: int = Field(default=41)
     apply_building_mask: bool = Field(default=True)
     focus_sampling_points: bool = Field(default=True)
+    devices: List[DeviceIn] = Field(default_factory=list)
 
 
 class ISSUNetDatasetPrepareRequest(BaseModel):
@@ -1552,7 +1553,7 @@ async def iss_unet_dataset_prepare_post(req: ISSUNetDatasetPrepareRequest):
 async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
     from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
 
-    dataset = resolve_scene_dataset(req.scene)
+    dataset = resolve_scene_dataset(req.scene, scene_dir=SCENE_DIR)
     if not dataset.available:
         return JSONResponse(
             {
@@ -1575,6 +1576,7 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
     )
 
     try:
+        scene_xml = _resolve_sionna_scene_xml(req.scene) if req.devices else None
         result = await asyncio.to_thread(
             reconstruct_iss_unet,
             scene=req.scene,
@@ -1584,6 +1586,9 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             mode="sim",
             apply_building_mask=req.apply_building_mask,
             focus_sampling_points=req.focus_sampling_points,
+            scene_dir=SCENE_DIR,
+            devices=req.devices,
+            scene_xml_path=scene_xml,
         )
         logger.info(
             "ISS_UNET completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s focus_sampling_points=%s",
@@ -1629,12 +1634,13 @@ async def iss_unet_reconstruct_upload_post(
     cfar_enabled: bool = Form(True),
     apply_building_mask: bool = Form(True),
     focus_sampling_points: bool = Form(True),
+    devices_json: str = Form(""),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
 ):
     from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
 
-    dataset = resolve_scene_dataset(scene)
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
     if not dataset.available:
         return JSONResponse(
             {
@@ -1649,8 +1655,17 @@ async def iss_unet_reconstruct_upload_post(
 
     gps_csv = await gps_file.read() if gps_file is not None else None
     noise_csv = await noise_file.read() if noise_file is not None else None
+    devices_json_text = devices_json if isinstance(devices_json, str) else ""
+    try:
+        raw_devices = json.loads(devices_json_text) if devices_json_text.strip() else []
+        devices = [DeviceIn.model_validate(device) for device in raw_devices]
+    except json.JSONDecodeError as exc:
+        return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
+    except Exception as exc:
+        return JSONResponse({"success": False, "error": f"devices_json is invalid: {exc}"}, status_code=422)
     cfar_params = ISSUNetCFARParams(enabled=cfar_enabled)
     try:
+        scene_xml = _resolve_sionna_scene_xml(scene) if devices else None
         result = await asyncio.to_thread(
             reconstruct_iss_unet,
             scene=scene,
@@ -1662,6 +1677,9 @@ async def iss_unet_reconstruct_upload_post(
             noise_csv=noise_csv,
             apply_building_mask=apply_building_mask,
             focus_sampling_points=focus_sampling_points,
+            scene_dir=SCENE_DIR,
+            devices=devices,
+            scene_xml_path=scene_xml,
         )
         logger.info(
             "ISS_UNET upload completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s focus_sampling_points=%s",
@@ -2339,17 +2357,9 @@ async def usrp_measurement_post(req: USRPMeasurementRequest):
 
 @app.post("/api/simulate")
 async def simulate(req: SimulateRequest):
-    # Determine the absolute path for the XML properly from this main.py file
-    scene_name = req.scene.upper()
-    scene_xml = BASE_DIR / "static" / "scenes" / scene_name / f"{scene_name}.xml"
-    
-    if not scene_xml.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Scene XML not found: {scene_xml}",
-        )
+    scene_xml = _resolve_sionna_scene_xml(req.scene)
 
-    output_dir = str(BASE_DIR / "static" / "maps" / req.scene.lower())
+    output_dir = str(BASE_DIR / "static" / "maps" / scene_xml.parent.name.lower())
     os.makedirs(output_dir, exist_ok=True)
 
     devices_dicts = []
