@@ -297,6 +297,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
   return (
     <>
       <button
+        aria-label="Sionna simulation panel"
         onClick={() => setOpen(v => !v)}
         style={{
           position:    'fixed',
@@ -346,6 +347,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               SIONNA 無線通道模擬
             </span>
             <button
+              aria-label="Close simulation panel"
               onClick={() => setOpen(false)}
               style={{
                 background: 'none', border: 'none', color: 'rgba(255,255,255,.45)',
@@ -407,12 +409,14 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                     <>
                       <Label>SINR Min (dB)</Label>
                       <NumberInput
+                        ariaLabel="SINR Min (dB)"
                         value={sinrParams.sinr_vmin}
                         step={5} min={-60} max={0}
                         onChange={v => setSinrParams(p => ({ ...p, sinr_vmin: v }))}
                       />
                       <Label>SINR Max (dB)</Label>
                       <NumberInput
+                        ariaLabel="SINR Max (dB)"
                         value={sinrParams.sinr_vmax}
                         step={5} min={0} max={80}
                         onChange={v => setSinrParams(p => ({ ...p, sinr_vmax: v }))}
@@ -421,12 +425,14 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                   )}
                   <Label>Cell Size (m)</Label>
                   <NumberInput
+                    ariaLabel="Cell Size (m)"
                     value={sinrParams.cell_size}
                     step={0.5} min={0.5} max={10}
                     onChange={v => setSinrParams(p => ({ ...p, cell_size: v }))}
                   />
                   <Label>Samples / TX</Label>
                   <select
+                    aria-label="Samples / TX"
                     value={sinrParams.samples_per_tx}
                     onChange={e => setSinrParams(p => ({ ...p, samples_per_tx: Number(e.target.value) }))}
                     style={selectStyle}
@@ -451,6 +457,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                 <ParamGrid>
                   <Label>Sparse Ratio (%)</Label>
                   <NumberInput
+                    ariaLabel="Sparse Ratio (%)"
                     value={issUnetParams.sparseRatioPercent}
                     step={10} min={0} max={100}
                     disabled={issUnetParams.mode !== 'sim'}
@@ -521,6 +528,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                 <ParamGrid>
                   <Label>調變方式</Label>
                   <select
+                    aria-label="Modulation"
                     value={cfrModulation}
                     onChange={e => setCfrModulation(e.target.value as CFRModulation)}
                     style={selectStyle}
@@ -535,6 +543,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                   onClick={() => setCfrAdvancedOpen(v => !v)}
                   aria-expanded={cfrAdvancedOpen}
                   aria-controls="cfr-advanced-panel"
+                  aria-label="CFR advanced controls"
                   style={{
                     width: '100%',
                     marginTop: 8,
@@ -569,6 +578,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       help="控制星座圖的獨立樣本組數。"
                     >
                       <select
+                        aria-label="Constellation Batch Size"
                         value={cfrAdvanced.constellationBatchSize}
                         onChange={e => updateCfrAdvanced('constellationBatchSize', Number(e.target.value))}
                         style={selectStyle}
@@ -586,6 +596,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       help="控制 CFR 頻域取樣點數。"
                     >
                       <select
+                        aria-label="OFDM Subcarriers"
                         value={cfrAdvanced.ofdmSubcarriers}
                         onChange={e => updateCfrAdvanced('ofdmSubcarriers', Number(e.target.value))}
                         style={selectStyle}
@@ -603,6 +614,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       help="控制相鄰子載波的頻率間隔。"
                     >
                       <NumberInput
+                        ariaLabel="Subcarrier Spacing (kHz)"
                         value={cfrAdvanced.subcarrierSpacingHz / 1000}
                         step={15}
                         min={1}
@@ -617,6 +629,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       help="控制訊號相對背景雜訊的品質。"
                     >
                       <NumberInput
+                        ariaLabel="Eb/N0"
                         value={cfrAdvanced.ebn0Db}
                         step={1}
                         min={0}
@@ -631,6 +644,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                       help="控制多路徑追蹤的最大互動深度。"
                     >
                       <select
+                        aria-label="Ray Tracing Max Depth"
                         value={cfrAdvanced.rayTracingMaxDepth}
                         onChange={e => updateCfrAdvanced('rayTracingMaxDepth', Number(e.target.value))}
                         style={selectStyle}
@@ -647,6 +661,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             )}
 
             <button
+              aria-label="Run simulation"
               onClick={() => compute(tab)}
               disabled={cur.loading}
               style={{
@@ -670,7 +685,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
             </button>
 
             {cur.error && (
-              <div style={{
+              <div role="alert" style={{
                 background: 'rgba(255,50,80,.12)', border: '1px solid rgba(255,50,80,.3)',
                 borderRadius: 8, padding: '8px 12px', color: '#ff6080', fontSize: 12, marginBottom: 10, wordBreak: 'break-all'
               }}>⚠ {cur.error}</div>
@@ -715,7 +730,13 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
 
       {preview && (
         <div className="sim-modal__overlay" onClick={() => setPreview(null)}>
-          <div className="sim-modal__content" onClick={e => e.stopPropagation()}>
+          <div
+            className="sim-modal__content"
+            role="dialog"
+            aria-modal="true"
+            aria-label={preview.title}
+            onClick={e => e.stopPropagation()}
+          >
             <div className="sim-modal__header">
               <span className="sim-modal__title">{preview.title}</span>
               <button className="sim-modal__close" onClick={() => setPreview(null)}>×</button>
@@ -724,7 +745,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               <img className="sim-modal__image" src={preview.url} alt={preview.title} />
             </div>
             <div className="sim-modal__footer">
-              <a className="sim-modal__download" href={preview.url} download={`${preview.title.toLowerCase()}_map.png`}>
+              <a className="sim-modal__download" aria-label="Download preview image" href={preview.url} download={`${preview.title.toLowerCase()}_map.png`}>
                 下載圖片
               </a>
               <button className="sim-modal__btn-close" onClick={() => setPreview(null)}>
@@ -872,7 +893,7 @@ function Label({ children }: { children: React.ReactNode }) {
   return <div style={{ color: 'rgba(255,255,255,.6)', fontSize: 12 }}>{children}</div>;
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
+function Hint({ children }: { children?: React.ReactNode }) {
   return <div style={{ color: 'rgba(255,255,255,.36)', fontSize: 11, lineHeight: 1.35 }}>{children}</div>;
 }
 
@@ -1062,6 +1083,7 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function NumberInput({
+  ariaLabel,
   value,
   step,
   min,
@@ -1069,6 +1091,7 @@ function NumberInput({
   disabled = false,
   onChange,
 }: {
+  ariaLabel?: string,
   value: number,
   step: number,
   min: number,
@@ -1077,7 +1100,7 @@ function NumberInput({
   onChange: (v: number) => void,
 }) {
   return (
-    <input type="number" step={step} min={min} max={max} value={value} disabled={disabled}
+    <input type="number" aria-label={ariaLabel} step={step} min={min} max={max} value={value} disabled={disabled}
       onChange={e => onChange(Number(e.target.value))}
       style={{
         background: 'rgba(0,0,0,.3)', border: '1px solid rgba(255,255,255,.1)',
