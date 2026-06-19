@@ -437,6 +437,221 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(result.metrics["aligned_noise"], 2)
         self.assertEqual(result.metrics["skipped_noise"], 0)
 
+    def test_gps_noise_mode_reports_projection_and_duplicate_metrics(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,lat,lon,alt",
+                    "2026-05-27T12:00:00Z,24.0,121.0,0",
+                    "2026-05-27T12:00:01Z,24.0,121.0,0",
+                    "2026-05-27T12:00:02Z,24.0000359324461,121.000039446262,0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        noise_path = self.root / "noise.csv"
+        noise_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,noise_floor_db",
+                    "2026-05-27T12:00:00.100Z,-90.0",
+                    "2026-05-27T12:00:01.100Z,-80.0",
+                    "2026-05-27T12:00:02.100Z,-70.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        arrays = {
+            "building": np.zeros((128, 128), dtype=np.float32),
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": np.full((128, 128), -100.0, dtype=np.float32),
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps_n",
+            gps_points=parse_gps_csv(gps_path),
+            noise_points=parse_noise_csv(noise_path),
+        )
+
+        self.assertEqual(result.metrics["aligned_noise"], 3)
+        self.assertEqual(result.metrics["valid_projected_points"], 3)
+        self.assertEqual(result.metrics["used_samples"], 2)
+        self.assertEqual(result.metrics["duplicate_points"], 1)
+        self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-90.0, -80.0, -70.0])
+
+    def test_gpsn_artifacts_include_reconstructed_sparse_and_cfar_inputs(self):
+        from app.iss_unet_service import ISSUNetCFARParams, _build_iss_unet_artifacts, resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
+        model_path.write_bytes(b"model")
+        gps_csv = "\n".join(["time_stamp,lat,lon,alt", "2026-05-27T12:00:00Z,24.0,121.0,0"])
+        noise_csv = "\n".join(["time_stamp,noise_floor_db", "2026-05-27T12:00:00.100Z,-75.0"])
+
+        with patch("app.iss_unet_service.GPSN_MODEL_ARTIFACT_PATH", model_path):
+            with patch("app.iss_unet_service._run_gpsn_unet", return_value=np.full((128, 128), -75.0, dtype=np.float32)):
+                artifacts = _build_iss_unet_artifacts(
+                    scene="NTPU",
+                    sparse_ratio=0.2,
+                    cfar=ISSUNetCFARParams(enabled=True),
+                    seed=41,
+                    device="cpu",
+                    mode="gps_n",
+                    gps_csv=gps_csv,
+                    noise_csv=noise_csv,
+                    apply_building_mask=True,
+                    focus_sampling_points=False,
+                    scene_dir=self.scene_dir,
+                    devices=None,
+                    scene_xml_path=None,
+                )
+
+        self.assertEqual(artifacts.dataset.scene, "NTPU")
+        self.assertEqual(artifacts.mode, "gps_n")
+        self.assertEqual(int(artifacts.sparse_mask.sum()), 1)
+        self.assertEqual(float(artifacts.sparse_values_dbm[64, 64]), -75.0)
+        self.assertEqual(tuple(artifacts.reconstructed_iss.shape), (128, 128))
+        self.assertIsNotNone(artifacts.cfar_result)
+
+    def test_gpsn_statistics_rows_include_ten_chinese_metrics(self):
+        from app.iss_unet_service import ISSUNetArtifacts, ISSUNetCFARParams, SceneDataset
+        from app.iss_unet_stats_service import build_gpsn_statistics_rows
+
+        sparse_mask = np.zeros((4, 4), dtype=np.float32)
+        sparse_mask[1, 1] = 1.0
+        sparse_mask[2, 2] = 1.0
+        outdoor_mask = np.ones((4, 4), dtype=np.float32)
+        sparse_values = np.full((4, 4), -140.0, dtype=np.float32)
+        sparse_values[1, 1] = -80.0
+        sparse_values[2, 2] = -60.0
+        arrays = {
+            "iss": np.array(
+                [
+                    [-100.0, -99.0, -98.0, -97.0],
+                    [-96.0, -85.0, -94.0, -93.0],
+                    [-92.0, -91.0, -65.0, -89.0],
+                    [-88.0, -87.0, -86.0, -84.0],
+                ],
+                dtype=np.float32,
+            ),
+            "building": np.zeros((4, 4), dtype=np.float32),
+            "dss": np.full((4, 4), -110.0, dtype=np.float32),
+            "tss": np.full((4, 4), -100.0, dtype=np.float32),
+        }
+        reconstructed = np.full((4, 4), -70.0, dtype=np.float32)
+        artifacts = ISSUNetArtifacts(
+            dataset=SceneDataset("NTPU", self.root, {}, []),
+            mode="gps_n",
+            mode_label="Noise with GPS",
+            sparse_ratio=0.2,
+            arrays=arrays,
+            inputs=np.zeros((5, 4, 4), dtype=np.float32),
+            sparse_mask=sparse_mask,
+            outdoor_mask=outdoor_mask,
+            sparse_values_dbm=sparse_values,
+            reconstructed_iss=reconstructed,
+            real_metrics={
+                "aligned_noise": 3,
+                "skipped_noise": 1,
+                "out_of_bounds": 0,
+                "indoor_filtered": 1,
+                "valid_projected_points": 2,
+                "duplicate_points": 0,
+                "used_samples": 2,
+                "valid_projected_noise_dbm": [-80.0, -60.0],
+            },
+            confidence_metrics={},
+            model_inference=True,
+            cfar_params=ISSUNetCFARParams(enabled=True),
+            cfar_result={
+                "clusters": [{"peak_pixel_row": 2, "peak_pixel_col": 2, "peak_power_dbm": -50.0, "mean_power_dbm": -55.0, "size": 1}],
+                "detections": [],
+                "detection_map": np.zeros((4, 4), dtype=np.float32),
+                "threshold_map": np.zeros((4, 4), dtype=np.float32),
+            },
+        )
+
+        rows = build_gpsn_statistics_rows(artifacts)
+
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(rows[0]["variable"], "GPS/Noise 時間對齊率")
+        self.assertEqual(rows[3]["variable"], "採樣點地圖覆蓋率")
+        self.assertTrue(rows[0]["value"].endswith("%"))
+        self.assertIn("室外地圖", rows[3]["meaning"])
+        self.assertEqual(rows[-1]["variable"], "CFAR 熱點定位誤差")
+
+    def test_render_gpsn_statistics_table_png_returns_png_bytes(self):
+        from app.iss_unet_stats_service import render_statistics_table_png
+
+        rows = [
+            {"variable": "GPS/Noise 時間對齊率", "value": "75.00%", "meaning": "noise.csv 與 gps.csv 的時間同步品質"},
+            {"variable": "有效量測率", "value": "66.67%", "meaning": "真實量測成功落在虛擬場景有效區域的比例"},
+        ]
+
+        png = render_statistics_table_png(rows)
+
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_statistics_upload_endpoint_uses_uploaded_gpsn_csvs_and_returns_table_image(self):
+        captured = {}
+
+        class FakeUpload:
+            def __init__(self, data: bytes):
+                self.data = data
+
+            async def read(self):
+                return self.data
+
+        def fake_generate(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "gps_n",
+                "statistics": {
+                    "rows": [{"variable": "採樣點地圖覆蓋率", "value": "0.01%", "meaning": "採樣點覆蓋整張室外地圖的比例"}],
+                },
+                "images": {"statistics": "/api/iss-unet/images/iss_unet_ntpu_gps_n_statistics.png"},
+                "files": {"statistics_png": str(self.output_dir / "iss_unet_ntpu_gps_n_statistics.png")},
+            }
+
+        self._write_ntpu_dataset()
+        gps_bytes = b"time_stamp,lat,lon,alt\n2026-05-27T12:00:00Z,24.0,121.0,0\n"
+        noise_bytes = b"time_stamp,noise_floor_db\n2026-05-27T12:00:00.100Z,-75.0\n"
+
+        with patch("app.iss_unet_stats_service.generate_gpsn_statistics", side_effect=fake_generate):
+            response = asyncio.run(
+                main.iss_unet_statistics_upload_post(
+                    scene="NTPU",
+                    apply_building_mask=True,
+                    focus_sampling_points=True,
+                    devices_json="[]",
+                    gps_file=FakeUpload(gps_bytes),
+                    noise_file=FakeUpload(noise_bytes),
+                )
+            )
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(captured["mode"], "gps_n")
+        self.assertEqual(captured["gps_csv"], gps_bytes)
+        self.assertEqual(captured["noise_csv"], noise_bytes)
+        self.assertEqual(response["statistics"]["rows"][0]["variable"], "採樣點地圖覆蓋率")
+
     def test_single_input_unet_accepts_three_channels(self):
         import torch
 

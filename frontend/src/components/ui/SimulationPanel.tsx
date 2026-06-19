@@ -1,7 +1,11 @@
 import { useState, useCallback } from 'react';
 import { useEffect } from 'react';
 import { getCurrentDevicePayload } from '../../utils/devicePayload';
-import { buildIssUnetSimRequestBody, buildIssUnetUploadFormData } from '../../utils/issUnetRequest';
+import {
+  buildIssUnetSimRequestBody,
+  buildIssUnetStatisticsFormData,
+  buildIssUnetUploadFormData,
+} from '../../utils/issUnetRequest';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -43,6 +47,13 @@ interface ISSUNetImages {
   cfar: string | null;
 }
 
+interface ISSUNetStatisticsState {
+  loading: boolean;
+  imageUrl: string | null;
+  error: string | null;
+  rows: Array<{ variable: string; value: string; meaning: string }>;
+}
+
 const ISS_UNET_VIEW_LABELS: Record<ISSUNetViewKey, string> = {
   reconstructed: 'Reconstructed',
   comparison: '干擾地圖',
@@ -81,7 +92,7 @@ interface SimulationPanelProps {
 export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: SimulationPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
-  const [preview, setPreview] = useState<{ url: string; title: string } | null>(null);
+  const [preview, setPreview] = useState<{ url: string; title: string; downloadName?: string } | null>(null);
   const [issUnetActiveView, setIssUnetActiveView] = useState<ISSUNetViewKey>('comparison');
   const [overlayScene, setOverlayScene] = useState(false);
   const [cfrModulation, setCfrModulation] = useState<CFRModulation>('qpsk');
@@ -112,6 +123,12 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     focusSamplingPoints: true,
     gpsFile: null,
     noiseFile: null,
+  });
+  const [issUnetStatistics, setIssUnetStatistics] = useState<ISSUNetStatisticsState>({
+    loading: false,
+    imageUrl: null,
+    error: null,
+    rows: [],
   });
 
   useEffect(() => {
@@ -292,7 +309,54 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     }
   }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams]);
 
+  const generateStatistics = useCallback(async () => {
+    if (generatedScene && !sceneId) {
+      setIssUnetStatistics({
+        loading: false,
+        imageUrl: null,
+        error: 'Picked generated scene has no Sionna scene key.',
+        rows: [],
+      });
+      return;
+    }
+    setIssUnetStatistics(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const requestSceneId = sceneId ?? 'NTPU';
+      const form = buildIssUnetStatisticsFormData({
+        scene: requestSceneId,
+        applyBuildingMask: issUnetParams.apply_building_mask,
+        focusSamplingPoints: issUnetParams.focusSamplingPoints,
+        gpsFile: issUnetParams.gpsFile,
+        noiseFile: issUnetParams.noiseFile,
+        devices: getCurrentDevicePayload(),
+      });
+      const res = await fetch(`${API}/api/iss-unet/statistics/upload`, {
+        method: 'POST',
+        body: form,
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({ error: 'HTTP Error' }));
+        throw new Error(json.detail || json.error || 'HTTP Error');
+      }
+      const json = await res.json();
+      const imagePath = json.images?.statistics;
+      const imageUrl = imagePath ? `${API}${imagePath}?t=${Date.now()}` : null;
+      setIssUnetStatistics({
+        loading: false,
+        imageUrl,
+        error: null,
+        rows: Array.isArray(json.statistics?.rows) ? json.statistics.rows : [],
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setIssUnetStatistics({ loading: false, imageUrl: null, error: msg, rows: [] });
+    }
+  }, [generatedScene, sceneId, issUnetParams]);
+
   const cur = status[tab];
+  const hasStatisticsResult = tab === 'iss_unet'
+    && issUnetParams.mode === 'gps_n'
+    && (issUnetStatistics.loading || issUnetStatistics.error || issUnetStatistics.imageUrl);
 
   return (
     <>
@@ -520,6 +584,27 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
                   <div />
                   <Hint>僅 Noise with GPS 模式可用。聚焦 GPS 採樣點周遭的像素（若顯示異常請關閉）。</Hint>
                 </ParamGrid>
+                {issUnetParams.mode === 'gps_n' && (
+                  <button
+                    type="button"
+                    onClick={generateStatistics}
+                    disabled={issUnetStatistics.loading}
+                    style={{
+                      width: '100%',
+                      marginTop: 8,
+                      padding: '8px 10px',
+                      background: issUnetStatistics.loading ? 'rgba(255,255,255,.08)' : 'rgba(0,255,255,.14)',
+                      border: '1px solid rgba(0,255,255,.35)',
+                      borderRadius: 8,
+                      color: '#0ff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: issUnetStatistics.loading ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {issUnetStatistics.loading ? '產生中...' : '產生統計資料'}
+                  </button>
+                )}
               </div>
             )}
 
@@ -719,7 +804,14 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               </div>
             ) : null}
 
-            {!cur.loading && !cur.imageUrl && !cur.error && (
+            {tab === 'iss_unet' && issUnetParams.mode === 'gps_n' && (
+              <StatisticsResultView
+                state={issUnetStatistics}
+                onPreview={(url, title, downloadName) => setPreview({ url, title, downloadName })}
+              />
+            )}
+
+            {!cur.loading && !cur.imageUrl && !cur.error && !hasStatisticsResult && (
               <p style={{ textAlign: 'center', color: 'rgba(255,255,255,.25)', fontSize: 12, marginTop: 16 }}>
                 按下「開始計算」以產生模擬圖
               </p>
@@ -745,7 +837,12 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
               <img className="sim-modal__image" src={preview.url} alt={preview.title} />
             </div>
             <div className="sim-modal__footer">
-              <a className="sim-modal__download" aria-label="Download preview image" href={preview.url} download={`${preview.title.toLowerCase()}_map.png`}>
+              <a
+                className="sim-modal__download"
+                aria-label="Download preview image"
+                href={preview.url}
+                download={preview.downloadName ?? `${preview.title.toLowerCase()}_map.png`}
+              >
                 下載圖片
               </a>
               <button className="sim-modal__btn-close" onClick={() => setPreview(null)}>
@@ -874,6 +971,39 @@ function ISSUNetResultView({
           <div>Mask: {options?.apply_building_mask === false ? 'Off' : 'On'}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+function StatisticsResultView({
+  state,
+  onPreview,
+}: {
+  state: ISSUNetStatisticsState;
+  onPreview: (url: string, title: string, downloadName?: string) => void;
+}) {
+  if (state.loading) {
+    return (
+      <div style={{ color: 'rgba(255,255,255,.55)', fontSize: 12, marginTop: 8 }}>
+        統計資料產生中...
+      </div>
+    );
+  }
+  if (state.error) {
+    return <div role="alert" style={{ color: '#ff7b7b', fontSize: 12, marginTop: 8 }}>{state.error}</div>;
+  }
+  if (!state.imageUrl) {
+    return null;
+  }
+  return (
+    <div style={{ marginTop: 10 }}>
+      <img
+        src={state.imageUrl}
+        alt="ISS_UNET GPS_N 統計資料"
+        style={{ width: '100%', display: 'block', borderRadius: 6, border: '1px solid rgba(0,255,255,.16)', cursor: 'zoom-in' }}
+        onClick={() => onPreview(state.imageUrl!, 'ISS_UNET GPS_N 統計資料', 'iss_unet_gpsn_statistics.png')}
+        title="點擊放大檢視"
+      />
     </div>
   );
 }

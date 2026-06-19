@@ -1718,6 +1718,69 @@ async def iss_unet_reconstruct_upload_post(
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+@app.post("/api/iss-unet/statistics/upload")
+async def iss_unet_statistics_upload_post(
+    scene: str = Form(...),
+    apply_building_mask: bool = Form(True),
+    focus_sampling_points: bool = Form(True),
+    devices_json: str = Form(""),
+    gps_file: UploadFile | None = File(None),
+    noise_file: UploadFile | None = File(None),
+):
+    from app.iss_unet_service import ISSUNetCFARParams, resolve_scene_dataset
+    from app.iss_unet_stats_service import generate_gpsn_statistics
+
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
+    if not dataset.available:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "ISS_UNET dataset is missing for this scene",
+                "scene": dataset.scene,
+                "data_dir": str(dataset.data_dir),
+                "missing_files": dataset.missing_files,
+            },
+            status_code=409,
+        )
+
+    gps_csv = await gps_file.read() if gps_file is not None else None
+    noise_csv = await noise_file.read() if noise_file is not None else None
+    devices_json_text = devices_json if isinstance(devices_json, str) else ""
+    try:
+        raw_devices = json.loads(devices_json_text) if devices_json_text.strip() else []
+        devices = [DeviceIn.model_validate(device) for device in raw_devices]
+    except json.JSONDecodeError as exc:
+        return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
+    except Exception as exc:
+        return JSONResponse({"success": False, "error": f"devices_json is invalid: {exc}"}, status_code=422)
+
+    try:
+        scene_xml = _resolve_sionna_scene_xml(scene) if devices else None
+        result = await asyncio.to_thread(
+            generate_gpsn_statistics,
+            scene=scene,
+            cfar=ISSUNetCFARParams(enabled=True),
+            mode="gps_n",
+            gps_csv=gps_csv,
+            noise_csv=noise_csv,
+            apply_building_mask=apply_building_mask,
+            focus_sampling_points=focus_sampling_points,
+            scene_dir=SCENE_DIR,
+            devices=devices,
+            scene_xml_path=scene_xml,
+        )
+        return {"success": True, **result}
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    except FileNotFoundError as exc:
+        return JSONResponse({"success": False, "error": str(exc), "error_type": "iss_unet_artifact_missing"}, status_code=503)
+    except ImportError as exc:
+        return JSONResponse({"success": False, "error": str(exc), "error_type": "iss_unet_dependency_missing"}, status_code=503)
+    except Exception as exc:
+        logger.exception("ISS_UNET statistics generation failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
 @app.post("/api/usrp/upload-csv-bundle")
 async def usrp_upload_csv_bundle_post(
     scene: str = Form("NTPU"),
@@ -1895,7 +1958,7 @@ async def iss_unet_image_get(filename: str):
     from app.iss_unet_service import OUTPUT_DIR
 
     valid_iss_unet_image = re.fullmatch(
-        r"iss_unet_[A-Za-z0-9_-]+(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar)\.png",
+        r"iss_unet_[A-Za-z0-9_-]+(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar|statistics)\.png",
         filename,
     )
     if "/" in filename or "\\" in filename or not valid_iss_unet_image:

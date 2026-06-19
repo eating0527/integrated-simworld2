@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'vitest';
 
 import { getCurrentDevicePayload } from '../src/utils/devicePayload.ts';
-import { buildIssUnetSimRequestBody } from '../src/utils/issUnetRequest.ts';
-import { buildIssUnetUploadFormData } from '../src/utils/issUnetRequest.ts';
+import {
+  buildIssUnetSimRequestBody,
+  buildIssUnetStatisticsFormData,
+  buildIssUnetUploadFormData,
+} from '../src/utils/issUnetRequest.ts';
 
 describe('ISS_UNET request builders', () => {
   it('builds sim JSON request bodies', () => {
@@ -39,6 +42,25 @@ describe('ISS_UNET request builders', () => {
     assert.equal(form.get('scene'), 'NTPU');
     assert.equal(form.get('mode'), 'gps_n');
     assert.equal(form.get('focus_sampling_points'), 'false');
+    assert.equal(typeof form.get('devices_json'), 'string');
+    assert.equal(JSON.parse(form.get('devices_json')).some((device) => device.role === 'jammer'), true);
+  });
+
+  it('builds gps_n statistics FormData without hard-coded sample files', () => {
+    const form = buildIssUnetStatisticsFormData({
+      scene: 'NTPU',
+      applyBuildingMask: true,
+      focusSamplingPoints: true,
+      gpsFile: null,
+      noiseFile: null,
+      devices: getCurrentDevicePayload(),
+    });
+
+    assert.equal(form.get('scene'), 'NTPU');
+    assert.equal(form.get('apply_building_mask'), 'true');
+    assert.equal(form.get('focus_sampling_points'), 'true');
+    assert.equal(form.get('gps_file'), null);
+    assert.equal(form.get('noise_file'), null);
     assert.equal(typeof form.get('devices_json'), 'string');
     assert.equal(JSON.parse(form.get('devices_json')).some((device) => device.role === 'jammer'), true);
   });

@@ -21,6 +21,15 @@ interface BuildIssUnetUploadFormDataParams {
   devices: DevicePayload[];
 }
 
+interface BuildIssUnetStatisticsFormDataParams {
+  scene: string;
+  applyBuildingMask: boolean;
+  focusSamplingPoints: boolean;
+  gpsFile: File | null;
+  noiseFile: File | null;
+  devices: DevicePayload[];
+}
+
 export function buildIssUnetSimRequestBody({
   scene,
   sparseRatioPercent,
@@ -65,6 +74,28 @@ export function buildIssUnetUploadFormData({
     form.append('gps_file', gpsFile);
   }
   if (mode === 'gps_n' && noiseFile) {
+    form.append('noise_file', noiseFile);
+  }
+  return form;
+}
+
+export function buildIssUnetStatisticsFormData({
+  scene,
+  applyBuildingMask,
+  focusSamplingPoints,
+  gpsFile,
+  noiseFile,
+  devices,
+}: BuildIssUnetStatisticsFormDataParams) {
+  const form = new FormData();
+  form.append('scene', scene);
+  form.append('apply_building_mask', String(applyBuildingMask));
+  form.append('focus_sampling_points', String(focusSamplingPoints));
+  form.append('devices_json', JSON.stringify(devices));
+  if (gpsFile) {
+    form.append('gps_file', gpsFile);
+  }
+  if (noiseFile) {
     form.append('noise_file', noiseFile);
   }
   return form;

@@ -36,6 +36,22 @@ function successfulIssUnetResponse() {
   } as Response);
 }
 
+function successfulStatisticsResponse() {
+  return Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({
+      images: {
+        statistics: '/api/iss-unet/images/iss_unet_ntpu_gps_n_statistics.png',
+      },
+      statistics: {
+        rows: [
+          { variable: '採樣點地圖覆蓋率', value: '0.01%', meaning: '採樣點覆蓋整張室外地圖的比例' },
+        ],
+      },
+    }),
+  } as Response);
+}
+
 function failedJsonResponse(message: string) {
   return Promise.resolve({
     ok: false,
@@ -272,5 +288,31 @@ describe('SimulationPanel UI', () => {
     fireEvent.click(dialog.parentElement as HTMLElement);
 
     expect(screen.queryByRole('dialog', { name: 'SINR' })).not.toBeInTheDocument();
+  });
+
+  it('generates and displays downloadable gps_n statistics table', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulStatisticsResponse());
+    const user = await openPanel();
+
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
+    await user.click(screen.getByRole('button', { name: '產生統計資料' }));
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/iss-unet/statistics/upload',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(FormData),
+      }),
+    ));
+    const image = await screen.findByRole('img', { name: 'ISS_UNET GPS_N 統計資料' });
+    expect(image).toHaveAttribute('src', expect.stringContaining('/api/iss-unet/images/iss_unet_ntpu_gps_n_statistics.png'));
+    expect(screen.queryByRole('link', { name: '下載統計表格' })).not.toBeInTheDocument();
+
+    await user.click(image);
+
+    const dialog = await screen.findByRole('dialog', { name: 'ISS_UNET GPS_N 統計資料' });
+    expect(within(dialog).getByRole('img', { name: 'ISS_UNET GPS_N 統計資料' })).toHaveAttribute('src', image.getAttribute('src'));
+    expect(within(dialog).getByRole('link', { name: /download/i })).toHaveAttribute('download', 'iss_unet_gpsn_statistics.png');
   });
 });

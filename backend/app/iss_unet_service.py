@@ -72,6 +72,25 @@ class ISSUNetCFARParams:
     min_threshold_dbm: float = -50.0
 
 
+@dataclass(frozen=True)
+class ISSUNetArtifacts:
+    dataset: SceneDataset
+    mode: str
+    mode_label: str
+    sparse_ratio: float
+    arrays: dict[str, np.ndarray]
+    inputs: np.ndarray
+    sparse_mask: np.ndarray
+    outdoor_mask: np.ndarray
+    sparse_values_dbm: np.ndarray | None
+    reconstructed_iss: np.ndarray
+    real_metrics: dict[str, Any]
+    confidence_metrics: dict[str, Any]
+    model_inference: bool
+    cfar_params: ISSUNetCFARParams
+    cfar_result: dict[str, Any] | None
+
+
 def _canonical_scene(scene: str) -> str:
     scene_id = scene.strip()
     if not scene_id:
@@ -682,7 +701,8 @@ def _render_cfar_png(
     return _figure_to_png(fig)
 
 
-def reconstruct_iss_unet(
+def _build_iss_unet_artifacts(
+    *,
     scene: str,
     sparse_ratio: float = 0.2,
     cfar: ISSUNetCFARParams | None = None,
@@ -696,7 +716,7 @@ def reconstruct_iss_unet(
     scene_dir: Path | None = None,
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
-) -> dict[str, Any]:
+) -> ISSUNetArtifacts:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
         raise ValueError("mode must be one of: sim, gps, gps_n")
@@ -712,10 +732,9 @@ def reconstruct_iss_unet(
     arrays = load_scene_arrays(dataset)
     normalized_devices = _normalize_live_devices(devices)
     if normalized_devices:
-        if scene_xml_path is None:
-            scene_xml_path = dataset.data_dir.parent / f"{dataset.scene}.xml"
+        resolved_scene_xml_path = scene_xml_path or dataset.data_dir.parent / f"{dataset.scene}.xml"
         live_arrays = compute_live_scene_arrays(
-            scene_xml_path=scene_xml_path,
+            scene_xml_path=resolved_scene_xml_path,
             devices=normalized_devices,
             cell_size=LIVE_MAP_CELL_SIZE,
             samples_per_tx=LIVE_MAP_SAMPLES_PER_TX,
@@ -725,6 +744,7 @@ def reconstruct_iss_unet(
         for key, values in live_arrays.items():
             if key in arrays:
                 arrays[key] = _resize_radio_map(_clip_radio_map(values), arrays["building"].shape)
+
     sparse_values_dbm = None
     real_metrics: dict[str, Any] = {
         "mode": mode,
@@ -737,24 +757,6 @@ def reconstruct_iss_unet(
     if mode == "sim":
         inputs, sparse_mask, outdoor_mask = build_model_input(arrays, sparse_ratio=sparse_ratio, seed=seed)
         real_metrics["used_samples"] = int(sparse_mask.sum())
-    elif mode == "gps":
-        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
-
-        gps_points = parse_gps_csv(gps_csv) if gps_csv is not None else None
-        noise_points = parse_noise_csv(noise_csv) if noise_csv is not None else None
-        route_sample = create_route_sparse_sample(
-            arrays,
-            dataset,
-            mode=mode,
-            gps_points=gps_points,
-            noise_points=noise_points,
-            apply_building_mask=apply_building_mask,
-        )
-        inputs = route_sample.inputs
-        sparse_mask = route_sample.sparse_mask
-        outdoor_mask = route_sample.outdoor_mask
-        sparse_values_dbm = route_sample.iss_sparse_dbm
-        real_metrics = route_sample.metrics
     else:
         from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
 
@@ -787,6 +789,7 @@ def reconstruct_iss_unet(
             device=device,
         )
         model_inference = True
+
     confidence_metrics = _empty_confidence_stats(applied=False)
     if mode == "gps_n" and focus_sampling_points:
         reconstructed_iss, confidence_metrics = apply_noise_confidence_weighting(
@@ -794,6 +797,71 @@ def reconstruct_iss_unet(
             sparse_mask,
             outdoor_mask,
         )
+
+    if cfar is None:
+        cfar = ISSUNetCFARParams(enabled=True)
+    cfar_result = _cfar_detect(reconstructed_iss, outdoor_mask, cfar) if cfar.enabled else None
+
+    return ISSUNetArtifacts(
+        dataset=dataset,
+        mode=mode,
+        mode_label=mode_label,
+        sparse_ratio=sparse_ratio,
+        arrays=arrays,
+        inputs=inputs,
+        sparse_mask=sparse_mask,
+        outdoor_mask=outdoor_mask,
+        sparse_values_dbm=sparse_values_dbm,
+        reconstructed_iss=reconstructed_iss,
+        real_metrics=real_metrics,
+        confidence_metrics=confidence_metrics,
+        model_inference=model_inference,
+        cfar_params=cfar,
+        cfar_result=cfar_result,
+    )
+
+
+def reconstruct_iss_unet(
+    scene: str,
+    sparse_ratio: float = 0.2,
+    cfar: ISSUNetCFARParams | None = None,
+    seed: int = 41,
+    device: str = "cuda",
+    mode: str = "sim",
+    gps_csv: Path | str | bytes | None = None,
+    noise_csv: Path | str | bytes | None = None,
+    apply_building_mask: bool = True,
+    focus_sampling_points: bool = True,
+    scene_dir: Path | None = None,
+    devices: list[Any] | None = None,
+    scene_xml_path: Path | str | None = None,
+) -> dict[str, Any]:
+    artifacts = _build_iss_unet_artifacts(
+        scene=scene,
+        sparse_ratio=sparse_ratio,
+        cfar=cfar,
+        seed=seed,
+        device=device,
+        mode=mode,
+        gps_csv=gps_csv,
+        noise_csv=noise_csv,
+        apply_building_mask=apply_building_mask,
+        focus_sampling_points=focus_sampling_points,
+        scene_dir=scene_dir,
+        devices=devices,
+        scene_xml_path=scene_xml_path,
+    )
+    dataset = artifacts.dataset
+    mode = artifacts.mode
+    mode_label = artifacts.mode_label
+    sparse_ratio = artifacts.sparse_ratio
+    arrays = artifacts.arrays
+    sparse_mask = artifacts.sparse_mask
+    outdoor_mask = artifacts.outdoor_mask
+    sparse_values_dbm = artifacts.sparse_values_dbm
+    reconstructed_iss = artifacts.reconstructed_iss
+    cfar = artifacts.cfar_params
+    cfar_result = artifacts.cfar_result
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if mode == "sim":
@@ -822,11 +890,7 @@ def reconstruct_iss_unet(
     comparison_path.write_bytes(comparison_png)
     np.save(npy_path, reconstructed_iss.astype(np.float32))
 
-    cfar_result = None
-    if cfar is None:
-        cfar = ISSUNetCFARParams(enabled=True)
-    if cfar.enabled:
-        cfar_result = _cfar_detect(reconstructed_iss, outdoor_mask, cfar)
+    if cfar.enabled and cfar_result is not None:
         cfar_path.write_bytes(_render_cfar_png(reconstructed_iss, outdoor_mask, arrays["building"], cfar_result, mode_label=mode_label))
 
     outdoor_pixels = outdoor_mask > 0.5
@@ -837,9 +901,9 @@ def reconstruct_iss_unet(
         "sparse_samples": int(sparse_mask.sum()),
         "outdoor_pixels": int(outdoor_pixels.sum()),
         "output_shape": list(reconstructed_iss.shape),
-        "model_inference": model_inference,
-        **real_metrics,
-        **confidence_metrics,
+        "model_inference": artifacts.model_inference,
+        **artifacts.real_metrics,
+        **artifacts.confidence_metrics,
     }
     return {
         "scene": dataset.scene,

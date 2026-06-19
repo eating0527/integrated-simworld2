@@ -264,6 +264,9 @@ def create_route_sparse_sample(
     route_points, aligned_noise, skipped_noise = _route_points_for_mode(mode, gps_points, noise_points)
     out_of_bounds = 0
     indoor_filtered = 0
+    valid_projected_points = 0
+    duplicate_points = 0
+    valid_projected_noise_dbm: list[float] = []
 
     for point in route_points:
         pixel = _latlon_to_pixel(point.lat, point.lon, center[0], center[1], area_m, building.shape)
@@ -274,9 +277,15 @@ def create_route_sparse_sample(
         if apply_building_mask and outdoor_mask[row, col] < 0.5:
             indoor_filtered += 1
             continue
-        sparse_mask[row, col] = 1.0
+        if sparse_mask[row, col] > 0.5:
+            duplicate_points += 1
+        else:
+            sparse_mask[row, col] = 1.0
+        valid_projected_points += 1
         if isinstance(point, AlignedNoisePoint):
-            iss_sparse_dbm[row, col] = float(np.clip(point.noise_floor_db, ISS_MIN_DBM, ISS_MAX_DBM))
+            clipped_noise = float(np.clip(point.noise_floor_db, ISS_MIN_DBM, ISS_MAX_DBM))
+            iss_sparse_dbm[row, col] = clipped_noise
+            valid_projected_noise_dbm.append(clipped_noise)
         else:
             iss_sparse_dbm[row, col] = float(arrays["iss"][row, col])
 
@@ -302,6 +311,9 @@ def create_route_sparse_sample(
         "apply_building_mask": apply_building_mask,
         "out_of_bounds": out_of_bounds,
         "indoor_filtered": indoor_filtered,
+        "valid_projected_points": valid_projected_points,
+        "duplicate_points": duplicate_points,
+        "valid_projected_noise_dbm": valid_projected_noise_dbm,
     }
     return RouteSparseResult(
         sparse_mask=sparse_mask,
