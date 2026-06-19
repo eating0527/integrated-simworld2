@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.font_manager as font_manager
 import matplotlib.pyplot as plt
+from matplotlib.transforms import Bbox
 import numpy as np
 
 from app.iss_unet_service import (
@@ -162,41 +163,75 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
     ]
 
 
-def _configure_cjk_font() -> None:
-    candidates = ("Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans CJK SC", "SimHei", "Arial Unicode MS")
+def _pick_font(candidates: tuple[str, ...], fallback: str) -> str:
     available = {font.name for font in font_manager.fontManager.ttflist}
-    for name in candidates:
-        if name in available:
-            plt.rcParams["font.family"] = name
-            break
+    return next((name for name in candidates if name in available), fallback)
+
+
+def _configure_statistics_fonts() -> dict[str, font_manager.FontProperties]:
+    cjk_font = _pick_font(
+        ("DFKai-SB", "BiauKai", "KaiTi", "Microsoft JhengHei", "Noto Sans CJK TC", "Arial Unicode MS"),
+        "DejaVu Sans",
+    )
+    latin_font = _pick_font(("Times New Roman", "Times", "DejaVu Serif"), "DejaVu Serif")
+    plt.rcParams["font.family"] = [latin_font, cjk_font]
     plt.rcParams["axes.unicode_minus"] = False
+    return {
+        "body_cjk": font_manager.FontProperties(family=cjk_font, size=10),
+        "body_latin": font_manager.FontProperties(family=latin_font, size=10),
+        "header": font_manager.FontProperties(family=cjk_font, size=10, weight="bold"),
+        "caption": font_manager.FontProperties(family=cjk_font, size=13),
+    }
 
 
 def render_statistics_table_png(rows: list[dict[str, str]]) -> bytes:
-    _configure_cjk_font()
-    fig, ax = plt.subplots(figsize=(12, 5.8))
+    fonts = _configure_statistics_fonts()
+    fig, ax = plt.subplots(figsize=(12, 5.8), facecolor="white")
+    ax.set_facecolor("white")
     ax.axis("off")
     table = ax.table(
         cellText=[[row["variable"], row["value"], row["meaning"]] for row in rows],
-        colLabels=["變數", "數值", "代表意義"],
+        colLabels=["統計變數", "數值", "說明"],
         colWidths=[0.24, 0.18, 0.58],
         cellLoc="left",
         loc="center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
     table.scale(1, 1.55)
-    for (row_index, _col_index), cell in table.get_celld().items():
-        cell.set_edgecolor("#33515c")
+    last_row_index = len(rows)
+    for (row_index, col_index), cell in table.get_celld().items():
+        cell.set_facecolor("white")
+        cell.set_edgecolor("#1f1f1f")
+        cell.PAD = 0.08
         if row_index == 0:
-            cell.set_facecolor("#d8f7ff")
-            cell.set_text_props(weight="bold", color="#0b1f28")
+            cell.visible_edges = "TB"
+            cell.set_linewidth(1.1)
+            cell.set_text_props(color="#111111", fontproperties=fonts["header"])
+        elif row_index == last_row_index:
+            cell.visible_edges = "B"
+            cell.set_linewidth(1.1)
+            font_key = "body_latin" if col_index == 1 else "body_cjk"
+            cell.set_text_props(color="#111111", fontproperties=fonts[font_key])
         else:
-            cell.set_facecolor("#f8fbfc" if row_index % 2 else "#eef6f8")
-    fig.suptitle("ISS_UNET GPS_N 統計資料", fontsize=16, fontweight="bold")
-    fig.tight_layout()
+            cell.visible_edges = "B"
+            cell.set_linewidth(0.55)
+            font_key = "body_latin" if col_index == 1 else "body_cjk"
+            cell.set_text_props(color="#111111", fontproperties=fonts[font_key])
+    fig.subplots_adjust(left=0.035, right=0.965, top=0.965, bottom=0.14)
+    fig.canvas.draw()
+    table_bbox = table.get_window_extent(fig.canvas.get_renderer()).transformed(fig.transFigure.inverted())
+    caption_y = max(0.035, table_bbox.y0 - 0.06)
+    caption = fig.text(0.5, caption_y, "表 1 GPS_N 統計資料表", ha="center", va="bottom", fontproperties=fonts["caption"])
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    output_bbox = Bbox.union(
+        [
+            table.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()),
+            caption.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()),
+        ]
+    ).padded(0.15)
     buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", dpi=160, bbox_inches="tight")
+    fig.savefig(buffer, format="png", dpi=160, bbox_inches=output_bbox)
     plt.close(fig)
     return buffer.getvalue()
 

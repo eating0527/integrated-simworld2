@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import shutil
 import sys
@@ -8,6 +9,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+import matplotlib.image as mpimg
 import numpy as np
 
 from app import main
@@ -607,6 +609,31 @@ class ISSUNetServiceTests(unittest.TestCase):
         png = render_statistics_table_png(rows)
 
         self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_render_gpsn_statistics_table_png_uses_paper_table_style(self):
+        from app.iss_unet_stats_service import render_statistics_table_png
+
+        rows = [
+            {"variable": "GPS/Noise alignment", "value": "75.00%", "meaning": "alignment rate"},
+            {"variable": "Valid measurement rate", "value": "66.67%", "meaning": "valid projected samples"},
+            {"variable": "Sample map coverage", "value": "12.34%", "meaning": "coverage over outdoor pixels"},
+        ]
+
+        png = render_statistics_table_png(rows)
+        image = mpimg.imread(io.BytesIO(png))
+        rgb = image[:, :, :3]
+        height = rgb.shape[0]
+
+        cyan_tinted_pixels = (
+            (rgb[:, :, 1] > rgb[:, :, 0] + 0.03)
+            & (rgb[:, :, 2] > rgb[:, :, 0] + 0.03)
+            & (rgb[:, :, 0] > 0.65)
+        )
+        bottom_dark_pixels = np.all(rgb[int(height * 0.82) :, :, :] < 0.45, axis=2)
+
+        self.assertLess(int(cyan_tinted_pixels.sum()), 100)
+        self.assertGreater(int(bottom_dark_pixels.sum()), 100)
+        self.assertLess(height, 500)
 
     def test_statistics_upload_endpoint_uses_uploaded_gpsn_csvs_and_returns_table_image(self):
         captured = {}
