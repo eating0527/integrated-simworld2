@@ -38,6 +38,10 @@ NOISE_CONFIDENCE_SIGMA_PX = 8.0
 DEFAULT_SCENE_AREA_M = 512.0
 LIVE_MAP_CELL_SIZE = 4.0
 LIVE_MAP_SAMPLES_PER_TX = 100000000
+FALLBACK_SCENE_CENTERS = {
+    "NTPU": (24.943834, 121.369192),
+    "NYCU": (24.967052, 121.536335),
+}
 ISS_UNET_MODE_LABELS = {
     "sim": "Sim",
     "gps": "GPS",
@@ -244,6 +248,87 @@ def _scene_area_m(dataset: SceneDataset) -> float:
     except (TypeError, ValueError):
         return DEFAULT_SCENE_AREA_M
     return area_m if np.isfinite(area_m) and area_m > 0 else DEFAULT_SCENE_AREA_M
+
+
+def _read_dataset_json(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _scene_center(dataset: SceneDataset) -> tuple[float, float] | None:
+    meta = _read_dataset_json(dataset.meta_path)
+    if meta.get("center_lat") is not None and meta.get("center_lon") is not None:
+        return float(meta["center_lat"]), float(meta["center_lon"])
+
+    sibling_meta = dataset.data_dir.parent / "scene_metadata.json"
+    meta = _read_dataset_json(sibling_meta if sibling_meta.exists() else None)
+    if meta.get("lat") is not None and meta.get("lon") is not None:
+        return float(meta["lat"]), float(meta["lon"])
+
+    return FALLBACK_SCENE_CENTERS.get(dataset.scene)
+
+
+def _cfar_grid_metadata(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, Any]:
+    rows, cols = shape
+    area_m = _scene_area_m(dataset)
+    return {
+        "rows": int(rows),
+        "cols": int(cols),
+        "area_m": float(area_m),
+        "pixel_size_m": float(area_m / cols),
+    }
+
+
+def _cfar_pixel_to_world(row: int, col: int, grid: dict[str, Any]) -> tuple[float, float]:
+    area_m = float(grid["area_m"])
+    pixel_size_m = float(grid["pixel_size_m"])
+    world_x = -area_m / 2.0 + (float(col) + 0.5) * pixel_size_m
+    north_m = area_m / 2.0 - (float(row) + 0.5) * pixel_size_m
+    world_z = -north_m
+    return float(world_x), float(world_z)
+
+
+def _world_to_latlon(
+    world_x: float,
+    world_z: float,
+    center: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    if center is None:
+        return None
+    center_lat, center_lon = center
+    meters_per_deg_lat = 111320.0
+    meters_per_deg_lon = max(1.0, meters_per_deg_lat * np.cos(np.radians(center_lat)))
+    north_m = -float(world_z)
+    lat = center_lat + north_m / meters_per_deg_lat
+    lon = center_lon + float(world_x) / meters_per_deg_lon
+    return float(lat), float(lon)
+
+
+def _enrich_cfar_clusters(
+    clusters: list[dict[str, Any]],
+    grid: dict[str, Any],
+    center: tuple[float, float] | None,
+) -> list[dict[str, Any]]:
+    enriched = []
+    for cluster in clusters:
+        row = int(cluster["peak_pixel_row"])
+        col = int(cluster["peak_pixel_col"])
+        world_x, world_z = _cfar_pixel_to_world(row, col, grid)
+        latlon = _world_to_latlon(world_x, world_z, center)
+        item = {
+            **cluster,
+            "world_x": world_x,
+            "world_z": world_z,
+        }
+        if latlon is not None:
+            item["lat"] = latlon[0]
+            item["lon"] = latlon[1]
+        enriched.append(item)
+    return enriched
 
 
 def _resample_live_radio_map_to_scene_grid(
@@ -905,6 +990,8 @@ def reconstruct_iss_unet(
         **artifacts.real_metrics,
         **artifacts.confidence_metrics,
     }
+    cfar_grid = _cfar_grid_metadata(dataset, reconstructed_iss.shape)
+    cfar_clusters = _enrich_cfar_clusters(cfar_result["clusters"], cfar_grid, _scene_center(dataset)) if cfar_result else []
     return {
         "scene": dataset.scene,
         "mode": mode,
@@ -927,6 +1014,7 @@ def reconstruct_iss_unet(
         },
         "cfar": {
             "detections": len(cfar_result["detections"]) if cfar_result else 0,
-            "clusters": cfar_result["clusters"] if cfar_result else [],
+            "clusters": cfar_clusters,
+            "grid": cfar_grid,
         },
     }

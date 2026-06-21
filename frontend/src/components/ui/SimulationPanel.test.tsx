@@ -32,6 +32,26 @@ function successfulIssUnetResponse() {
       options: {
         apply_building_mask: true,
       },
+      cfar: {
+        grid: {
+          rows: 128,
+          cols: 128,
+          area_m: 512,
+          pixel_size_m: 4,
+        },
+        detections: 1,
+        clusters: [
+          {
+            peak_pixel_row: 64,
+            peak_pixel_col: 64,
+            peak_power_dbm: -42.5,
+            mean_power_dbm: -45,
+            size: 9,
+            world_x: 2,
+            world_z: -2,
+          },
+        ],
+      },
     }),
   } as Response);
 }
@@ -242,6 +262,27 @@ describe('SimulationPanel UI', () => {
     expect(JSON.parse(String(form.get('devices_json')))).toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'jammer' })]),
     );
+  });
+
+  it('publishes CFAR clusters from ISS_UNET results for scene beacon rendering', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponse());
+    const onCfarClustersChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" onCfarClustersChange={onCfarClustersChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await runCurrentTab(user);
+
+    await waitFor(() => expect(onCfarClustersChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        peak_pixel_row: 64,
+        peak_pixel_col: 64,
+        peak_power_dbm: -42.5,
+        world_x: 2,
+        world_z: -2,
+      }),
+    ]));
   });
 
   it('shows loading state while a simulation request is pending', async () => {

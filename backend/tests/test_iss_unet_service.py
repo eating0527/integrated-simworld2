@@ -531,6 +531,55 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(tuple(artifacts.reconstructed_iss.shape), (128, 128))
         self.assertIsNotNone(artifacts.cfar_result)
 
+    def test_reconstruct_result_enriches_cfar_clusters_with_grid_world_coordinates(self):
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        fake_cfar = {
+            "detection_map": np.zeros((128, 128), dtype=np.float32),
+            "threshold_map": np.full((128, 128), -80.0, dtype=np.float32),
+            "detections": [{"row": 64, "col": 64, "power_dbm": -42.5}],
+            "clusters": [
+                {
+                    "peak_pixel_row": 64,
+                    "peak_pixel_col": 64,
+                    "peak_power_dbm": -42.5,
+                    "mean_power_dbm": -45.0,
+                    "size": 9,
+                }
+            ],
+        }
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            with patch("app.iss_unet_service._cfar_detect", return_value=fake_cfar):
+                result = reconstruct_iss_unet(
+                    scene="NTPU",
+                    sparse_ratio=0.2,
+                    cfar=ISSUNetCFARParams(enabled=True),
+                    seed=41,
+                    device="cpu",
+                    mode="sim",
+                    scene_dir=self.scene_dir,
+                )
+
+        self.assertEqual(result["cfar"]["grid"], {
+            "rows": 128,
+            "cols": 128,
+            "area_m": 512.0,
+            "pixel_size_m": 4.0,
+        })
+        cluster = result["cfar"]["clusters"][0]
+        self.assertEqual(cluster["peak_pixel_row"], 64)
+        self.assertEqual(cluster["peak_pixel_col"], 64)
+        self.assertAlmostEqual(cluster["world_x"], 2.0)
+        self.assertAlmostEqual(cluster["world_z"], 2.0)
+        self.assertAlmostEqual(cluster["lat"], 24.0 - (2.0 / 111320.0))
+        self.assertAlmostEqual(cluster["lon"], 121.0 + (2.0 / (111320.0 * np.cos(np.radians(24.0)))))
+
     def test_gpsn_statistics_rows_include_ten_chinese_metrics(self):
         from app.iss_unet_service import ISSUNetArtifacts, ISSUNetCFARParams, SceneDataset
         from app.iss_unet_stats_service import build_gpsn_statistics_rows

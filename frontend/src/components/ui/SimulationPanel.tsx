@@ -6,6 +6,7 @@ import {
   buildIssUnetStatisticsFormData,
   buildIssUnetUploadFormData,
 } from '../../utils/issUnetRequest';
+import type { CFARCluster } from '../../types/cfar';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -87,9 +88,14 @@ const ISS_UNET_MODE_LABELS: Record<ISSUNetMode, string> = {
 interface SimulationPanelProps {
   sceneId?: string | null;
   generatedScene?: boolean;
+  onCfarClustersChange?: (clusters: CFARCluster[]) => void;
 }
 
-export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: SimulationPanelProps) {
+export function SimulationPanel({
+  sceneId = 'NTPU',
+  generatedScene = false,
+  onCfarClustersChange,
+}: SimulationPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
   const [preview, setPreview] = useState<{ url: string; title: string; downloadName?: string } | null>(null);
@@ -146,6 +152,9 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
 
   const compute = useCallback(async (key: TabKey) => {
     if (generatedScene && !sceneId) {
+      if (key === 'iss_unet') {
+        onCfarClustersChange?.([]);
+      }
       setStatus(prev => ({
         ...prev,
         [key]: {
@@ -158,6 +167,9 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     }
 
       setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null, metrics: null, options: null } }));
+      if (key === 'iss_unet') {
+        onCfarClustersChange?.([]);
+      }
 
     try {
       let res;
@@ -285,6 +297,10 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
           comparison: buildUrl(json.images?.comparison ?? null),
           cfar: buildUrl(json.images?.cfar ?? null),
         };
+        const cfarClusters: CFARCluster[] = Array.isArray(json.cfar?.clusters)
+          ? json.cfar.clusters
+          : [];
+        onCfarClustersChange?.(issUnetParams.cfar_enabled ? cfarClusters : []);
         url = unetImages.comparison || unetImages.reconstructed || '';
         setStatus(prev => ({
           ...prev,
@@ -304,10 +320,13 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
       }
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: url, error: null, metrics: null, options: null } }));
     } catch (err) {
+      if (key === 'iss_unet') {
+        onCfarClustersChange?.([]);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
-  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams]);
+  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange]);
 
   const generateStatistics = useCallback(async () => {
     if (generatedScene && !sceneId) {

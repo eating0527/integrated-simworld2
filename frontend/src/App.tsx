@@ -16,7 +16,7 @@ import { PhotoViewer } from './components/ui/PhotoViewer';
 import { GPSStatus } from './components/ui/GPSStatus';
 import { useGPSSync } from './hooks/useGPSSync';
 import { useGeneratedScenes } from './hooks/useGeneratedScene';
-import { latLonToENU } from './utils/geo';
+import { latLonToENU, worldXZToLatLon } from './utils/geo';
 import { ControllerScreenPanel } from './components/ui/ControllerScreenPanel';
 import { SimulationPanel } from './components/ui/SimulationPanel';
 import { SceneSwitcher, type SelectedScene } from './components/ui/SceneSwitcher';
@@ -27,6 +27,7 @@ import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
 import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
+import type { CFARBeacon, CFARCluster } from './types/cfar';
 
 // ── 環境變數 ────────────────────────────────────────────────────────
 
@@ -385,6 +386,22 @@ export function App() {
   const currentGPS = isMobile && localGPS.lat !== 0 ? localGPS : null;
   const simulationSceneId = activeGeneratedScene?.sceneKey ?? renderSceneId;
   const simulationUsesGeneratedScene = Boolean(activeGeneratedScene);
+  const [cfarClusters, setCfarClusters] = useState<CFARCluster[]>([]);
+  const cfarBeacons = useMemo<CFARBeacon[]>(() => (
+    cfarClusters.map((cluster) => {
+      const gps = worldXZToLatLon(cluster.world_x, cluster.world_z, activeOrigin);
+      return {
+        ...cluster,
+        lat: isFiniteNumber(cluster.lat) ? cluster.lat : gps.lat,
+        lon: isFiniteNumber(cluster.lon) ? cluster.lon : gps.lon,
+        alt: gps.alt,
+      };
+    })
+  ), [activeOrigin, cfarClusters]);
+
+  useEffect(() => {
+    setCfarClusters([]);
+  }, [activeOriginKey, simulationSceneId]);
 
   // ── Render ────────────────────────────────────────────────────────
   return (
@@ -400,6 +417,7 @@ export function App() {
         onManualMoveDone={handleManualMoveDone}
         uavAnimation={uavAnimation}
         otherUavs={otherUavs}
+        cfarBeacons={cfarBeacons}
         generatedSceneModelPath={activeGeneratedScene?.modelPath}
         onPositionUpdate={(pos) => {
           setUavPosition(pos);
@@ -471,6 +489,7 @@ export function App() {
         <SimulationPanel
           sceneId={simulationSceneId}
           generatedScene={simulationUsesGeneratedScene}
+          onCfarClustersChange={setCfarClusters}
         />
       )}
 
