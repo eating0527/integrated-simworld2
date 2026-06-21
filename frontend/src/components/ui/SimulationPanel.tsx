@@ -120,7 +120,7 @@ export function SimulationPanel({ sceneId = 'NTPU', generatedScene = false }: Si
     sparseRatioPercent: 20,
     cfar_enabled: true,
     apply_building_mask: true,
-    focusSamplingPoints: true,
+    focusSamplingPoints: false,
     gpsFile: null,
     noiseFile: null,
   });

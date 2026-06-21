@@ -111,54 +111,54 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
 
     return [
         {
-            "variable": "GPS/Noise 時間對齊率",
+            "variable": "採樣資料對齊率",
             "value": _format_percent(_safe_divide(aligned_noise, aligned_noise + skipped_noise)),
-            "meaning": "noise.csv 與 gps.csv 的時間同步品質",
+            "meaning": "干擾採樣與座標資料的時間同步品質",
         },
         {
             "variable": "有效量測率",
             "value": _format_percent(_safe_divide(aligned_noise - out_of_bounds - indoor_filtered, aligned_noise)),
-            "meaning": "真實量測成功落在虛擬場景有效區域的比例",
+            "meaning": "干擾採樣成功落在虛擬場景有效區域的比例",
         },
         {
-            "variable": "唯一採樣格點比例",
+            "variable": "相異採樣點率",
             "value": _format_percent(_safe_divide(used_samples, valid_projected_points)),
-            "meaning": "有效投影點轉成地圖格點後，有多少不是重複格點",
+            "meaning": "排除重複採樣點後，剩餘相異採樣點的比例",
         },
         {
-            "variable": "採樣點地圖覆蓋率",
+            "variable": "地圖覆蓋率",
             "value": _format_percent(_safe_divide(used_samples, outdoor_pixels)),
-            "meaning": "採樣點覆蓋整張室外地圖的比例",
+            "meaning": "干擾採樣佔 512*512 室外地圖的比例",
         },
         {
-            "variable": "實測干擾 95 百分位",
+            "variable": "干擾熱區強度",
             "value": _format_db(noise_p95, "dBm"),
-            "meaning": "真實干擾強度熱點的代表值",
+            "meaning": "干擾熱區訊號強度，取 95 百分位數",
         },
         {
-            "variable": "虛實樣本平均誤差",
-            "value": _format_db(sim_real_mae, "dB"),
-            "meaning": "虛擬 Sionna 干擾圖與真實量測在同一位置的功率差",
-        },
-        {
-            "variable": "虛實空間趨勢相關",
+            "variable": "虛實空間相關度",
             "value": _format_corr(sim_real_corr),
-            "meaning": "虛擬圖與真實量測的空間趨勢一致程度",
+            "meaning": "重建干擾地圖 vs 真實量測值的空間趨勢一致程度，越接近 1 越好",
+        },
+        {
+            "variable": "虛實平均誤差",
+            "value": _format_db(sim_real_mae, "dB"),
+            "meaning": "模擬干擾地圖 vs 真實量測值的 MAE",
         },
         {
             "variable": "重建樣本平均誤差",
             "value": _format_db(sample_point_mae, "dB"),
-            "meaning": "重建地圖是否貼近真實量測點",
+            "meaning": "重建干擾地圖 vs 真實量測值的 MAE",
+        },
+        {
+            "variable": "CFAR 定位誤差",
+            "value": _format_px(hotspot_error),
+            "meaning": "重建干擾源 vs 真實干擾源的定位誤差",
         },
         {
             "variable": "重建樣本偏差",
             "value": _format_db(sample_point_bias, "dB"),
             "meaning": "重建結果是否系統性高估或低估",
-        },
-        {
-            "variable": "CFAR 熱點定位誤差",
-            "value": _format_px(hotspot_error),
-            "meaning": "偵測出的干擾熱點是否貼近實測熱點",
         },
     ]
 
@@ -184,14 +184,22 @@ def _configure_statistics_fonts() -> dict[str, font_manager.FontProperties]:
     }
 
 
-def render_statistics_table_png(rows: list[dict[str, str]]) -> bytes:
+def _statistics_column_labels() -> list[str]:
+    return ["統計指標", "數值", "說明"]
+
+
+def _statistics_table_title(scene: str) -> str:
+    return f"{scene.upper()} 統計資料"
+
+
+def render_statistics_table_png(rows: list[dict[str, str]], title: str = "統計資料") -> bytes:
     fonts = _configure_statistics_fonts()
     fig, ax = plt.subplots(figsize=(12, 5.8), facecolor="white")
     ax.set_facecolor("white")
     ax.axis("off")
     table = ax.table(
         cellText=[[row["variable"], row["value"], row["meaning"]] for row in rows],
-        colLabels=["統計變數", "數值", "說明"],
+        colLabels=_statistics_column_labels(),
         colWidths=[0.24, 0.18, 0.58],
         cellLoc="left",
         loc="center",
@@ -220,14 +228,14 @@ def render_statistics_table_png(rows: list[dict[str, str]]) -> bytes:
     fig.subplots_adjust(left=0.035, right=0.965, top=0.965, bottom=0.14)
     fig.canvas.draw()
     table_bbox = table.get_window_extent(fig.canvas.get_renderer()).transformed(fig.transFigure.inverted())
-    caption_y = max(0.035, table_bbox.y0 - 0.06)
-    caption = fig.text(0.5, caption_y, "表 1 GPS_N 統計資料表", ha="center", va="bottom", fontproperties=fonts["caption"])
+    title_y = min(0.965, table_bbox.y1 + 0.06)
+    title_text = fig.text(0.5, title_y, title, ha="center", va="bottom", fontproperties=fonts["caption"])
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     output_bbox = Bbox.union(
         [
             table.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()),
-            caption.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()),
+            title_text.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()),
         ]
     ).padded(0.15)
     buffer = io.BytesIO()
@@ -239,7 +247,7 @@ def render_statistics_table_png(rows: list[dict[str, str]]) -> bytes:
 def save_statistics_table_png(scene: str, rows: list[dict[str, str]]) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"iss_unet_{scene.lower()}_gps_n_statistics.png"
-    path.write_bytes(render_statistics_table_png(rows))
+    path.write_bytes(render_statistics_table_png(rows, title=_statistics_table_title(scene)))
     return path
 
 
