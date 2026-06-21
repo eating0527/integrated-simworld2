@@ -29,6 +29,15 @@ function successfulIssUnetResponse() {
         sparse_samples: 2,
         route_points: 0,
       },
+      overlay: {
+        kind: 'reconstructed_iss',
+        url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+        rows: 128,
+        cols: 128,
+        area_m: 512,
+        vmin_dbm: -140,
+        vmax_dbm: -40,
+      },
       options: {
         apply_building_mask: true,
       },
@@ -283,6 +292,79 @@ describe('SimulationPanel UI', () => {
         world_z: -2,
       }),
     ]));
+  });
+
+  it('does not enable 3D heatmap overlay until the user turns it on', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponse());
+    const onHeatmapOverlayChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await runCurrentTab(user);
+
+    await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' });
+    expect(onHeatmapOverlayChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: expect.stringContaining('/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy'),
+      }),
+    );
+  });
+
+  it('publishes heatmap overlay state when toggled and opacity changes', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponse());
+    const onHeatmapOverlayChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await runCurrentTab(user);
+
+    await user.click(await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' }));
+
+    await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+        opacity: 0.55,
+        rows: 128,
+        cols: 128,
+        areaM: 512,
+      }),
+    ));
+
+    fireEvent.change(screen.getByLabelText('Overlay Opacity'), { target: { value: '0.8' } });
+
+    await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        opacity: 0.8,
+      }),
+    ));
+  });
+
+  it('clears a previously enabled heatmap overlay on rerun and scene change', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponse());
+    const onHeatmapOverlayChange = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await runCurrentTab(user);
+    await user.click(await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' }));
+
+    await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+      }),
+    ));
+
+    await runCurrentTab(user);
+    await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenLastCalledWith(null));
+
+    rerender(<SimulationPanel sceneId="NYCU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+    await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenLastCalledWith(null));
   });
 
   it('shows loading state while a simulation request is pending', async () => {

@@ -53,6 +53,10 @@ def result_image_url(filename: str) -> str:
     return f"/api/iss-unet/images/{filename}"
 
 
+def result_grid_url(filename: str) -> str:
+    return f"/api/iss-unet/grids/{filename}"
+
+
 @dataclass(frozen=True)
 class SceneDataset:
     scene: str
@@ -280,6 +284,19 @@ def _cfar_grid_metadata(dataset: SceneDataset, shape: tuple[int, int]) -> dict[s
         "cols": int(cols),
         "area_m": float(area_m),
         "pixel_size_m": float(area_m / cols),
+    }
+
+
+def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, int]) -> dict[str, Any]:
+    grid = _cfar_grid_metadata(dataset, shape)
+    return {
+        "kind": "reconstructed_iss",
+        "url": result_grid_url(filename),
+        "rows": grid["rows"],
+        "cols": grid["cols"],
+        "area_m": grid["area_m"],
+        "vmin_dbm": float(ISS_MIN_DBM),
+        "vmax_dbm": -40.0,
     }
 
 
@@ -1006,6 +1023,7 @@ def reconstruct_iss_unet(
             "comparison": result_image_url(comparison_path.name),
             "cfar": result_image_url(cfar_path.name) if cfar.enabled else None,
         },
+        "overlay": _overlay_metadata(dataset, npy_path.name, reconstructed_iss.shape),
         "files": {
             "reconstructed_png": str(reconstructed_path),
             "comparison_png": str(comparison_path),

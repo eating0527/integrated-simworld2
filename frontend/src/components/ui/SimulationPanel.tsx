@@ -7,6 +7,7 @@ import {
   buildIssUnetUploadFormData,
 } from '../../utils/issUnetRequest';
 import type { CFARCluster } from '../../types/cfar';
+import type { HeatmapOverlayConfig } from '../../types/heatmap';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -55,6 +56,16 @@ interface ISSUNetStatisticsState {
   rows: Array<{ variable: string; value: string; meaning: string }>;
 }
 
+interface ISSUNetOverlayResponse {
+  kind: 'reconstructed_iss';
+  url: string;
+  rows: number;
+  cols: number;
+  area_m: number;
+  vmin_dbm: number;
+  vmax_dbm: number;
+}
+
 const ISS_UNET_VIEW_LABELS: Record<ISSUNetViewKey, string> = {
   reconstructed: 'Reconstructed',
   comparison: '干擾地圖',
@@ -89,12 +100,14 @@ interface SimulationPanelProps {
   sceneId?: string | null;
   generatedScene?: boolean;
   onCfarClustersChange?: (clusters: CFARCluster[]) => void;
+  onHeatmapOverlayChange?: (overlay: HeatmapOverlayConfig | null) => void;
 }
 
 export function SimulationPanel({
   sceneId = 'NTPU',
   generatedScene = false,
   onCfarClustersChange,
+  onHeatmapOverlayChange,
 }: SimulationPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
@@ -136,12 +149,42 @@ export function SimulationPanel({
     error: null,
     rows: [],
   });
+  const [issUnetOverlay, setIssUnetOverlay] = useState<ISSUNetOverlayResponse | null>(null);
+  const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(false);
+  const [heatmapOpacity, setHeatmapOpacity] = useState(0.55);
+
+  const clearHeatmapOverlay = useCallback(() => {
+    setIssUnetOverlay(null);
+    setShowHeatmapOverlay(false);
+    setHeatmapOpacity(0.55);
+    onHeatmapOverlayChange?.(null);
+  }, [onHeatmapOverlayChange]);
 
   useEffect(() => {
     if (generatedScene && !GENERATED_SCENE_TABS.includes(tab)) {
       setTab('iss');
     }
   }, [generatedScene, tab]);
+
+  useEffect(() => {
+    clearHeatmapOverlay();
+  }, [sceneId, clearHeatmapOverlay]);
+
+  useEffect(() => {
+    if (!showHeatmapOverlay || !issUnetOverlay) {
+      onHeatmapOverlayChange?.(null);
+      return;
+    }
+    onHeatmapOverlayChange?.({
+      url: `${API}${issUnetOverlay.url}`,
+      rows: issUnetOverlay.rows,
+      cols: issUnetOverlay.cols,
+      areaM: issUnetOverlay.area_m,
+      opacity: heatmapOpacity,
+      vminDbm: issUnetOverlay.vmin_dbm,
+      vmaxDbm: issUnetOverlay.vmax_dbm,
+    });
+  }, [heatmapOpacity, issUnetOverlay, onHeatmapOverlayChange, showHeatmapOverlay]);
 
   const updateCfrAdvanced = <K extends keyof CFRAdvancedParams>(
     key: K,
@@ -154,6 +197,7 @@ export function SimulationPanel({
     if (generatedScene && !sceneId) {
       if (key === 'iss_unet') {
         onCfarClustersChange?.([]);
+        clearHeatmapOverlay();
       }
       setStatus(prev => ({
         ...prev,
@@ -169,6 +213,7 @@ export function SimulationPanel({
       setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null, metrics: null, options: null } }));
       if (key === 'iss_unet') {
         onCfarClustersChange?.([]);
+        clearHeatmapOverlay();
       }
 
     try {
@@ -297,6 +342,23 @@ export function SimulationPanel({
           comparison: buildUrl(json.images?.comparison ?? null),
           cfar: buildUrl(json.images?.cfar ?? null),
         };
+        const overlay = json.overlay;
+        if (
+          overlay
+          && overlay.kind === 'reconstructed_iss'
+          && typeof overlay.url === 'string'
+          && typeof overlay.rows === 'number'
+          && typeof overlay.cols === 'number'
+          && typeof overlay.area_m === 'number'
+          && typeof overlay.vmin_dbm === 'number'
+          && typeof overlay.vmax_dbm === 'number'
+        ) {
+          setIssUnetOverlay(overlay as ISSUNetOverlayResponse);
+          setShowHeatmapOverlay(false);
+          setHeatmapOpacity(0.55);
+        } else {
+          clearHeatmapOverlay();
+        }
         const cfarClusters: CFARCluster[] = Array.isArray(json.cfar?.clusters)
           ? json.cfar.clusters
           : [];
@@ -322,11 +384,12 @@ export function SimulationPanel({
     } catch (err) {
       if (key === 'iss_unet') {
         onCfarClustersChange?.([]);
+        clearHeatmapOverlay();
       }
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
-  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange]);
+  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay]);
 
   const generateStatistics = useCallback(async () => {
     if (generatedScene && !sceneId) {
@@ -582,6 +645,7 @@ export function SimulationPanel({
                   )}
                   <Label>OS-CFAR</Label>
                   <ToggleSwitch
+                    ariaLabel="OS-CFAR"
                     checked={issUnetParams.cfar_enabled}
                     onChange={v => setIssUnetParams(p => ({ ...p, cfar_enabled: v }))}
                   />
@@ -589,6 +653,7 @@ export function SimulationPanel({
                   <Hint>預測並標示干擾源位置。</Hint>
                   <Label>Building Mask</Label>
                   <ToggleSwitch
+                    ariaLabel="Building Mask"
                     checked={issUnetParams.apply_building_mask}
                     onChange={v => setIssUnetParams(p => ({ ...p, apply_building_mask: v }))}
                   />
@@ -596,6 +661,7 @@ export function SimulationPanel({
                   <Hint>顯示建築物的遮蔽效果。</Hint>
                   <Label>聚焦採樣點</Label>
                   <ToggleSwitch
+                    ariaLabel="Focus Sampling Points"
                     checked={issUnetParams.focusSamplingPoints}
                     disabled={issUnetParams.mode !== 'gps_n'}
                     onChange={v => setIssUnetParams(p => ({ ...p, focusSamplingPoints: v }))}
@@ -603,6 +669,34 @@ export function SimulationPanel({
                   <div />
                   <Hint>僅 Noise with GPS 模式可用。聚焦 GPS 採樣點周遭的像素（若顯示異常請關閉）。</Hint>
                 </ParamGrid>
+                {issUnetOverlay && (
+                  <div style={{
+                    marginTop: 10,
+                    background: 'rgba(0,0,0,.18)',
+                    border: '1px solid rgba(0,255,255,.12)',
+                    borderRadius: 10,
+                    padding: 10,
+                  }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, auto) 1fr', gap: '8px 12px', alignItems: 'center' }}>
+                      <Label>3D Heatmap Overlay</Label>
+                      <ToggleSwitch
+                        ariaLabel="3D Heatmap Overlay"
+                        checked={showHeatmapOverlay}
+                        onChange={setShowHeatmapOverlay}
+                      />
+                      <Label>Overlay Opacity</Label>
+                      <input
+                        type="range"
+                        aria-label="Overlay Opacity"
+                        min={0.1}
+                        max={1}
+                        step={0.05}
+                        value={heatmapOpacity}
+                        onChange={event => setHeatmapOpacity(Number(event.target.value))}
+                      />
+                    </div>
+                  </div>
+                )}
                 {issUnetParams.mode === 'gps_n' && (
                   <button
                     type="button"
@@ -1265,10 +1359,12 @@ function NumberInput({
 }
 
 function ToggleSwitch({
+  ariaLabel,
   checked,
   disabled = false,
   onChange,
 }: {
+  ariaLabel?: string,
   checked: boolean,
   disabled?: boolean,
   onChange: (v: boolean) => void,
@@ -1281,7 +1377,10 @@ function ToggleSwitch({
           onChange(!checked);
         }
       }}
+      role="checkbox"
+      aria-checked={checked}
       aria-pressed={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       style={{
         width: 40,

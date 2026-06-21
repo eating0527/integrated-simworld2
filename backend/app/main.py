@@ -12,6 +12,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import numpy as np
 
 # Auto-set DRJIT_LIBLLVM_PATH before any drjit/mitsuba/sionna import
 if os.name == "nt" and not os.environ.get("DRJIT_LIBLLVM_PATH"):
@@ -1969,6 +1970,53 @@ async def iss_unet_image_get(filename: str):
         return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
 
     return FileResponse(image_path, media_type="image/png", filename=filename)
+
+
+@app.get("/api/iss-unet/grids/{filename}")
+async def iss_unet_grid_get(filename: str):
+    from app.iss_unet_service import OUTPUT_DIR, DEFAULT_SCENE_AREA_M
+
+    valid_grid = re.fullmatch(
+        r"iss_unet_[A-Za-z0-9_-]+(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy",
+        filename,
+    )
+    if "/" in filename or "\\" in filename or not valid_grid:
+        return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
+
+    grid_path = OUTPUT_DIR / filename
+    if not grid_path.exists():
+        return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
+
+    try:
+        values = np.load(grid_path).astype(np.float32)
+    except Exception:
+        return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
+
+    if values.ndim != 2:
+        return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
+
+    scene_match = re.match(r"iss_unet_([A-Za-z0-9_-]+?)(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy", filename)
+    scene_name = scene_match.group(1).upper() if scene_match else ""
+    scene_meta_path = SCENE_DIR / scene_name / "iss_unet_data" / "scene_meta.json"
+    area_m = DEFAULT_SCENE_AREA_M
+    if scene_meta_path.exists():
+        try:
+            meta = json.loads(scene_meta_path.read_text(encoding="utf-8"))
+            parsed_area = float(meta.get("area_m", DEFAULT_SCENE_AREA_M))
+            if np.isfinite(parsed_area) and parsed_area > 0:
+                area_m = parsed_area
+        except Exception:
+            area_m = DEFAULT_SCENE_AREA_M
+
+    return {
+        "success": True,
+        "rows": int(values.shape[0]),
+        "cols": int(values.shape[1]),
+        "area_m": float(area_m),
+        "min_dbm": float(np.min(values)),
+        "max_dbm": float(np.max(values)),
+        "values": values.tolist(),
+    }
 
 
 class CFRAdvancedParams(BaseModel):

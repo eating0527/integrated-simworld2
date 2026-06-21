@@ -28,6 +28,7 @@ import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
+import type { HeatmapOverlayConfig } from './types/heatmap';
 
 // ── 環境變數 ────────────────────────────────────────────────────────
 
@@ -387,6 +388,7 @@ export function App() {
   const simulationSceneId = activeGeneratedScene?.sceneKey ?? renderSceneId;
   const simulationUsesGeneratedScene = Boolean(activeGeneratedScene);
   const [cfarClusters, setCfarClusters] = useState<CFARCluster[]>([]);
+  const [heatmapOverlay, setHeatmapOverlay] = useState<HeatmapOverlayConfig | null>(null);
   const cfarBeacons = useMemo<CFARBeacon[]>(() => (
     cfarClusters.map((cluster) => {
       const gps = worldXZToLatLon(cluster.world_x, cluster.world_z, activeOrigin);
@@ -401,6 +403,7 @@ export function App() {
 
   useEffect(() => {
     setCfarClusters([]);
+    setHeatmapOverlay(null);
   }, [activeOriginKey, simulationSceneId]);
 
   // ── Render ────────────────────────────────────────────────────────
@@ -418,6 +421,7 @@ export function App() {
         uavAnimation={uavAnimation}
         otherUavs={otherUavs}
         cfarBeacons={cfarBeacons}
+        heatmapOverlay={heatmapOverlay}
         generatedSceneModelPath={activeGeneratedScene?.modelPath}
         onPositionUpdate={(pos) => {
           setUavPosition(pos);
@@ -490,6 +494,7 @@ export function App() {
           sceneId={simulationSceneId}
           generatedScene={simulationUsesGeneratedScene}
           onCfarClustersChange={setCfarClusters}
+          onHeatmapOverlayChange={setHeatmapOverlay}
         />
       )}
 

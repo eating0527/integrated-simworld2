@@ -579,6 +579,49 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertAlmostEqual(cluster["world_z"], 2.0)
         self.assertAlmostEqual(cluster["lat"], 24.0 - (2.0 / 111320.0))
         self.assertAlmostEqual(cluster["lon"], 121.0 + (2.0 / (111320.0 * np.cos(np.radians(24.0)))))
+        self.assertEqual(result["overlay"], {
+            "kind": "reconstructed_iss",
+            "url": f"/api/iss-unet/grids/{Path(result['files']['reconstructed_npy']).name}",
+            "rows": 128,
+            "cols": 128,
+            "area_m": 512.0,
+            "vmin_dbm": -140.0,
+            "vmax_dbm": -40.0,
+        })
+
+    def test_grid_endpoint_returns_reconstructed_overlay_json(self):
+        from app.iss_unet_service import OUTPUT_DIR
+
+        values = np.array(
+            [
+                [-80.0, -70.0],
+                [-60.0, -50.0],
+            ],
+            dtype=np.float32,
+        )
+        filename = "iss_unet_ntpu_ratio_20_reconstructed.npy"
+        np.save(self.output_dir / filename, values)
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            response = asyncio.run(main.iss_unet_grid_get(filename))
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(response["rows"], 2)
+        self.assertEqual(response["cols"], 2)
+        self.assertEqual(response["area_m"], 512.0)
+        self.assertEqual(response["min_dbm"], -80.0)
+        self.assertEqual(response["max_dbm"], -50.0)
+        self.assertEqual(response["values"], [[-80.0, -70.0], [-60.0, -50.0]])
+
+    def test_grid_endpoint_rejects_illegal_or_missing_filename(self):
+        from app.iss_unet_service import OUTPUT_DIR
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            invalid = asyncio.run(main.iss_unet_grid_get("../secret.npy"))
+            missing = asyncio.run(main.iss_unet_grid_get("iss_unet_ntpu_ratio_20_reconstructed.npy"))
+
+        self.assertEqual(invalid.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
 
     def test_gpsn_statistics_rows_include_ten_chinese_metrics(self):
         from app.iss_unet_service import ISSUNetArtifacts, ISSUNetCFARParams, SceneDataset
