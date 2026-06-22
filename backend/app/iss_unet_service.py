@@ -254,6 +254,43 @@ def _scene_area_m(dataset: SceneDataset) -> float:
     return area_m if np.isfinite(area_m) and area_m > 0 else DEFAULT_SCENE_AREA_M
 
 
+def _legacy_grid_bounds(area_m: float, rows: int, cols: int) -> dict[str, float]:
+    half = float(area_m) / 2.0
+    return {
+        "min_x": -half,
+        "max_x": half,
+        "min_y": -half,
+        "max_y": half,
+        "pixel_size_x_m": float(area_m) / float(cols),
+        "pixel_size_y_m": float(area_m) / float(rows),
+    }
+
+
+def _scene_grid_bounds(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, float]:
+    rows, cols = shape
+    area_m = _scene_area_m(dataset)
+    meta = _read_dataset_json(dataset.meta_path)
+    raw_bounds = meta.get("grid_bounds")
+    if isinstance(raw_bounds, dict):
+        try:
+            min_x = float(raw_bounds["min_x"])
+            max_x = float(raw_bounds["max_x"])
+            min_y = float(raw_bounds["min_y"])
+            max_y = float(raw_bounds["max_y"])
+        except (KeyError, TypeError, ValueError):
+            return _legacy_grid_bounds(area_m, rows, cols)
+        if all(np.isfinite(value) for value in (min_x, max_x, min_y, max_y)) and max_x > min_x and max_y > min_y:
+            return {
+                "min_x": min_x,
+                "max_x": max_x,
+                "min_y": min_y,
+                "max_y": max_y,
+                "pixel_size_x_m": float((max_x - min_x) / float(cols)),
+                "pixel_size_y_m": float((max_y - min_y) / float(rows)),
+            }
+    return _legacy_grid_bounds(area_m, rows, cols)
+
+
 def _read_dataset_json(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
@@ -279,11 +316,15 @@ def _scene_center(dataset: SceneDataset) -> tuple[float, float] | None:
 def _cfar_grid_metadata(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, Any]:
     rows, cols = shape
     area_m = _scene_area_m(dataset)
+    grid_bounds = _scene_grid_bounds(dataset, shape)
     return {
         "rows": int(rows),
         "cols": int(cols),
         "area_m": float(area_m),
         "pixel_size_m": float(area_m / cols),
+        "pixel_size_x_m": grid_bounds["pixel_size_x_m"],
+        "pixel_size_y_m": grid_bounds["pixel_size_y_m"],
+        "grid_bounds": grid_bounds,
     }
 
 
@@ -295,12 +336,24 @@ def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, in
         "rows": grid["rows"],
         "cols": grid["cols"],
         "area_m": grid["area_m"],
+        "width_m": float(grid["grid_bounds"]["max_x"] - grid["grid_bounds"]["min_x"]),
+        "height_m": float(grid["grid_bounds"]["max_y"] - grid["grid_bounds"]["min_y"]),
+        "grid_bounds": grid["grid_bounds"],
         "vmin_dbm": float(ISS_MIN_DBM),
         "vmax_dbm": -40.0,
     }
 
 
 def _cfar_pixel_to_world(row: int, col: int, grid: dict[str, Any]) -> tuple[float, float]:
+    bounds = grid.get("grid_bounds")
+    if isinstance(bounds, dict):
+        min_x = float(bounds["min_x"])
+        max_y = float(bounds["max_y"])
+        pixel_size_x = float(bounds.get("pixel_size_x_m", grid.get("pixel_size_x_m")))
+        pixel_size_y = float(bounds.get("pixel_size_y_m", grid.get("pixel_size_y_m")))
+        world_x = min_x + (float(col) + 0.5) * pixel_size_x
+        north_m = max_y - (float(row) + 0.5) * pixel_size_y
+        return float(world_x), float(-north_m)
     area_m = float(grid["area_m"])
     pixel_size_m = float(grid["pixel_size_m"])
     world_x = -area_m / 2.0 + (float(col) + 0.5) * pixel_size_m

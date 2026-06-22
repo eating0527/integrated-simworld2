@@ -576,12 +576,15 @@ class ISSUNetServiceTests(unittest.TestCase):
                     scene_dir=self.scene_dir,
                 )
 
-        self.assertEqual(result["cfar"]["grid"], {
-            "rows": 128,
-            "cols": 128,
-            "area_m": 512.0,
-            "pixel_size_m": 4.0,
-        })
+        grid = result["cfar"]["grid"]
+        self.assertEqual(grid["rows"], 128)
+        self.assertEqual(grid["cols"], 128)
+        self.assertEqual(grid["area_m"], 512.0)
+        self.assertEqual(grid["pixel_size_m"], 4.0)
+        self.assertEqual(grid["grid_bounds"]["min_x"], -256.0)
+        self.assertEqual(grid["grid_bounds"]["max_x"], 256.0)
+        self.assertEqual(grid["grid_bounds"]["min_y"], -256.0)
+        self.assertEqual(grid["grid_bounds"]["max_y"], 256.0)
         cluster = result["cfar"]["clusters"][0]
         self.assertEqual(cluster["peak_pixel_row"], 64)
         self.assertEqual(cluster["peak_pixel_col"], 64)
@@ -589,15 +592,74 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertAlmostEqual(cluster["world_z"], 2.0)
         self.assertAlmostEqual(cluster["lat"], 24.0 - (2.0 / 111320.0))
         self.assertAlmostEqual(cluster["lon"], 121.0 + (2.0 / (111320.0 * np.cos(np.radians(24.0)))))
-        self.assertEqual(result["overlay"], {
-            "kind": "reconstructed_iss",
-            "url": f"/api/iss-unet/grids/{Path(result['files']['reconstructed_npy']).name}",
-            "rows": 128,
-            "cols": 128,
-            "area_m": 512.0,
-            "vmin_dbm": -140.0,
-            "vmax_dbm": -40.0,
-        })
+        overlay = result["overlay"]
+        self.assertEqual(overlay["kind"], "reconstructed_iss")
+        self.assertEqual(overlay["url"], f"/api/iss-unet/grids/{Path(result['files']['reconstructed_npy']).name}")
+        self.assertEqual(overlay["rows"], 128)
+        self.assertEqual(overlay["cols"], 128)
+        self.assertEqual(overlay["area_m"], 512.0)
+        self.assertEqual(overlay["width_m"], 512.0)
+        self.assertEqual(overlay["height_m"], 512.0)
+        self.assertEqual(overlay["grid_bounds"]["min_x"], -256.0)
+        self.assertEqual(overlay["grid_bounds"]["max_x"], 256.0)
+        self.assertEqual(overlay["vmin_dbm"], -140.0)
+        self.assertEqual(overlay["vmax_dbm"], -40.0)
+
+    def test_reconstruct_result_uses_grid_bounds_for_cfar_and_overlay_world_coordinates(self):
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        data_dir = self._write_ntpu_dataset()
+        grid_bounds = {
+            "min_x": -300.0,
+            "max_x": 293.0,
+            "min_y": -260.0,
+            "max_y": 270.0,
+            "pixel_size_x_m": 593.0 / 128.0,
+            "pixel_size_y_m": 530.0 / 128.0,
+        }
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128, "grid_bounds": grid_bounds}),
+            encoding="utf-8",
+        )
+        fake_cfar = {
+            "detection_map": np.zeros((128, 128), dtype=np.float32),
+            "threshold_map": np.full((128, 128), -80.0, dtype=np.float32),
+            "detections": [{"row": 0, "col": 127, "power_dbm": -42.5}],
+            "clusters": [
+                {
+                    "peak_pixel_row": 0,
+                    "peak_pixel_col": 127,
+                    "peak_power_dbm": -42.5,
+                    "mean_power_dbm": -45.0,
+                    "size": 9,
+                }
+            ],
+        }
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            with patch("app.iss_unet_service._cfar_detect", return_value=fake_cfar):
+                result = reconstruct_iss_unet(
+                    scene="NTPU",
+                    sparse_ratio=0.2,
+                    cfar=ISSUNetCFARParams(enabled=True),
+                    seed=41,
+                    device="cpu",
+                    mode="sim",
+                    scene_dir=self.scene_dir,
+                )
+
+        grid = result["cfar"]["grid"]
+        self.assertEqual(grid["rows"], 128)
+        self.assertEqual(grid["cols"], 128)
+        self.assertEqual(grid["grid_bounds"], grid_bounds)
+        self.assertAlmostEqual(grid["pixel_size_x_m"], 593.0 / 128.0)
+        self.assertAlmostEqual(grid["pixel_size_y_m"], 530.0 / 128.0)
+        cluster = result["cfar"]["clusters"][0]
+        self.assertAlmostEqual(cluster["world_x"], 293.0 - (593.0 / 128.0) / 2.0)
+        self.assertAlmostEqual(cluster["world_z"], -(270.0 - (530.0 / 128.0) / 2.0))
+        self.assertEqual(result["overlay"]["grid_bounds"], grid_bounds)
+        self.assertAlmostEqual(result["overlay"]["width_m"], 593.0)
+        self.assertAlmostEqual(result["overlay"]["height_m"], 530.0)
 
     def test_grid_endpoint_returns_reconstructed_overlay_json(self):
         from app.iss_unet_service import OUTPUT_DIR
@@ -1564,7 +1626,55 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(meta["scene"], "NYCU")
         self.assertEqual(meta["grid_res"], 128)
         self.assertEqual(meta["area_m"], 512.0)
+        self.assertEqual(meta["grid_bounds"]["min_x"], -256.0)
+        self.assertEqual(meta["grid_bounds"]["max_x"], 256.0)
+        self.assertEqual(meta["grid_bounds"]["pixel_size_x_m"], 4.0)
         self.assertEqual(meta["outputs"]["iss"], "sionna_iss.npy")
+
+    def test_rasterize_building_height_from_ply_uses_mesh_footprint_not_bbox(self):
+        scene_root = self.scene_dir / "CUSTOM"
+        scene_root.mkdir(parents=True)
+        (scene_root / "building.ply").write_text("ply placeholder", encoding="utf-8")
+        scene_xml = scene_root / "CUSTOM.xml"
+        scene_xml.write_text(
+            """
+            <scene>
+              <shape type="ply" id="mesh-building">
+                <string name="filename" value="building.ply"/>
+              </shape>
+            </scene>
+            """,
+            encoding="utf-8",
+        )
+        vertices = np.array(
+            [
+                [-4.0, -4.0, 0.0],
+                [4.0, -4.0, 0.0],
+                [-4.0, 4.0, 0.0],
+                [-4.0, -4.0, 10.0],
+                [4.0, -4.0, 10.0],
+                [-4.0, 4.0, 10.0],
+            ],
+            dtype=np.float32,
+        )
+        faces = np.array(
+            [
+                [0, 1, 2],
+                [3, 5, 4],
+            ],
+            dtype=np.int64,
+        )
+        fake_mesh = types.SimpleNamespace(vertices=vertices, faces=faces)
+        fake_trimesh = types.SimpleNamespace(load_mesh=lambda *_args, **_kwargs: fake_mesh)
+
+        from app.iss_unet_dataset_service import rasterize_building_height_from_ply
+
+        with patch.dict(sys.modules, {"trimesh": fake_trimesh}):
+            building_map = rasterize_building_height_from_ply(scene_xml, grid_res=8, area_m=8.0)
+
+        self.assertEqual(building_map.shape, (8, 8))
+        self.assertGreater(building_map[6, 1], 9.0)
+        self.assertEqual(float(building_map[1, 6]), 0.0)
 
     def test_dataset_status_endpoint_reports_scene_availability(self):
         scene_root = self.scene_dir / "NYCU"

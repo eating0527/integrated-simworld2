@@ -7,7 +7,7 @@ import {
   buildIssUnetUploadFormData,
 } from '../../utils/issUnetRequest';
 import type { CFARCluster } from '../../types/cfar';
-import type { HeatmapOverlayConfig } from '../../types/heatmap';
+import type { HeatmapGridBounds, HeatmapOverlayConfig } from '../../types/heatmap';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -62,6 +62,9 @@ interface ISSUNetOverlayResponse {
   rows: number;
   cols: number;
   area_m: number;
+  grid_bounds?: HeatmapGridBounds;
+  width_m?: number;
+  height_m?: number;
   vmin_dbm: number;
   vmax_dbm: number;
 }
@@ -180,6 +183,7 @@ export function SimulationPanel({
       rows: issUnetOverlay.rows,
       cols: issUnetOverlay.cols,
       areaM: issUnetOverlay.area_m,
+      gridBounds: issUnetOverlay.grid_bounds,
       opacity: heatmapOpacity,
       vminDbm: issUnetOverlay.vmin_dbm,
       vmaxDbm: issUnetOverlay.vmax_dbm,

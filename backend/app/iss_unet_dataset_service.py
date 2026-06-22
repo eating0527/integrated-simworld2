@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from matplotlib.path import Path as MplPath
 
 from app.iss_unet_service import ISS_MAX_DBM, ISS_MIN_DBM, REQUIRED_DATASET_FILES, _canonical_scene, resolve_scene_dataset
 
@@ -110,39 +111,136 @@ def _iter_scene_ply_paths(scene_xml: Path) -> list[Path]:
     return paths
 
 
-def rasterize_building_height_from_ply(scene_xml: Path, grid_res: int = GRID_RES, area_m: float = AREA_M) -> np.ndarray:
+def _legacy_grid_bounds(area_m: float = AREA_M, grid_res: int = GRID_RES) -> dict[str, float]:
+    half = float(area_m) / 2.0
+    return {
+        "min_x": -half,
+        "max_x": half,
+        "min_y": -half,
+        "max_y": half,
+        "pixel_size_x_m": float(area_m) / float(grid_res),
+        "pixel_size_y_m": float(area_m) / float(grid_res),
+    }
+
+
+def _load_scene_meshes(scene_xml: Path) -> list[Any]:
     try:
         import trimesh  # type: ignore
     except ImportError as exc:
         raise RuntimeError("trimesh is required to rasterize building heights from PLY") from exc
 
-    building_map = np.zeros((grid_res, grid_res), dtype=np.float32)
-    pixel_size = area_m / grid_res
+    meshes: list[Any] = []
     for mesh_path in _iter_scene_ply_paths(scene_xml):
         if not mesh_path.exists():
             logger.warning("Scene mesh referenced by XML was not found: %s", mesh_path)
             continue
         loaded = trimesh.load_mesh(str(mesh_path), process=False)
-        meshes = list(loaded.geometry.values()) if hasattr(loaded, "geometry") else [loaded]
-        for mesh in meshes:
-            vertices = np.asarray(getattr(mesh, "vertices", []), dtype=np.float32)
-            if vertices.ndim != 2 or vertices.shape[0] == 0 or vertices.shape[1] < 3:
-                continue
-            min_x, min_y, min_z = np.min(vertices[:, :3], axis=0)
-            max_x, max_y, max_z = np.max(vertices[:, :3], axis=0)
-            height = float(max_z - min_z)
-            if height <= 0.25:
-                continue
-            x0 = int(np.floor((min_x + area_m / 2.0) / pixel_size))
-            x1 = int(np.ceil((max_x + area_m / 2.0) / pixel_size))
-            y0 = int(np.floor((area_m / 2.0 - max_y) / pixel_size))
-            y1 = int(np.ceil((area_m / 2.0 - min_y) / pixel_size))
-            x0 = max(0, min(grid_res - 1, x0))
-            x1 = max(0, min(grid_res, x1))
-            y0 = max(0, min(grid_res - 1, y0))
-            y1 = max(0, min(grid_res, y1))
-            if x1 > x0 and y1 > y0:
-                building_map[y0:y1, x0:x1] = np.maximum(building_map[y0:y1, x0:x1], height)
+        meshes.extend(list(loaded.geometry.values()) if hasattr(loaded, "geometry") else [loaded])
+    return meshes
+
+
+def _mesh_vertices_and_height(mesh: Any) -> tuple[np.ndarray, float] | None:
+    vertices = np.asarray(getattr(mesh, "vertices", []), dtype=np.float32)
+    if vertices.ndim != 2 or vertices.shape[0] == 0 or vertices.shape[1] < 3:
+        return None
+    min_z = float(np.min(vertices[:, 2]))
+    max_z = float(np.max(vertices[:, 2]))
+    height = max_z - min_z
+    if height <= 0.25:
+        return None
+    return vertices[:, :3], float(height)
+
+
+def compute_scene_grid_bounds(scene_xml: Path, grid_res: int = GRID_RES, area_m: float = AREA_M) -> dict[str, float]:
+    min_x = np.inf
+    max_x = -np.inf
+    min_y = np.inf
+    max_y = -np.inf
+    for mesh in _load_scene_meshes(scene_xml):
+        parsed = _mesh_vertices_and_height(mesh)
+        if parsed is None:
+            continue
+        vertices, _height = parsed
+        min_x = min(min_x, float(np.min(vertices[:, 0])))
+        max_x = max(max_x, float(np.max(vertices[:, 0])))
+        min_y = min(min_y, float(np.min(vertices[:, 1])))
+        max_y = max(max_y, float(np.max(vertices[:, 1])))
+    if not all(np.isfinite(value) for value in (min_x, max_x, min_y, max_y)) or max_x <= min_x or max_y <= min_y:
+        return _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
+    return {
+        "min_x": float(min_x),
+        "max_x": float(max_x),
+        "min_y": float(min_y),
+        "max_y": float(max_y),
+        "pixel_size_x_m": float((max_x - min_x) / float(grid_res)),
+        "pixel_size_y_m": float((max_y - min_y) / float(grid_res)),
+    }
+
+
+def _rasterize_polygon(
+    building_map: np.ndarray,
+    polygon_xy: np.ndarray,
+    *,
+    height: float,
+    grid_bounds: dict[str, float],
+) -> None:
+    if polygon_xy.shape[0] < 3:
+        return
+    min_x = float(grid_bounds["min_x"])
+    max_y = float(grid_bounds["max_y"])
+    pixel_size_x = float(grid_bounds["pixel_size_x_m"])
+    pixel_size_y = float(grid_bounds["pixel_size_y_m"])
+    rows, cols = building_map.shape
+
+    px = (polygon_xy[:, 0] - min_x) / pixel_size_x
+    py = (max_y - polygon_xy[:, 1]) / pixel_size_y
+    x0 = max(0, int(np.floor(np.min(px))))
+    x1 = min(cols, int(np.ceil(np.max(px))))
+    y0 = max(0, int(np.floor(np.min(py))))
+    y1 = min(rows, int(np.ceil(np.max(py))))
+    if x1 <= x0 or y1 <= y0:
+        return
+
+    col_centers = min_x + (np.arange(x0, x1, dtype=np.float32) + 0.5) * pixel_size_x
+    row_centers = max_y - (np.arange(y0, y1, dtype=np.float32) + 0.5) * pixel_size_y
+    grid_x, grid_y = np.meshgrid(col_centers, row_centers, indexing="xy")
+    points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+    mask = MplPath(polygon_xy[:, :2]).contains_points(points, radius=1e-6).reshape((y1 - y0, x1 - x0))
+    if np.any(mask):
+        window = building_map[y0:y1, x0:x1]
+        window[mask] = np.maximum(window[mask], height)
+
+
+def rasterize_building_height_from_ply(scene_xml: Path, grid_res: int = GRID_RES, area_m: float = AREA_M) -> np.ndarray:
+    building_map = np.zeros((grid_res, grid_res), dtype=np.float32)
+    grid_bounds = compute_scene_grid_bounds(scene_xml, grid_res=grid_res, area_m=area_m)
+    for mesh in _load_scene_meshes(scene_xml):
+        parsed = _mesh_vertices_and_height(mesh)
+        if parsed is None:
+            continue
+        vertices, height = parsed
+        faces = np.asarray(getattr(mesh, "faces", []), dtype=np.int64)
+        if faces.ndim == 2 and faces.shape[0] > 0 and faces.shape[1] >= 3:
+            for face in faces:
+                if np.any(face[:3] < 0) or np.any(face[:3] >= vertices.shape[0]):
+                    continue
+                triangle = vertices[face[:3], :3]
+                if np.linalg.norm(np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])) <= 1e-6:
+                    continue
+                _rasterize_polygon(building_map, triangle[:, :2], height=height, grid_bounds=grid_bounds)
+        else:
+            min_x, min_y = np.min(vertices[:, :2], axis=0)
+            max_x, max_y = np.max(vertices[:, :2], axis=0)
+            polygon_xy = np.array(
+                [
+                    [min_x, min_y],
+                    [max_x, min_y],
+                    [max_x, max_y],
+                    [min_x, max_y],
+                ],
+                dtype=np.float32,
+            )
+            _rasterize_polygon(building_map, polygon_xy, height=height, grid_bounds=grid_bounds)
     return building_map
 
 
@@ -262,6 +360,12 @@ def prepare_iss_unet_dataset(
     if building_map.shape != (grid_res, grid_res):
         raise ValueError(f"building map must be {grid_res}x{grid_res}, got {building_map.shape}")
     np.save(data_dir / f"building_height_{grid_res}.npy", building_map.astype(np.float32))
+    grid_bounds = _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
+    if _iter_scene_ply_paths(scene_xml):
+        try:
+            grid_bounds = compute_scene_grid_bounds(scene_xml, grid_res=grid_res, area_m=area_m)
+        except RuntimeError:
+            grid_bounds = _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
 
     radio_maps = run_sionna_dataset_maps(scene_xml, transmitters, rx_height=rx_height, area_m=area_m, grid_res=grid_res)
     _save_radio_map(data_dir / "sionna_dss.npy", radio_maps["DSS"], grid_res)
@@ -274,6 +378,7 @@ def prepare_iss_unet_dataset(
         "grid_res": grid_res,
         "area_m": area_m,
         "pixel_size_m": area_m / grid_res,
+        "grid_bounds": grid_bounds,
         "frequency_hz": FREQUENCY_HZ,
         "tx_list": [
             {

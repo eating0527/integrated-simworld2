@@ -1,8 +1,13 @@
+import type { HeatmapGridBounds } from './heatmap';
+
 export interface CFARGrid {
   rows: number;
   cols: number;
   area_m: number;
   pixel_size_m: number;
+  pixel_size_x_m?: number;
+  pixel_size_y_m?: number;
+  grid_bounds?: HeatmapGridBounds;
 }
 
 export interface CFARCluster {

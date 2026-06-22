@@ -12,6 +12,28 @@ interface OverlayGridResponse {
   values: number[][];
 }
 
+export function getHeatmapOverlayPlaneConfig(overlay: Pick<HeatmapOverlayConfig, 'areaM' | 'gridBounds'>) {
+  const bounds = overlay.gridBounds;
+  if (!bounds) {
+    return {
+      width: overlay.areaM,
+      height: overlay.areaM,
+      position: [0, 0.12, 0] as [number, number, number],
+    };
+  }
+  const width = bounds.max_x - bounds.min_x;
+  const height = bounds.max_y - bounds.min_y;
+  return {
+    width,
+    height,
+    position: [
+      bounds.min_x + width / 2,
+      0.12,
+      -(bounds.min_y + height / 2),
+    ] as [number, number, number],
+  };
+}
+
 function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
@@ -91,10 +113,11 @@ export function ISSHeatmapOverlay({ overlay }: { overlay: HeatmapOverlayConfig }
   if (!texture) {
     return null;
   }
+  const plane = getHeatmapOverlayPlaneConfig(overlay);
 
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.12, 0]} renderOrder={1}>
-      <planeGeometry args={[overlay.areaM, overlay.areaM, 1, 1]} />
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={plane.position} renderOrder={1}>
+      <planeGeometry args={[plane.width, plane.height, 1, 1]} />
       <meshBasicMaterial
         map={texture}
         transparent
