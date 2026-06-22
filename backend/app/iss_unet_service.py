@@ -28,11 +28,14 @@ REQUIRED_DATASET_FILES = (
     "sionna_iss.npy",
     "sionna_tss.npy",
 )
+SUPPORTED_PIXEL_SIZE_M = (1.0, 2.0, 4.0)
 
 ISS_MIN_DBM = -140.0
 ISS_MAX_DBM = 0
 GPSN_RSS_MIN_DBM = -90.0
 GPSN_RSS_MAX_DBM = -15.0
+ISS_UNET_POWER_RENDER_MIN_DBM = -90.0
+ISS_UNET_POWER_RENDER_MAX_DBM = -15.0
 BUILDING_MAX_M = 60.0
 NOISE_CONFIDENCE_SIGMA_PX = 8.0
 DEFAULT_SCENE_AREA_M = 512.0
@@ -64,6 +67,9 @@ class SceneDataset:
     files: dict[str, Path]
     missing_files: list[str]
     meta_path: Path | None = None
+    grid_res: int = 128
+    pixel_size_m: float = 4.0
+    required_files: tuple[str, ...] = REQUIRED_DATASET_FILES
 
     @property
     def available(self) -> bool:
@@ -109,12 +115,53 @@ def _canonical_scene(scene: str) -> str:
     return builtins.get(scene_id.lower(), scene_id.upper())
 
 
-def resolve_scene_dataset(scene: str, scene_dir: Path | None = None) -> SceneDataset:
+def pixel_size_to_grid_res(pixel_size_m: float) -> int:
+    pixel_size = float(pixel_size_m)
+    if not np.isfinite(pixel_size):
+        raise ValueError("pixel_size_m must be finite")
+    if not any(np.isclose(pixel_size, allowed) for allowed in SUPPORTED_PIXEL_SIZE_M):
+        allowed = ", ".join(str(int(value)) for value in SUPPORTED_PIXEL_SIZE_M)
+        raise ValueError(f"pixel_size_m must be one of: {allowed}")
+    return int(round(DEFAULT_SCENE_AREA_M / pixel_size))
+
+
+def _building_filename(grid_res: int) -> str:
+    return f"building_height_{grid_res}.npy"
+
+
+def _radio_filename(kind: str, grid_res: int) -> str:
+    return f"sionna_{kind}.npy" if grid_res == 128 else f"sionna_{kind}_{grid_res}.npy"
+
+
+def dataset_required_files(grid_res: int) -> tuple[str, ...]:
+    return (
+        _building_filename(grid_res),
+        _radio_filename("dss", grid_res),
+        _radio_filename("iss", grid_res),
+        _radio_filename("tss", grid_res),
+    )
+
+
+def resolve_scene_dataset(
+    scene: str,
+    scene_dir: Path | None = None,
+    pixel_size_m: float = 4.0,
+) -> SceneDataset:
     scene_root = SCENE_DIR if scene_dir is None else Path(scene_dir)
     scene_name = _canonical_scene(scene)
     data_dir = scene_root / scene_name / "iss_unet_data"
-    files = {name: data_dir / name for name in REQUIRED_DATASET_FILES}
-    missing = [name for name, path in files.items() if not path.exists()]
+    grid_res = pixel_size_to_grid_res(pixel_size_m)
+    required_files = dataset_required_files(grid_res)
+    files = {name: data_dir / name for name in required_files}
+    files.update(
+        {
+            "building": data_dir / _building_filename(grid_res),
+            "dss": data_dir / _radio_filename("dss", grid_res),
+            "iss": data_dir / _radio_filename("iss", grid_res),
+            "tss": data_dir / _radio_filename("tss", grid_res),
+        }
+    )
+    missing = [name for name in required_files if not files[name].exists()]
     meta_path = data_dir / "scene_meta.json"
     return SceneDataset(
         scene=scene_name,
@@ -122,6 +169,9 @@ def resolve_scene_dataset(scene: str, scene_dir: Path | None = None) -> SceneDat
         files=files,
         missing_files=missing,
         meta_path=meta_path if meta_path.exists() else None,
+        grid_res=grid_res,
+        pixel_size_m=float(pixel_size_m),
+        required_files=required_files,
     )
 
 
@@ -134,6 +184,8 @@ def iss_unet_status() -> dict[str, Any]:
             "data_dir": str(dataset.data_dir),
             "missing_files": dataset.missing_files,
             "meta_available": dataset.meta_path is not None,
+            "grid_res": dataset.grid_res,
+            "pixel_size_m": dataset.pixel_size_m,
         }
 
     model_available = MODEL_ARTIFACT_PATH.exists()
@@ -339,8 +391,8 @@ def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, in
         "width_m": float(grid["grid_bounds"]["max_x"] - grid["grid_bounds"]["min_x"]),
         "height_m": float(grid["grid_bounds"]["max_y"] - grid["grid_bounds"]["min_y"]),
         "grid_bounds": grid["grid_bounds"],
-        "vmin_dbm": float(ISS_MIN_DBM),
-        "vmax_dbm": -40.0,
+        "vmin_dbm": ISS_UNET_POWER_RENDER_MIN_DBM,
+        "vmax_dbm": ISS_UNET_POWER_RENDER_MAX_DBM,
     }
 
 
@@ -481,14 +533,15 @@ def compute_live_scene_arrays(
 
 def load_scene_arrays(dataset: SceneDataset) -> dict[str, np.ndarray]:
     arrays = {
-        "building": np.load(dataset.files["building_height_128.npy"]).astype(np.float32),
-        "dss": _clip_radio_map(np.load(dataset.files["sionna_dss.npy"])),
-        "iss": _clip_radio_map(np.load(dataset.files["sionna_iss.npy"])),
-        "tss": _clip_radio_map(np.load(dataset.files["sionna_tss.npy"])),
+        "building": np.load(dataset.files["building"]).astype(np.float32),
+        "dss": _clip_radio_map(np.load(dataset.files["dss"])),
+        "iss": _clip_radio_map(np.load(dataset.files["iss"])),
+        "tss": _clip_radio_map(np.load(dataset.files["tss"])),
     }
     shape = arrays["building"].shape
-    if shape != (128, 128):
-        raise ValueError(f"building_height_128.npy must be 128x128, got {shape}")
+    expected_shape = (dataset.grid_res, dataset.grid_res)
+    if shape != expected_shape:
+        raise ValueError(f"{dataset.files['building'].name} must be {dataset.grid_res}x{dataset.grid_res}, got {shape}")
     for name, value in arrays.items():
         if value.shape != shape:
             raise ValueError(f"{name} shape {value.shape} does not match building map shape {shape}")
@@ -562,51 +615,6 @@ def _empty_confidence_stats(applied: bool) -> dict[str, Any]:
     }
 
 
-def apply_noise_confidence_weighting(
-    reconstructed_iss: np.ndarray,
-    sparse_mask: np.ndarray,
-    outdoor_mask: np.ndarray,
-    sigma_px: float = NOISE_CONFIDENCE_SIGMA_PX,
-    background_dbm: float = ISS_MIN_DBM,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    if reconstructed_iss.shape != sparse_mask.shape or reconstructed_iss.shape != outdoor_mask.shape:
-        raise ValueError("reconstructed_iss, sparse_mask, and outdoor_mask must have the same shape")
-    sigma_px = float(sigma_px)
-    if not np.isfinite(sigma_px) or sigma_px <= 0.0:
-        raise ValueError("sigma_px must be a positive finite value")
-
-    outdoor_pixels = outdoor_mask > 0.5
-    reference_points = np.argwhere((sparse_mask > 0.5) & outdoor_pixels)
-    if len(reference_points) == 0:
-        weighted = np.full_like(reconstructed_iss, background_dbm, dtype=np.float32)
-        return weighted, {
-            **_empty_confidence_stats(applied=True),
-            "confidence_sigma_px": sigma_px,
-            "confidence_background_dbm": float(background_dbm),
-        }
-
-    coords = np.argwhere(np.ones_like(reconstructed_iss, dtype=bool)).astype(np.float32)
-    min_dist_sq = np.full(len(coords), np.inf, dtype=np.float32)
-    refs = reference_points.astype(np.float32)
-    for start in range(0, len(refs), 512):
-        chunk = refs[start : start + 512]
-        diff = coords[:, None, :] - chunk[None, :, :]
-        dist_sq = np.sum(diff * diff, axis=2)
-        min_dist_sq = np.minimum(min_dist_sq, dist_sq.min(axis=1))
-
-    confidence = np.exp(-min_dist_sq.reshape(reconstructed_iss.shape) / (sigma_px * sigma_px)).astype(np.float32)
-    weighted = background_dbm + confidence * (reconstructed_iss.astype(np.float32) - background_dbm)
-    weighted = np.where(outdoor_pixels, weighted, background_dbm).astype(np.float32)
-    confidence = np.where(outdoor_pixels, confidence, 0.0).astype(np.float32)
-    return weighted, {
-        "confidence_applied": True,
-        "confidence_sigma_px": sigma_px,
-        "confidence_background_dbm": float(background_dbm),
-        "confidence_pixels_gt_0_5": int((confidence > 0.5).sum()),
-        "confidence_mean_outdoor": float(confidence[outdoor_pixels].mean()) if np.any(outdoor_pixels) else 0.0,
-    }
-
-
 def _load_model(device: str):
     import torch
 
@@ -664,7 +672,13 @@ def _run_gpsn_unet(
 
 def _render_reconstructed_png(reconstructed_iss: np.ndarray, mode_label: str = "Sim") -> bytes:
     fig, ax = plt.subplots(figsize=(5, 5))
-    im = ax.imshow(reconstructed_iss, cmap="jet", origin="upper", vmin=-140, vmax=-40)
+    im = ax.imshow(
+        reconstructed_iss,
+        cmap="jet",
+        origin="upper",
+        vmin=ISS_UNET_POWER_RENDER_MIN_DBM,
+        vmax=ISS_UNET_POWER_RENDER_MAX_DBM,
+    )
     ax.set_title("ISS_UNET Reconstructed ISS")
     fig.suptitle(f"ISS_UNET - {mode_label}")
     ax.axis("off")
@@ -692,9 +706,9 @@ def _render_comparison_png(
     sparse_display = np.where(sparse_mask > 0.5, sparse_source, ISS_MIN_DBM)
     panels = [
         (arrays["building"], "Building Height Map", "gray", None, None, "Height (m)"),
-        (sparse_display, sparse_title, "jet", -140, -40, "Power (dBm)"),
-        (arrays["iss"], "Ground Truth ISS", "jet", -90, -15, "Power (dBm)"),
-        (reconstructed_iss, "Reconstructed ISS", "jet", -90, -15, "Power (dBm)"),
+        (sparse_display, sparse_title, "jet", ISS_UNET_POWER_RENDER_MIN_DBM, ISS_UNET_POWER_RENDER_MAX_DBM, "Power (dBm)"),
+        (arrays["iss"], "Ground Truth ISS", "jet", ISS_UNET_POWER_RENDER_MIN_DBM, ISS_UNET_POWER_RENDER_MAX_DBM, "Power (dBm)"),
+        (reconstructed_iss, "Reconstructed ISS", "jet", ISS_UNET_POWER_RENDER_MIN_DBM, ISS_UNET_POWER_RENDER_MAX_DBM, "Power (dBm)"),
         (np.where(outdoor_pixels, error, 0.0), f"Error (Outdoor MAE: {mae:.2f} dB)", "Reds", 0, 10, "Error (dB)"),
         (outdoor_mask, "Outdoor Mask", "gray", 0, 1, None),
     ]
@@ -818,7 +832,13 @@ def _render_cfar_png(
     threshold_map = cfar_result["threshold_map"]
     clusters = cfar_result["clusters"]
 
-    im0 = axes[0, 0].imshow(reconstructed_iss, cmap="jet", origin="upper", vmin=-140, vmax=-40)
+    im0 = axes[0, 0].imshow(
+        reconstructed_iss,
+        cmap="jet",
+        origin="upper",
+        vmin=ISS_UNET_POWER_RENDER_MIN_DBM,
+        vmax=ISS_UNET_POWER_RENDER_MAX_DBM,
+    )
     axes[0, 0].set_title("Reconstructed ISS")
     plt.colorbar(im0, ax=axes[0, 0], label="Power (dBm)", shrink=0.8)
     for cluster in clusters:
@@ -832,7 +852,13 @@ def _render_cfar_png(
 
     threshold_display = np.where(np.isnan(threshold_map), ISS_MIN_DBM, threshold_map)
     threshold_display = np.where(outdoor_mask > 0.5, threshold_display, ISS_MIN_DBM)
-    im2 = axes[1, 0].imshow(threshold_display, cmap="viridis", origin="upper")
+    im2 = axes[1, 0].imshow(
+        threshold_display,
+        cmap="viridis",
+        origin="upper",
+        vmin=ISS_UNET_POWER_RENDER_MIN_DBM,
+        vmax=ISS_UNET_POWER_RENDER_MAX_DBM,
+    )
     axes[1, 0].set_title("CFAR Threshold Map")
     plt.colorbar(im2, ax=axes[1, 0], label="Threshold (dBm)", shrink=0.8)
 
@@ -867,17 +893,17 @@ def _build_iss_unet_artifacts(
     gps_csv: Path | str | bytes | None = None,
     noise_csv: Path | str | bytes | None = None,
     apply_building_mask: bool = True,
-    focus_sampling_points: bool = True,
     scene_dir: Path | None = None,
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
+    pixel_size_m: float = 4.0,
 ) -> ISSUNetArtifacts:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
         raise ValueError("mode must be one of: sim, gps, gps_n")
     mode_label = ISS_UNET_MODE_LABELS[mode]
     sparse_ratio = _normalize_sparse_ratio(sparse_ratio)
-    dataset = resolve_scene_dataset(scene, scene_dir=scene_dir)
+    dataset = resolve_scene_dataset(scene, scene_dir=scene_dir, pixel_size_m=pixel_size_m)
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))
     if mode == "gps_n" and not GPSN_MODEL_ARTIFACT_PATH.exists():
@@ -946,12 +972,6 @@ def _build_iss_unet_artifacts(
         model_inference = True
 
     confidence_metrics = _empty_confidence_stats(applied=False)
-    if mode == "gps_n" and focus_sampling_points:
-        reconstructed_iss, confidence_metrics = apply_noise_confidence_weighting(
-            reconstructed_iss,
-            sparse_mask,
-            outdoor_mask,
-        )
 
     if cfar is None:
         cfar = ISSUNetCFARParams(enabled=True)
@@ -986,10 +1006,10 @@ def reconstruct_iss_unet(
     gps_csv: Path | str | bytes | None = None,
     noise_csv: Path | str | bytes | None = None,
     apply_building_mask: bool = True,
-    focus_sampling_points: bool = True,
     scene_dir: Path | None = None,
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
+    pixel_size_m: float = 4.0,
 ) -> dict[str, Any]:
     artifacts = _build_iss_unet_artifacts(
         scene=scene,
@@ -1001,10 +1021,10 @@ def reconstruct_iss_unet(
         gps_csv=gps_csv,
         noise_csv=noise_csv,
         apply_building_mask=apply_building_mask,
-        focus_sampling_points=focus_sampling_points,
         scene_dir=scene_dir,
         devices=devices,
         scene_xml_path=scene_xml_path,
+        pixel_size_m=pixel_size_m,
     )
     dataset = artifacts.dataset
     mode = artifacts.mode
@@ -1019,10 +1039,11 @@ def reconstruct_iss_unet(
     cfar_result = artifacts.cfar_result
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    resolution_label = "" if dataset.grid_res == 128 else f"_res{dataset.grid_res}"
     if mode == "sim":
-        stem = f"iss_unet_{dataset.scene.lower()}_{sparse_ratio_label(sparse_ratio)}"
+        stem = f"iss_unet_{dataset.scene.lower()}{resolution_label}_{sparse_ratio_label(sparse_ratio)}"
     else:
-        stem = f"iss_unet_{dataset.scene.lower()}_{mode}"
+        stem = f"iss_unet_{dataset.scene.lower()}{resolution_label}_{mode}"
     reconstructed_path = OUTPUT_DIR / f"{stem}_reconstructed.png"
     comparison_path = OUTPUT_DIR / f"{stem}_comparison.png"
     cfar_path = OUTPUT_DIR / f"{stem}_cfar.png"
@@ -1056,6 +1077,8 @@ def reconstruct_iss_unet(
         "sparse_samples": int(sparse_mask.sum()),
         "outdoor_pixels": int(outdoor_pixels.sum()),
         "output_shape": list(reconstructed_iss.shape),
+        "grid_res": dataset.grid_res,
+        "pixel_size_m": dataset.pixel_size_m,
         "model_inference": artifacts.model_inference,
         **artifacts.real_metrics,
         **artifacts.confidence_metrics,
@@ -1070,6 +1093,8 @@ def reconstruct_iss_unet(
         "metrics": metrics,
         "options": {
             "apply_building_mask": apply_building_mask,
+            "pixel_size_m": dataset.pixel_size_m,
+            "grid_res": dataset.grid_res,
         },
         "images": {
             "reconstructed": result_image_url(reconstructed_path.name),

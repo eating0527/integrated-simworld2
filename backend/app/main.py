@@ -1415,10 +1415,10 @@ class ISSUNetCFARRequest(BaseModel):
 class ISSUNetReconstructRequest(BaseModel):
     scene: str
     sparse_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    pixel_size_m: Literal[1, 2, 4] = Field(default=4)
     cfar: ISSUNetCFARRequest = Field(default_factory=ISSUNetCFARRequest)
     seed: int = Field(default=41)
     apply_building_mask: bool = Field(default=True)
-    focus_sampling_points: bool = Field(default=True)
     devices: List[DeviceIn] = Field(default_factory=list)
 
 
@@ -1432,6 +1432,7 @@ class ISSUNetDatasetPrepareRequest(BaseModel):
     jammer_height: float = Field(default=40.0)
     rx_height: float = Field(default=1.5)
     area_m: float = Field(default=512.0, gt=0.0)
+    pixel_size_m: Literal[1, 2, 4] = Field(default=4)
 
 
 class SINRMapRequest(BaseSionnaRequest):
@@ -1477,6 +1478,16 @@ class USRPMeasurementRequest(BaseModel):
     devices: List[DeviceIn] = Field(default_factory=list)
 
 
+def _coerce_iss_unet_pixel_size(value: Any) -> int:
+    if isinstance(value, (int, float, str)):
+        try:
+            pixel_size = int(value)
+        except (TypeError, ValueError):
+            return 4
+        return pixel_size if pixel_size in {1, 2, 4} else 4
+    return 4
+
+
 def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
@@ -1513,10 +1524,11 @@ async def iss_unet_status_get():
 
 
 @app.get("/api/iss-unet/dataset/status")
-async def iss_unet_dataset_status_get(scene: str = Query(...)):
+async def iss_unet_dataset_status_get(scene: str = Query(...), pixel_size_m: Literal[1, 2, 4] = Query(4)):
     from app.iss_unet_service import resolve_scene_dataset
 
-    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
+    pixel_size_m = _coerce_iss_unet_pixel_size(pixel_size_m)
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR, pixel_size_m=pixel_size_m)
     return {
         "success": True,
         "scene": dataset.scene,
@@ -1524,6 +1536,8 @@ async def iss_unet_dataset_status_get(scene: str = Query(...)):
         "data_dir": str(dataset.data_dir),
         "missing_files": dataset.missing_files,
         "meta_available": dataset.meta_path is not None,
+        "grid_res": dataset.grid_res,
+        "pixel_size_m": dataset.pixel_size_m,
     }
 
 
@@ -1544,6 +1558,7 @@ async def iss_unet_dataset_prepare_post(req: ISSUNetDatasetPrepareRequest):
             jammer_height=req.jammer_height,
             rx_height=req.rx_height,
             area_m=req.area_m,
+            pixel_size_m=req.pixel_size_m,
         )
         return result
     except SceneUnavailableError as exc:
@@ -1573,7 +1588,7 @@ async def iss_unet_dataset_prepare_post(req: ISSUNetDatasetPrepareRequest):
 async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
     from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
 
-    dataset = resolve_scene_dataset(req.scene, scene_dir=SCENE_DIR)
+    dataset = resolve_scene_dataset(req.scene, scene_dir=SCENE_DIR, pixel_size_m=req.pixel_size_m)
     if not dataset.available:
         return JSONResponse(
             {
@@ -1605,13 +1620,13 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             seed=req.seed,
             mode="sim",
             apply_building_mask=req.apply_building_mask,
-            focus_sampling_points=req.focus_sampling_points,
             scene_dir=SCENE_DIR,
             devices=req.devices,
             scene_xml_path=scene_xml,
+            pixel_size_m=req.pixel_size_m,
         )
         logger.info(
-            "ISS_UNET completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s focus_sampling_points=%s",
+            "ISS_UNET completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s",
             result.get("scene"),
             result.get("mode"),
             result.get("metrics", {}).get("aligned_noise"),
@@ -1619,7 +1634,6 @@ async def iss_unet_reconstruct_post(req: ISSUNetReconstructRequest):
             result.get("metrics", {}).get("used_samples"),
             result.get("metrics", {}).get("sparse_samples"),
             result.get("options", {}).get("apply_building_mask"),
-            req.focus_sampling_points,
         )
         return {"success": True, **result}
     except FileNotFoundError as exc:
@@ -1650,17 +1664,18 @@ async def iss_unet_reconstruct_upload_post(
     scene: str = Form(...),
     mode: Literal["sim", "gps", "gps_n"] = Form("sim"),
     sparse_ratio: float = Form(0.2),
+    pixel_size_m: int = Form(4),
     seed: int = Form(41),
     cfar_enabled: bool = Form(True),
     apply_building_mask: bool = Form(True),
-    focus_sampling_points: bool = Form(True),
     devices_json: str = Form(""),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
 ):
     from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
 
-    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
+    pixel_size_m = _coerce_iss_unet_pixel_size(pixel_size_m)
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR, pixel_size_m=pixel_size_m)
     if not dataset.available:
         return JSONResponse(
             {
@@ -1696,13 +1711,13 @@ async def iss_unet_reconstruct_upload_post(
             gps_csv=gps_csv,
             noise_csv=noise_csv,
             apply_building_mask=apply_building_mask,
-            focus_sampling_points=focus_sampling_points,
             scene_dir=SCENE_DIR,
             devices=devices,
             scene_xml_path=scene_xml,
+            pixel_size_m=pixel_size_m,
         )
         logger.info(
-            "ISS_UNET upload completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s focus_sampling_points=%s",
+            "ISS_UNET upload completed scene=%s mode=%s aligned_noise=%s skipped_noise=%s used_samples=%s sparse_samples=%s apply_building_mask=%s",
             result.get("scene"),
             result.get("mode"),
             result.get("metrics", {}).get("aligned_noise"),
@@ -1710,7 +1725,6 @@ async def iss_unet_reconstruct_upload_post(
             result.get("metrics", {}).get("used_samples"),
             result.get("metrics", {}).get("sparse_samples"),
             result.get("options", {}).get("apply_building_mask"),
-            focus_sampling_points,
         )
         return {"success": True, **result}
     except ValueError as exc:
@@ -1741,8 +1755,8 @@ async def iss_unet_reconstruct_upload_post(
 @app.post("/api/iss-unet/statistics/upload")
 async def iss_unet_statistics_upload_post(
     scene: str = Form(...),
+    pixel_size_m: int = Form(4),
     apply_building_mask: bool = Form(True),
-    focus_sampling_points: bool = Form(True),
     devices_json: str = Form(""),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
@@ -1750,7 +1764,8 @@ async def iss_unet_statistics_upload_post(
     from app.iss_unet_service import ISSUNetCFARParams, resolve_scene_dataset
     from app.iss_unet_stats_service import generate_gpsn_statistics
 
-    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR)
+    pixel_size_m = _coerce_iss_unet_pixel_size(pixel_size_m)
+    dataset = resolve_scene_dataset(scene, scene_dir=SCENE_DIR, pixel_size_m=pixel_size_m)
     if not dataset.available:
         return JSONResponse(
             {
@@ -1784,10 +1799,10 @@ async def iss_unet_statistics_upload_post(
             gps_csv=gps_csv,
             noise_csv=noise_csv,
             apply_building_mask=apply_building_mask,
-            focus_sampling_points=focus_sampling_points,
             scene_dir=SCENE_DIR,
             devices=devices,
             scene_xml_path=scene_xml,
+            pixel_size_m=pixel_size_m,
         )
         return {"success": True, **result}
     except ValueError as exc:
@@ -1978,7 +1993,7 @@ async def iss_unet_image_get(filename: str):
     from app.iss_unet_service import OUTPUT_DIR
 
     valid_iss_unet_image = re.fullmatch(
-        r"iss_unet_[A-Za-z0-9_-]+(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar|statistics)\.png",
+        r"iss_unet_[A-Za-z0-9_-]+(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar|statistics)\.png",
         filename,
     )
     if "/" in filename or "\\" in filename or not valid_iss_unet_image:
@@ -1996,7 +2011,7 @@ async def iss_unet_grid_get(filename: str):
     from app.iss_unet_service import OUTPUT_DIR, DEFAULT_SCENE_AREA_M
 
     valid_grid = re.fullmatch(
-        r"iss_unet_[A-Za-z0-9_-]+(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy",
+        r"iss_unet_[A-Za-z0-9_-]+(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy",
         filename,
     )
     if "/" in filename or "\\" in filename or not valid_grid:
@@ -2014,7 +2029,10 @@ async def iss_unet_grid_get(filename: str):
     if values.ndim != 2:
         return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
 
-    scene_match = re.match(r"iss_unet_([A-Za-z0-9_-]+?)(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy", filename)
+    scene_match = re.match(
+        r"iss_unet_([A-Za-z0-9_-]+?)(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy",
+        filename,
+    )
     scene_name = scene_match.group(1).upper() if scene_match else ""
     scene_meta_path = SCENE_DIR / scene_name / "iss_unet_data" / "scene_meta.json"
     area_m = DEFAULT_SCENE_AREA_M

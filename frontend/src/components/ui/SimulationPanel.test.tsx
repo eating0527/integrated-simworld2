@@ -35,8 +35,8 @@ function successfulIssUnetResponse() {
         rows: 128,
         cols: 128,
         area_m: 512,
-        vmin_dbm: -140,
-        vmax_dbm: -40,
+        vmin_dbm: -90,
+        vmax_dbm: -15,
       },
       options: {
         apply_building_mask: true,
@@ -254,6 +254,7 @@ describe('SimulationPanel UI', () => {
     await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
     expect(screen.getByText('GPS CSV')).toBeInTheDocument();
     expect(screen.getByText('Noise CSV')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Focus Sampling Points')).not.toBeInTheDocument();
 
     await runCurrentTab(user);
 
@@ -267,7 +268,7 @@ describe('SimulationPanel UI', () => {
     const [, init] = vi.mocked(globalThis.fetch).mock.calls.at(-1) ?? [];
     const form = (init as RequestInit).body as FormData;
     expect(form.get('mode')).toBe('gps_n');
-    expect(form.get('focus_sampling_points')).toBe('true');
+    expect(form.get('focus_sampling_points')).toBeNull();
     expect(JSON.parse(String(form.get('devices_json')))).toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'jammer' })]),
     );

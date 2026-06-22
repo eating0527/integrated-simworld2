@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import matplotlib.image as mpimg
+import matplotlib.axes
 import numpy as np
 
 from app import main
@@ -66,6 +67,36 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertTrue(dataset.available)
         self.assertEqual({path.name for path in dataset.files.values()}, REQUIRED_FILES)
         self.assertEqual(dataset.scene, "NTPU")
+
+    def test_dataset_resolver_uses_requested_pixel_size(self):
+        data_dir = self._write_ntpu_dataset()
+        shape = (256, 256)
+        np.save(data_dir / "building_height_256.npy", np.zeros(shape, dtype=np.float32))
+        np.save(data_dir / "sionna_dss_256.npy", np.full(shape, -100.0, dtype=np.float32))
+        np.save(data_dir / "sionna_iss_256.npy", np.full(shape, -95.0, dtype=np.float32))
+        np.save(data_dir / "sionna_tss_256.npy", np.full(shape, -90.0, dtype=np.float32))
+        from app.iss_unet_service import resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir, pixel_size_m=2)
+
+        self.assertTrue(dataset.available)
+        self.assertEqual(dataset.files["building"].name, "building_height_256.npy")
+        self.assertEqual(dataset.grid_res, 256)
+        self.assertEqual(dataset.pixel_size_m, 2.0)
+
+    def test_load_scene_arrays_accepts_512_resolution(self):
+        data_dir = self._write_ntpu_dataset()
+        shape = (512, 512)
+        np.save(data_dir / "building_height_512.npy", np.zeros(shape, dtype=np.float32))
+        np.save(data_dir / "sionna_dss_512.npy", np.full(shape, -100.0, dtype=np.float32))
+        np.save(data_dir / "sionna_iss_512.npy", np.full(shape, -95.0, dtype=np.float32))
+        np.save(data_dir / "sionna_tss_512.npy", np.full(shape, -90.0, dtype=np.float32))
+        from app.iss_unet_service import load_scene_arrays, resolve_scene_dataset
+
+        arrays = load_scene_arrays(resolve_scene_dataset("NTPU", scene_dir=self.scene_dir, pixel_size_m=1))
+
+        self.assertEqual(arrays["building"].shape, shape)
+        self.assertEqual(arrays["iss"].shape, shape)
 
     def test_ntpu_fallback_center_matches_frontend_origin(self):
         self._write_ntpu_dataset()
@@ -126,7 +157,6 @@ class ISSUNetServiceTests(unittest.TestCase):
                         seed=41,
                         cfar_enabled=True,
                         apply_building_mask=True,
-                        focus_sampling_points=True,
                         gps_file=None,
                         noise_file=None,
                     )
@@ -135,6 +165,100 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(set(payload["missing_files"]), REQUIRED_FILES)
+
+    def test_upload_endpoint_accepts_form_pixel_size_string(self):
+        data_dir = self._write_ntpu_dataset()
+        shape = (512, 512)
+        np.save(data_dir / "building_height_512.npy", np.zeros(shape, dtype=np.float32))
+        np.save(data_dir / "sionna_dss_512.npy", np.full(shape, -100.0, dtype=np.float32))
+        np.save(data_dir / "sionna_iss_512.npy", np.full(shape, -95.0, dtype=np.float32))
+        np.save(data_dir / "sionna_tss_512.npy", np.full(shape, -90.0, dtype=np.float32))
+        captured = {}
+
+        def fake_reconstruct_iss_unet(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "gps_n",
+                "sparse_ratio": 0.2,
+                "images": {"reconstructed": "/api/iss-unet/images/fake.png"},
+                "metrics": {"grid_res": 512, "output_shape": [512, 512]},
+                "options": {},
+            }
+
+        with patch.object(main, "SCENE_DIR", self.scene_dir):
+            with patch("app.iss_unet_service.reconstruct_iss_unet", side_effect=fake_reconstruct_iss_unet):
+                response_status, response_body = asyncio.run(
+                    self._post_multipart_asgi(
+                        "/api/iss-unet/reconstruct/upload",
+                        {
+                            "scene": "ntpu",
+                            "mode": "gps_n",
+                            "sparse_ratio": "0.2",
+                            "pixel_size_m": "1",
+                            "seed": "41",
+                            "cfar_enabled": "true",
+                            "apply_building_mask": "true",
+                            "devices_json": "",
+                        },
+                    )
+                )
+
+        self.assertEqual(response_status, 200)
+        payload = json.loads(response_body.decode("utf-8"))
+        self.assertTrue(payload["success"])
+        self.assertEqual(captured["pixel_size_m"], 1)
+
+    async def _post_multipart_asgi(self, path: str, fields: dict[str, str]) -> tuple[int, bytes]:
+        boundary = "----iss-unet-test-boundary"
+        chunks: list[bytes] = []
+        for name, value in fields.items():
+            chunks.append(
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                    f"{value}\r\n"
+                ).encode("utf-8")
+            )
+        chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+        body = b"".join(chunks)
+        messages: list[dict] = []
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            messages.append(message)
+
+        await main.app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", f"multipart/form-data; boundary={boundary}".encode("ascii")),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+                "client": ("127.0.0.1", 12345),
+                "server": ("testserver", 80),
+            },
+            receive,
+            send,
+        )
+        status = next(message["status"] for message in messages if message["type"] == "http.response.start")
+        response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+        return status, response_body
 
     def test_result_image_urls_use_api_route(self):
         from app.iss_unet_service import result_image_url
@@ -196,37 +320,6 @@ class ISSUNetServiceTests(unittest.TestCase):
         sparse_mask, _ = create_sparse_sample(iss, building, sparse_ratio=1.0)
 
         self.assertEqual(int(sparse_mask.sum()), outdoor_pixels)
-
-    def test_confidence_weighting_keeps_sparse_pixel_and_suppresses_far_pixels(self):
-        from app.iss_unet_service import ISS_MIN_DBM, apply_noise_confidence_weighting
-
-        reconstructed = np.full((16, 16), -40.0, dtype=np.float32)
-        sparse_mask = np.zeros((16, 16), dtype=np.float32)
-        sparse_mask[8, 8] = 1.0
-        outdoor_mask = np.ones((16, 16), dtype=np.float32)
-
-        weighted, stats = apply_noise_confidence_weighting(reconstructed, sparse_mask, outdoor_mask, sigma_px=2.0)
-
-        self.assertAlmostEqual(float(weighted[8, 8]), -40.0, places=4)
-        self.assertLess(float(weighted[0, 0]), -139.0)
-        self.assertEqual(stats["confidence_applied"], True)
-        self.assertEqual(stats["confidence_pixels_gt_0_5"], 9)
-        self.assertGreater(stats["confidence_mean_outdoor"], 0.0)
-        self.assertEqual(stats["confidence_background_dbm"], ISS_MIN_DBM)
-
-    def test_confidence_weighting_without_sparse_points_returns_background(self):
-        from app.iss_unet_service import ISS_MIN_DBM, apply_noise_confidence_weighting
-
-        reconstructed = np.full((8, 8), -40.0, dtype=np.float32)
-        sparse_mask = np.zeros((8, 8), dtype=np.float32)
-        outdoor_mask = np.ones((8, 8), dtype=np.float32)
-
-        weighted, stats = apply_noise_confidence_weighting(reconstructed, sparse_mask, outdoor_mask)
-
-        np.testing.assert_array_equal(weighted, np.full((8, 8), ISS_MIN_DBM, dtype=np.float32))
-        self.assertEqual(stats["confidence_applied"], True)
-        self.assertEqual(stats["confidence_pixels_gt_0_5"], 0)
-        self.assertEqual(stats["confidence_mean_outdoor"], 0.0)
 
     def test_reconstruct_without_model_returns_clipped_sionna_map(self):
         from app.iss_unet_service import ISS_MAX_DBM, _reconstruct_without_model
@@ -528,7 +621,6 @@ class ISSUNetServiceTests(unittest.TestCase):
                     gps_csv=gps_csv,
                     noise_csv=noise_csv,
                     apply_building_mask=True,
-                    focus_sampling_points=False,
                     scene_dir=self.scene_dir,
                     devices=None,
                     scene_xml_path=None,
@@ -602,8 +694,8 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(overlay["height_m"], 512.0)
         self.assertEqual(overlay["grid_bounds"]["min_x"], -256.0)
         self.assertEqual(overlay["grid_bounds"]["max_x"], 256.0)
-        self.assertEqual(overlay["vmin_dbm"], -140.0)
-        self.assertEqual(overlay["vmax_dbm"], -40.0)
+        self.assertEqual(overlay["vmin_dbm"], -90.0)
+        self.assertEqual(overlay["vmax_dbm"], -15.0)
 
     def test_reconstruct_result_uses_grid_bounds_for_cfar_and_overlay_world_coordinates(self):
         from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
@@ -694,6 +786,67 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(invalid.status_code, 404)
         self.assertEqual(missing.status_code, 404)
+
+    def test_cfar_render_uses_fixed_minus_90_to_minus_15_range(self):
+        from app.iss_unet_service import _render_cfar_png
+
+        captured = []
+        original_imshow = matplotlib.axes.Axes.imshow
+
+        def capture_imshow(axis, *args, **kwargs):
+            captured.append(kwargs)
+            return original_imshow(axis, *args, **kwargs)
+
+        cfar_result = {
+            "detection_map": np.zeros((4, 4), dtype=np.float32),
+            "threshold_map": np.full((4, 4), -10.0, dtype=np.float32),
+            "detections": [],
+            "clusters": [],
+        }
+
+        with patch.object(matplotlib.axes.Axes, "imshow", new=capture_imshow):
+            _render_cfar_png(
+                np.full((4, 4), -20.0, dtype=np.float32),
+                np.ones((4, 4), dtype=np.float32),
+                np.zeros((4, 4), dtype=np.float32),
+                cfar_result,
+            )
+
+        self.assertEqual(captured[0]["vmin"], -90.0)
+        self.assertEqual(captured[0]["vmax"], -15.0)
+        self.assertEqual(captured[3]["vmin"], -90.0)
+        self.assertEqual(captured[3]["vmax"], -15.0)
+
+    def test_iss_unet_power_panels_use_fixed_minus_90_to_minus_15_range(self):
+        from app.iss_unet_service import _render_comparison_png, _render_reconstructed_png
+
+        captured = []
+        original_imshow = matplotlib.axes.Axes.imshow
+
+        def capture_imshow(axis, *args, **kwargs):
+            captured.append(kwargs)
+            return original_imshow(axis, *args, **kwargs)
+
+        arrays = {
+            "building": np.zeros((4, 4), dtype=np.float32),
+            "iss": np.full((4, 4), -45.0, dtype=np.float32),
+        }
+        reconstructed = np.full((4, 4), -50.0, dtype=np.float32)
+        sparse_mask = np.ones((4, 4), dtype=np.float32)
+        outdoor_mask = np.ones((4, 4), dtype=np.float32)
+
+        with patch.object(matplotlib.axes.Axes, "imshow", new=capture_imshow):
+            _render_reconstructed_png(reconstructed)
+            _render_comparison_png(arrays, reconstructed, sparse_mask, outdoor_mask, 0.2)
+
+        self.assertEqual(captured[0]["vmin"], -90.0)
+        self.assertEqual(captured[0]["vmax"], -15.0)
+        self.assertEqual(captured[2]["vmin"], -90.0)
+        self.assertEqual(captured[2]["vmax"], -15.0)
+        self.assertEqual(captured[3]["vmin"], -90.0)
+        self.assertEqual(captured[3]["vmax"], -15.0)
+        self.assertEqual(captured[4]["vmin"], -90.0)
+        self.assertEqual(captured[4]["vmax"], -15.0)
 
     def test_gpsn_statistics_rows_include_ten_chinese_metrics(self):
         from app.iss_unet_service import ISSUNetArtifacts, ISSUNetCFARParams, SceneDataset
@@ -865,7 +1018,6 @@ class ISSUNetServiceTests(unittest.TestCase):
                 main.iss_unet_statistics_upload_post(
                     scene="NTPU",
                     apply_building_mask=True,
-                    focus_sampling_points=True,
                     devices_json="[]",
                     gps_file=FakeUpload(gps_bytes),
                     noise_file=FakeUpload(noise_bytes),
@@ -895,10 +1047,10 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(req.sparse_ratio, 0.0)
 
-    def test_reconstruct_request_accepts_focus_sampling_points_toggle(self):
+    def test_reconstruct_request_does_not_expose_focus_sampling_points_toggle(self):
         req = main.ISSUNetReconstructRequest(scene="NTPU", focus_sampling_points=False)
 
-        self.assertEqual(req.focus_sampling_points, False)
+        self.assertFalse(hasattr(req, "focus_sampling_points"))
 
     def test_reconstruct_request_accepts_devices(self):
         req = main.ISSUNetReconstructRequest(
@@ -955,7 +1107,36 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(captured["devices"][0].role, "jammer")
         self.assertEqual(captured["devices"][0].x, 11.0)
 
-    def test_upload_endpoint_forwards_focus_sampling_points_toggle(self):
+    def test_reconstruct_endpoint_forwards_pixel_size(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+        captured = {}
+
+        def fake_reconstruct_iss_unet(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "sim",
+                "mode_label": "Sim",
+                "sparse_ratio": 0.2,
+                "metrics": {},
+                "images": {},
+                "files": {},
+                "cfar": {"detections": 0, "clusters": []},
+            }
+
+        req = main.ISSUNetReconstructRequest(scene="NTPU", pixel_size_m=2)
+
+        with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+            with patch("app.iss_unet_service.reconstruct_iss_unet", side_effect=fake_reconstruct_iss_unet):
+                response = asyncio.run(main.iss_unet_reconstruct_post(req))
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(captured["pixel_size_m"], 2.0)
+
+    def test_upload_endpoint_does_not_forward_focus_sampling_points_toggle(self):
         self._write_ntpu_dataset()
         from app.iss_unet_service import resolve_scene_dataset
 
@@ -981,14 +1162,48 @@ class ISSUNetServiceTests(unittest.TestCase):
                     main.iss_unet_reconstruct_upload_post(
                         scene="NTPU",
                         mode="gps_n",
-                        focus_sampling_points=False,
                         gps_file=None,
                         noise_file=None,
                     )
                 )
 
         self.assertEqual(response["success"], True)
-        self.assertEqual(captured["focus_sampling_points"], False)
+        self.assertNotIn("focus_sampling_points", captured)
+
+    def test_upload_endpoint_forwards_pixel_size(self):
+        self._write_ntpu_dataset()
+        from app.iss_unet_service import resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+        captured = {}
+
+        def fake_reconstruct_iss_unet(**kwargs):
+            captured.update(kwargs)
+            return {
+                "scene": "NTPU",
+                "mode": "gps",
+                "mode_label": "GPS",
+                "sparse_ratio": 0.2,
+                "metrics": {},
+                "images": {},
+                "files": {},
+                "cfar": {"detections": 0, "clusters": []},
+            }
+
+        with patch("app.iss_unet_service.resolve_scene_dataset", return_value=dataset):
+            with patch("app.iss_unet_service.reconstruct_iss_unet", side_effect=fake_reconstruct_iss_unet):
+                response = asyncio.run(
+                    main.iss_unet_reconstruct_upload_post(
+                        scene="NTPU",
+                        mode="gps",
+                        pixel_size_m=1,
+                        gps_file=None,
+                        noise_file=None,
+                    )
+                )
+
+        self.assertEqual(response["success"], True)
+        self.assertEqual(captured["pixel_size_m"], 1.0)
 
     def test_upload_endpoint_forwards_devices_for_gps_modes(self):
         self._write_ntpu_dataset()
@@ -1290,7 +1505,6 @@ class ISSUNetServiceTests(unittest.TestCase):
                                         scene="NTPU",
                                         mode="gps_n",
                                         cfar=ISSUNetCFARParams(enabled=False),
-                                        focus_sampling_points=False,
                                     )
 
         self.assertEqual(result["mode"], "gps_n")
@@ -1367,7 +1581,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_comparison.png").exists())
         self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.npy").exists())
 
-    def test_gps_noise_reconstruct_applies_confidence_before_outputs_and_cfar(self):
+    def test_gps_noise_reconstruct_does_not_apply_focus_sampling_confidence(self):
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
             json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
@@ -1449,7 +1663,7 @@ class ISSUNetServiceTests(unittest.TestCase):
             captured["cfar_signal"] = signal_map.copy()
             return {"detection_map": np.zeros((128, 128), dtype=np.float32), "threshold_map": np.zeros((128, 128), dtype=np.float32), "clusters": [], "detections": []}
 
-        from app.iss_unet_service import ISSUNetCFARParams, ISS_MIN_DBM, reconstruct_iss_unet, resolve_scene_dataset
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet, resolve_scene_dataset
 
         dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
 
@@ -1472,15 +1686,13 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
         self.assertAlmostEqual(float(saved[64, 64]), -15.0, places=4)
-        self.assertLess(float(saved[0, 0]), -139.9)
+        self.assertAlmostEqual(float(saved[0, 0]), -15.0, places=4)
         self.assertEqual(float(saved[0, 0]), float(captured["render_reconstructed"][0, 0]))
         self.assertEqual(float(saved[0, 0]), float(captured["render_comparison"][0, 0]))
         self.assertEqual(float(saved[0, 0]), float(captured["cfar_signal"][0, 0]))
-        self.assertEqual(result["metrics"]["confidence_applied"], True)
-        self.assertEqual(result["metrics"]["confidence_sigma_px"], 8.0)
-        self.assertEqual(result["metrics"]["confidence_background_dbm"], ISS_MIN_DBM)
+        self.assertEqual(result["metrics"]["confidence_applied"], False)
 
-    def test_gps_noise_reconstruct_can_disable_confidence_weighting(self):
+    def test_gps_noise_reconstruct_has_no_focus_sampling_toggle(self):
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
             json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
@@ -1555,7 +1767,6 @@ class ISSUNetServiceTests(unittest.TestCase):
                                         mode="gps_n",
                                         gps_csv=gps_path,
                                         noise_csv=noise_path,
-                                        focus_sampling_points=False,
                                     )
 
         saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")

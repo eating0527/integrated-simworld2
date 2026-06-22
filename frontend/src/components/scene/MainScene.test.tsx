@@ -45,8 +45,8 @@ describe('MainScene heatmap overlay', () => {
           cols: 128,
           areaM: 512,
           opacity: 0.55,
-          vminDbm: -140,
-          vmaxDbm: -40,
+          vminDbm: -90,
+          vmaxDbm: -15,
         }}
       />,
     );

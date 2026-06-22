@@ -9,7 +9,16 @@ from typing import Any
 import numpy as np
 from matplotlib.path import Path as MplPath
 
-from app.iss_unet_service import ISS_MAX_DBM, ISS_MIN_DBM, REQUIRED_DATASET_FILES, _canonical_scene, resolve_scene_dataset
+from app.iss_unet_service import (
+    ISS_MAX_DBM,
+    ISS_MIN_DBM,
+    REQUIRED_DATASET_FILES,
+    _building_filename,
+    _canonical_scene,
+    _radio_filename,
+    pixel_size_to_grid_res,
+    resolve_scene_dataset,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +275,11 @@ def default_transmitters(
     return transmitters
 
 
+def _scale_position_px(position: tuple[int, int], grid_res: int) -> tuple[int, int]:
+    scale = float(grid_res) / float(GRID_RES)
+    return int(round(position[0] * scale)), int(round(position[1] * scale))
+
+
 def run_sionna_dataset_maps(
     scene_xml: Path,
     transmitters: list[DatasetTransmitter],
@@ -343,11 +357,15 @@ def prepare_iss_unet_dataset(
     rx_height: float = 1.5,
     grid_res: int = GRID_RES,
     area_m: float = AREA_M,
+    pixel_size_m: float | None = None,
 ) -> dict[str, Any]:
+    if pixel_size_m is not None:
+        grid_res = pixel_size_to_grid_res(pixel_size_m)
     scene_name, scene_xml = resolve_scene_xml(scene, scene_dir=scene_dir)
+    scaled_jammer_positions = None if jammer_positions is None else [_scale_position_px(position, grid_res) for position in jammer_positions]
     transmitters = default_transmitters(
-        bs_pos=bs_pos,
-        jammer_positions=jammer_positions,
+        bs_pos=_scale_position_px(bs_pos, grid_res),
+        jammer_positions=scaled_jammer_positions,
         jammer_powers=jammer_powers,
         bs_power=bs_power,
         bs_height=bs_height,
@@ -359,7 +377,7 @@ def prepare_iss_unet_dataset(
     building_map = extract_building_height_map(scene_xml, grid_res=grid_res, area_m=area_m)
     if building_map.shape != (grid_res, grid_res):
         raise ValueError(f"building map must be {grid_res}x{grid_res}, got {building_map.shape}")
-    np.save(data_dir / f"building_height_{grid_res}.npy", building_map.astype(np.float32))
+    np.save(data_dir / _building_filename(grid_res), building_map.astype(np.float32))
     grid_bounds = _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
     if _iter_scene_ply_paths(scene_xml):
         try:
@@ -368,9 +386,9 @@ def prepare_iss_unet_dataset(
             grid_bounds = _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
 
     radio_maps = run_sionna_dataset_maps(scene_xml, transmitters, rx_height=rx_height, area_m=area_m, grid_res=grid_res)
-    _save_radio_map(data_dir / "sionna_dss.npy", radio_maps["DSS"], grid_res)
-    _save_radio_map(data_dir / "sionna_iss.npy", radio_maps["ISS"], grid_res)
-    _save_radio_map(data_dir / "sionna_tss.npy", radio_maps["TSS"], grid_res)
+    _save_radio_map(data_dir / _radio_filename("dss", grid_res), radio_maps["DSS"], grid_res)
+    _save_radio_map(data_dir / _radio_filename("iss", grid_res), radio_maps["ISS"], grid_res)
+    _save_radio_map(data_dir / _radio_filename("tss", grid_res), radio_maps["TSS"], grid_res)
 
     meta = {
         "scene": scene_name,
@@ -395,16 +413,16 @@ def prepare_iss_unet_dataset(
             "samples_per_tx": SIONNA_SAMPLES_PER_TX,
         },
         "outputs": {
-            "building_map": f"building_height_{grid_res}.npy",
-            "dss": "sionna_dss.npy",
-            "iss": "sionna_iss.npy",
-            "tss": "sionna_tss.npy",
+            "building_map": _building_filename(grid_res),
+            "dss": _radio_filename("dss", grid_res),
+            "iss": _radio_filename("iss", grid_res),
+            "tss": _radio_filename("tss", grid_res),
         },
         "prepared_at": datetime.now().isoformat(),
     }
     (data_dir / "scene_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    dataset = resolve_scene_dataset(scene_name, scene_dir=scene_dir)
+    dataset = resolve_scene_dataset(scene_name, scene_dir=scene_dir, pixel_size_m=area_m / grid_res)
     return {
         "success": True,
         "scene": dataset.scene,
@@ -412,6 +430,6 @@ def prepare_iss_unet_dataset(
         "data_dir": str(dataset.data_dir),
         "missing_files": dataset.missing_files,
         "meta_available": dataset.meta_path is not None,
-        "outputs": {name: str(dataset.files[name]) for name in REQUIRED_DATASET_FILES},
+        "outputs": {name: str(dataset.files[name]) for name in dataset.required_files},
         "meta": meta,
     }

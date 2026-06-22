@@ -15,8 +15,11 @@ function formatPower(value: number) {
 }
 
 const BEACON_DIAMETER = 18;
-const BEACON_HEIGHT = 1200;
+const BEACON_HEIGHT = 3600;
 const BEACON_RADIUS = BEACON_DIAMETER / 2;
+const BEACON_LABEL_MIN_WIDTH = 780;
+const BEACON_LABEL_PADDING = '8px 12px';
+const BEACON_LABEL_FONT_SIZE = 250;
 
 export function getCFARBeaconVisualConfig(_cluster: { size: number }) {
   return {
@@ -26,9 +29,19 @@ export function getCFARBeaconVisualConfig(_cluster: { size: number }) {
   };
 }
 
+export function getCFARBeaconLabelVisualConfig() {
+  return {
+    minWidth: BEACON_LABEL_MIN_WIDTH,
+    padding: BEACON_LABEL_PADDING,
+    fontSize: BEACON_LABEL_FONT_SIZE,
+  };
+}
+
 export function CFARBeaconMarker({ beacon, index }: CFARBeaconMarkerProps) {
   const { radius, height } = getCFARBeaconVisualConfig(beacon);
-  const label = `${formatCoord(beacon.lat)}, ${formatCoord(beacon.lon)} | ${formatPower(beacon.peak_power_dbm)}`;
+  const labelVisual = getCFARBeaconLabelVisualConfig();
+  const label_1 = `訊號強度：${formatPower(beacon.peak_power_dbm)}`;
+  const label_2 = `座標：${formatCoord(beacon.lat)}, ${formatCoord(beacon.lon)}`;
 
   return (
     <group position={[beacon.world_x, 0, beacon.world_z]}>
@@ -59,22 +72,23 @@ export function CFARBeaconMarker({ beacon, index }: CFARBeaconMarkerProps) {
 
       <Html position={[0, Math.min(height * 0.25, 260), 0]} center distanceFactor={30} transform={false}>
         <div style={{
-          minWidth: 188,
-          padding: '6px 9px',
+          minWidth: labelVisual.minWidth,
+          padding: labelVisual.padding,
           borderRadius: 6,
           border: '1px solid rgba(255,85,85,.68)',
           background: 'rgba(24,6,8,.82)',
           boxShadow: '0 0 20px rgba(255,35,35,.28)',
           color: '#ffe8e8',
-          fontSize: 11,
+          fontSize: labelVisual.fontSize,
           fontWeight: 700,
           lineHeight: 1.25,
           textAlign: 'center',
           pointerEvents: 'none',
           whiteSpace: 'nowrap',
         }}>
-          <div style={{ color: '#ff6a6a', marginBottom: 2 }}>CFAR #{index + 1}</div>
-          <div>{label}</div>
+          <div style={{ color: '#ff6a6a', marginBottom: 2 }}>干擾源 # {index + 1}</div>
+          <div>{label_1}</div>
+          <div>{label_2}</div>
         </div>
       </Html>
     </group>

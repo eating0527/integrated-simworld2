@@ -15,6 +15,7 @@ type TabKey = 'sinr' | 'cfr' | 'doppler' | 'channel' | 'iss' | 'tss' | 'cfar' | 
 type CFRModulation = 'qpsk' | '16qam';
 type ComputeImpact = 'low' | 'medium' | 'high';
 type ISSUNetMode = 'sim' | 'gps' | 'gps_n';
+type ISSUNetPixelSizeM = 1 | 2 | 4;
 
 interface CFRAdvancedParams {
   constellationBatchSize: number;
@@ -34,9 +35,9 @@ interface SINRParams {
 interface ISSUNetParams {
   mode: ISSUNetMode;
   sparseRatioPercent: number;
+  pixelSizeM: ISSUNetPixelSizeM;
   cfar_enabled: boolean;
   apply_building_mask: boolean;
-  focusSamplingPoints: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
 }
@@ -98,6 +99,11 @@ const ISS_UNET_MODE_LABELS: Record<ISSUNetMode, string> = {
   gps: 'GPS',
   gps_n: 'Noise with GPS',
 };
+const ISS_UNET_RESOLUTION_OPTIONS: Array<{ value: ISSUNetPixelSizeM; label: string }> = [
+  { value: 1, label: '1 m/px (512)' },
+  { value: 2, label: '2 m/px (256)' },
+  { value: 4, label: '4 m/px (128)' },
+];
 
 interface SimulationPanelProps {
   sceneId?: string | null;
@@ -140,9 +146,9 @@ export function SimulationPanel({
   const [issUnetParams, setIssUnetParams] = useState<ISSUNetParams>({
     mode: 'sim',
     sparseRatioPercent: 20,
+    pixelSizeM: 4,
     cfar_enabled: true,
     apply_building_mask: true,
-    focusSamplingPoints: false,
     gpsFile: null,
     noiseFile: null,
   });
@@ -250,9 +256,9 @@ export function SimulationPanel({
             body: JSON.stringify(buildIssUnetSimRequestBody({
               scene: requestSceneId,
               sparseRatioPercent: issUnetParams.sparseRatioPercent,
+              pixelSizeM: issUnetParams.pixelSizeM,
               cfarEnabled: issUnetParams.cfar_enabled,
               applyBuildingMask: issUnetParams.apply_building_mask,
-              focusSamplingPoints: issUnetParams.focusSamplingPoints,
               devices: devicePayload,
             })),
           });
@@ -261,9 +267,9 @@ export function SimulationPanel({
             scene: requestSceneId,
             mode: issUnetParams.mode,
             sparseRatioPercent: issUnetParams.sparseRatioPercent,
+            pixelSizeM: issUnetParams.pixelSizeM,
             cfarEnabled: issUnetParams.cfar_enabled,
             applyBuildingMask: issUnetParams.apply_building_mask,
-            focusSamplingPoints: issUnetParams.focusSamplingPoints,
             gpsFile: issUnetParams.gpsFile,
             noiseFile: issUnetParams.noiseFile,
             devices: devicePayload,
@@ -336,6 +342,7 @@ export function SimulationPanel({
         const cacheParams = new URLSearchParams({
           ratio: String(sparseRatioPercent),
           mode: json.mode || issUnetParams.mode,
+          res: String(json.metrics?.grid_res || 512 / issUnetParams.pixelSizeM),
           t: String(Date.now()),
         });
         const cacheSuffix = cacheParams.toString();
@@ -410,8 +417,8 @@ export function SimulationPanel({
       const requestSceneId = sceneId ?? 'NTPU';
       const form = buildIssUnetStatisticsFormData({
         scene: requestSceneId,
+        pixelSizeM: issUnetParams.pixelSizeM,
         applyBuildingMask: issUnetParams.apply_building_mask,
-        focusSamplingPoints: issUnetParams.focusSamplingPoints,
         gpsFile: issUnetParams.gpsFile,
         noiseFile: issUnetParams.noiseFile,
         devices: getCurrentDevicePayload(),
@@ -623,6 +630,12 @@ export function SimulationPanel({
                     ]}
                     onChange={mode => setIssUnetParams(p => ({ ...p, mode }))}
                   />
+                  <Label>Resolution</Label>
+                  <SegmentedControl
+                    value={issUnetParams.pixelSizeM}
+                    options={ISS_UNET_RESOLUTION_OPTIONS}
+                    onChange={pixelSizeM => setIssUnetParams(p => ({ ...p, pixelSizeM }))}
+                  />
                   {issUnetParams.mode !== 'sim' && (
                     <>
                       <Label>GPS CSV</Label>
@@ -663,15 +676,6 @@ export function SimulationPanel({
                   />
                   <div />
                   <Hint>顯示建築物的遮蔽效果。</Hint>
-                  <Label>聚焦採樣點</Label>
-                  <ToggleSwitch
-                    ariaLabel="Focus Sampling Points"
-                    checked={issUnetParams.focusSamplingPoints}
-                    disabled={issUnetParams.mode !== 'gps_n'}
-                    onChange={v => setIssUnetParams(p => ({ ...p, focusSamplingPoints: v }))}
-                  />
-                  <div />
-                  <Hint>僅 Noise with GPS 模式可用。聚焦 GPS 採樣點周遭的像素（若顯示異常請關閉）。</Hint>
                 </ParamGrid>
                 {issUnetOverlay && (
                   <div style={{
@@ -1144,7 +1148,7 @@ function Hint({ children }: { children?: React.ReactNode }) {
   return <div style={{ color: 'rgba(255,255,255,.36)', fontSize: 11, lineHeight: 1.35 }}>{children}</div>;
 }
 
-function SegmentedControl<T extends string>({
+function SegmentedControl<T extends string | number>({
   value,
   options,
   onChange,
@@ -1167,7 +1171,7 @@ function SegmentedControl<T extends string>({
         const active = option.value === value;
         return (
           <button
-            key={option.value}
+            key={String(option.value)}
             type="button"
             onClick={() => onChange(option.value)}
             style={{

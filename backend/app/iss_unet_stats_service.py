@@ -111,7 +111,7 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
 
     return [
         {
-            "variable": "採樣資料對齊率",
+            "variable": "GPS/Noise 時間對齊率",
             "value": _format_percent(_safe_divide(aligned_noise, aligned_noise + skipped_noise)),
             "meaning": "干擾採樣與座標資料的時間同步品質",
         },
@@ -126,7 +126,7 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
             "meaning": "排除重複採樣點後，剩餘相異採樣點的比例",
         },
         {
-            "variable": "地圖覆蓋率",
+            "variable": "採樣點地圖覆蓋率",
             "value": _format_percent(_safe_divide(used_samples, outdoor_pixels)),
             "meaning": "干擾採樣佔 512*512 室外地圖的比例",
         },
@@ -151,14 +151,14 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
             "meaning": "重建干擾地圖 vs 真實量測值的 MAE",
         },
         {
-            "variable": "CFAR 定位誤差",
-            "value": _format_px(hotspot_error),
-            "meaning": "重建干擾源 vs 真實干擾源的定位誤差",
-        },
-        {
             "variable": "重建樣本偏差",
             "value": _format_db(sample_point_bias, "dB"),
-            "meaning": "重建結果是否系統性高估或低估",
+            "meaning": "重建結果是否系統性高估或低估量測值",
+        },
+        {
+            "variable": "CFAR 熱點定位誤差",
+            "value": _format_px(hotspot_error),
+            "meaning": "重建干擾源 vs 真實干擾源的定位誤差",
         },
     ]
 
@@ -244,9 +244,10 @@ def render_statistics_table_png(rows: list[dict[str, str]], title: str = "統計
     return buffer.getvalue()
 
 
-def save_statistics_table_png(scene: str, rows: list[dict[str, str]]) -> Path:
+def save_statistics_table_png(scene: str, rows: list[dict[str, str]], grid_res: int = 128) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_DIR / f"iss_unet_{scene.lower()}_gps_n_statistics.png"
+    resolution_label = "" if grid_res == 128 else f"_res{grid_res}"
+    path = OUTPUT_DIR / f"iss_unet_{scene.lower()}{resolution_label}_gps_n_statistics.png"
     path.write_bytes(render_statistics_table_png(rows, title=_statistics_table_title(scene)))
     return path
 
@@ -261,10 +262,10 @@ def generate_gpsn_statistics(
     gps_csv: Path | str | bytes | None = None,
     noise_csv: Path | str | bytes | None = None,
     apply_building_mask: bool = True,
-    focus_sampling_points: bool = True,
     scene_dir: Path | None = None,
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
+    pixel_size_m: float = 4.0,
 ) -> dict[str, Any]:
     if mode != "gps_n":
         raise ValueError("statistics generation only supports gps_n mode")
@@ -278,13 +279,13 @@ def generate_gpsn_statistics(
         gps_csv=gps_csv,
         noise_csv=noise_csv,
         apply_building_mask=apply_building_mask,
-        focus_sampling_points=focus_sampling_points,
         scene_dir=scene_dir,
         devices=devices,
         scene_xml_path=scene_xml_path,
+        pixel_size_m=pixel_size_m,
     )
     rows = build_gpsn_statistics_rows(artifacts)
-    image_path = save_statistics_table_png(artifacts.dataset.scene, rows)
+    image_path = save_statistics_table_png(artifacts.dataset.scene, rows, grid_res=artifacts.dataset.grid_res)
     return {
         "scene": artifacts.dataset.scene,
         "mode": "gps_n",
