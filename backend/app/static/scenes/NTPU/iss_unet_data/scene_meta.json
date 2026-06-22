@@ -1,5 +1,7 @@
 {
   "scene_xml": "data\\datasets\\24.943834_121.369192\\scene.xml",
+  "center_lat": 24.943476,
+  "center_lon": 121.370054,
   "grid_res": 128,
   "area_m": 512.0,
   "pixel_size_m": 4.0,

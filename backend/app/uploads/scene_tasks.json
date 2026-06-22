@@ -1,5 +1,84 @@
 [
   {
+    "id": "task-80df6c3a81",
+    "sceneKey": "T-74A95E33C6",
+    "sceneName": "picked_2026-06-22_07_10_26",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.942836157835504,
+      "lon": 121.3707169890404,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "電資院長椅",
+      "location_id": "loc-80044f874e"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6",
+    "modelUrl": "/generated-scenes/T-74A95E33C6/T-74A95E33C6.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\T-74A95E33C6.xml",
+    "createdAt": "2026-06-22T15:10:24.366232",
+    "updatedAt": "2026-06-22T15:11:07.925725",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-06-22T15:10:24.369233",
+    "finishedAt": "2026-06-22T15:11:07.924718",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-74A95E33C6",
+      "available": true,
+      "data_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-74A95E33C6",
+        "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\T-74A95E33C6.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-06-22T15:11:07.922724"
+      }
+    }
+  },
+  {
     "id": "task-57938ce500",
     "sceneKey": "T-7F35CC74D9",
     "sceneName": "picked_2026-06-02_02_07_41",

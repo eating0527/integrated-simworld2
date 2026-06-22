@@ -67,6 +67,16 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual({path.name for path in dataset.files.values()}, REQUIRED_FILES)
         self.assertEqual(dataset.scene, "NTPU")
 
+    def test_ntpu_fallback_center_matches_frontend_origin(self):
+        self._write_ntpu_dataset()
+        from app.iss_real import resolve_scene_center as resolve_route_scene_center
+        from app.iss_unet_service import _scene_center, resolve_scene_dataset
+
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+
+        self.assertEqual(_scene_center(dataset), (24.943476, 121.370054))
+        self.assertEqual(resolve_route_scene_center(dataset), (24.943476, 121.370054))
+
     def test_dataset_resolver_reports_missing_files_for_nycu(self):
         from app.iss_unet_service import resolve_scene_dataset
 
