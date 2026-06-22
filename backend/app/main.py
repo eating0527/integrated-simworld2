@@ -54,7 +54,9 @@ SCENE_DIR = BASE_DIR / "static" / "scenes"
 GENERATED_SCENES_DIR = SCENE_DIR / "generated"
 GENERATED_SCENES_DIR.mkdir(parents=True, exist_ok=True)
 SCENE_TASKS_LOCK = threading.Lock()
-FIXED_GENERATION_ZOOM = 17
+GENERATED_SCENE_AREA_M = 512.0
+BASEMAP_GENERATION_ZOOM = 18
+FIXED_GENERATION_ZOOM = BASEMAP_GENERATION_ZOOM
 DETAIL_BBOX_SPAN_TILES = 2.6
 BUILDING_CHECK_TOTAL_TIMEOUT_SECONDS = 14.0
 BUILDING_CHECK_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -608,6 +610,24 @@ def _tile_xy_to_latlon(tile_x: float, tile_y: float, zoom: int) -> tuple[float, 
     return lat, lon
 
 
+def _degree_to_meter_scales(lat: float) -> tuple[float, float]:
+    meters_per_deg_lat = 111320.0
+    meters_per_deg_lon = meters_per_deg_lat * math.cos(math.radians(lat))
+    return meters_per_deg_lat, max(1.0, meters_per_deg_lon)
+
+
+def _bbox_by_center_meters(lat: float, lon: float, area_m: float) -> tuple[float, float, float, float]:
+    half_m = max(1.0, float(area_m)) * 0.5
+    meters_per_deg_lat, meters_per_deg_lon = _degree_to_meter_scales(lat)
+    lat_delta = half_m / meters_per_deg_lat
+    lon_delta = half_m / meters_per_deg_lon
+    min_lat = _clamp(lat - lat_delta, -89.0, 89.0)
+    max_lat = _clamp(lat + lat_delta, -89.0, 89.0)
+    min_lon = _clamp(lon - lon_delta, -180.0, 180.0)
+    max_lon = _clamp(lon + lon_delta, -180.0, 180.0)
+    return min_lat, max_lat, min_lon, max_lon
+
+
 def _bbox_by_zoom_centered(
     lat: float,
     lon: float,
@@ -649,12 +669,7 @@ def _parse_overpass_building_count(payload: Dict[str, Any]) -> int:
 
 
 def _check_building_count_sync(lat: float, lon: float) -> Dict[str, Any]:
-    min_lat, max_lat, min_lon, max_lon = _bbox_by_zoom_centered(
-        lat,
-        lon,
-        FIXED_GENERATION_ZOOM,
-        DETAIL_BBOX_SPAN_TILES,
-    )
+    min_lat, max_lat, min_lon, max_lon = _bbox_by_center_meters(lat, lon, GENERATED_SCENE_AREA_M)
     bbox = {
         "south": min_lat,
         "west": min_lon,
@@ -688,7 +703,9 @@ def _check_building_count_sync(lat: float, lon: float) -> Dict[str, Any]:
                 "success": True,
                 "building_count": building_count,
                 "has_buildings": building_count > 0,
-                "zoom": FIXED_GENERATION_ZOOM,
+                "zoom": BASEMAP_GENERATION_ZOOM,
+                "area_m": GENERATED_SCENE_AREA_M,
+                "bbox_mode": "fixed_meters",
                 "bbox": bbox,
                 "source": endpoint,
             }
@@ -971,7 +988,9 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
         "--lon",
         str(lon),
         "--zoom",
-        str(zoom if zoom is not None else 16),
+        str(zoom if zoom is not None else BASEMAP_GENERATION_ZOOM),
+        "--area-m",
+        str(GENERATED_SCENE_AREA_M),
         "--scene-name",
         str(task.get("sceneName", "custom_scene")),
         "--scene-key",
@@ -1181,7 +1200,7 @@ async def create_scene_task(req: SceneTaskCreateRequest):
     lat = req.lat
     lon = req.lon
     requested_zoom = req.zoom
-    zoom = FIXED_GENERATION_ZOOM
+    zoom = BASEMAP_GENERATION_ZOOM
     place_name = req.place_name
 
     if req.location_id:
@@ -1195,7 +1214,7 @@ async def create_scene_task(req: SceneTaskCreateRequest):
         lat = selected.get("lat")
         lon = selected.get("lon")
         requested_zoom = selected.get("zoom")
-        zoom = FIXED_GENERATION_ZOOM
+        zoom = BASEMAP_GENERATION_ZOOM
         place_name = selected.get("place_name")
 
     if lat is None or lon is None:

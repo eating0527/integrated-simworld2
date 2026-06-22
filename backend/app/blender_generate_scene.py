@@ -115,8 +115,33 @@ def _degree_to_meter_scales(lat: float) -> tuple[float, float]:
     return meters_per_deg_lat, max(1.0, meters_per_deg_lon)
 
 
-BASEMAP_COVER_PADDING = 2.2
+GENERATED_SCENE_AREA_M = 512.0
+BASEMAP_COVER_PADDING = 1.0
 DETAIL_BBOX_SPAN_TILES = 2.6
+
+
+def _bbox_by_center_meters(lat: float, lon: float, area_m: float) -> tuple[float, float, float, float]:
+    half_m = max(1.0, float(area_m)) * 0.5
+    meters_per_deg_lat, meters_per_deg_lon = _degree_to_meter_scales(lat)
+    lat_delta = half_m / meters_per_deg_lat
+    lon_delta = half_m / meters_per_deg_lon
+    min_lat = _clamp(lat - lat_delta, -89.0, 89.0)
+    max_lat = _clamp(lat + lat_delta, -89.0, 89.0)
+    min_lon = _clamp(lon - lon_delta, -180.0, 180.0)
+    max_lon = _clamp(lon + lon_delta, -180.0, 180.0)
+    return min_lat, max_lat, min_lon, max_lon
+
+
+def _basemap_size_for_imported_bounds(area_m: float, imported_width: float, imported_height: float) -> tuple[float, float, str]:
+    base_size = max(1.0, float(area_m))
+    width = max(base_size, float(imported_width))
+    height = max(base_size, float(imported_height))
+    mode = "imported_bounds" if width > base_size or height > base_size else "fixed_area"
+    return width, height, mode
+
+
+def _plane_scale_for_unit_size(width: float, height: float) -> tuple[float, float]:
+    return max(1.0, float(width)), max(1.0, float(height))
 
 
 def _match_excluded_layer(name: str) -> str | None:
@@ -235,6 +260,7 @@ def parse_args(argv):
     parser.add_argument("--lat", type=float, required=True)
     parser.add_argument("--lon", type=float, required=True)
     parser.add_argument("--zoom", type=int, default=16)
+    parser.add_argument("--area-m", type=float, default=GENERATED_SCENE_AREA_M)
     parser.add_argument("--scene-name", type=str, default="custom_scene")
     parser.add_argument("--scene-key", type=str, default="CUSTOM")
     parser.add_argument("--output-dir", type=str, required=True)
@@ -244,9 +270,11 @@ def parse_args(argv):
 
 def main():
     args = parse_args(sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else [])
+    args.area_m = max(1.0, float(args.area_m))
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     scene_key = args.scene_key.upper()
+    bbox_min_lat, bbox_max_lat, bbox_min_lon, bbox_max_lon = _bbox_by_center_meters(args.lat, args.lon, args.area_m)
 
     metadata = {
         "scene_name": args.scene_name,
@@ -255,6 +283,13 @@ def main():
         "lat": args.lat,
         "lon": args.lon,
         "zoom": args.zoom,
+        "area_m": args.area_m,
+        "bbox_mode": "fixed_meters",
+        "bbox_size_m": [args.area_m, args.area_m],
+        "bbox_min_lat_used": bbox_min_lat,
+        "bbox_max_lat_used": bbox_max_lat,
+        "bbox_min_lon_used": bbox_min_lon,
+        "bbox_max_lon_used": bbox_max_lon,
         "status": "started",
     }
 
@@ -511,9 +546,7 @@ def main():
                     server_candidates.append(current_server)
 
                 attempt_errors = []
-                # Strict zoom-correlated bbox so modeling footprint matches zoom 17 scale deterministically.
-                bbox_span_tiles = DETAIL_BBOX_SPAN_TILES
-                min_lat, max_lat, min_lon, max_lon = _bbox_by_zoom_centered(args.lat, args.lon, args.zoom, bbox_span_tiles)
+                min_lat, max_lat, min_lon, max_lon = _bbox_by_center_meters(args.lat, args.lon, args.area_m)
                 addon.minLat = _clamp(min_lat, -89.0, 89.0)
                 addon.maxLat = _clamp(max_lat, -89.0, 89.0)
                 addon.minLon = _clamp(min_lon, -180.0, 180.0)
@@ -535,18 +568,19 @@ def main():
                         imported_meshes = _mesh_count() - mesh_count_before
                         if import_result and "FINISHED" in import_result and imported_meshes > 0:
                             metadata["osm_server_used"] = server
-                            metadata["bbox_mode"] = "strict_zoom_tiles"
-                            metadata["bbox_span_tiles"] = bbox_span_tiles
+                            metadata["bbox_mode"] = "fixed_meters"
+                            metadata["area_m"] = args.area_m
+                            metadata["bbox_size_m"] = [args.area_m, args.area_m]
                             metadata["bbox_min_lat_used"] = used_min_lat
                             metadata["bbox_max_lat_used"] = used_max_lat
                             metadata["bbox_min_lon_used"] = used_min_lon
                             metadata["bbox_max_lon_used"] = used_max_lon
                             break
                         attempt_errors.append(
-                            f"{server} (strict_zoom): returned {import_result}, imported_meshes={imported_meshes}"
+                            f"{server} (fixed_meters): returned {import_result}, imported_meshes={imported_meshes}"
                         )
                     except Exception as exc:
-                        attempt_errors.append(f"{server} (strict_zoom): {exc}")
+                        attempt_errors.append(f"{server} (fixed_meters): {exc}")
 
                 if import_result is None:
                     import_error = " ; ".join(attempt_errors) if attempt_errors else "Unknown import failure"
@@ -587,8 +621,8 @@ def main():
         try:
             zoom = max(0, min(19, int(args.zoom)))
             center_tile_x, center_tile_y = _latlon_to_tile(args.lat, args.lon, zoom)
-            default_min_lat, default_max_lat, default_min_lon, default_max_lon = _bbox_by_zoom_centered(
-                args.lat, args.lon, args.zoom, DETAIL_BBOX_SPAN_TILES
+            default_min_lat, default_max_lat, default_min_lon, default_max_lon = _bbox_by_center_meters(
+                args.lat, args.lon, args.area_m
             )
             geo_min_lat = float(metadata.get("bbox_min_lat_used", default_min_lat))
             geo_max_lat = float(metadata.get("bbox_max_lat_used", default_max_lat))
@@ -647,14 +681,16 @@ def main():
                 # Build a single basemap image for the entire bbox to avoid visible tile splitting.
                 world_cx = (min_x + max_x) * 0.5
                 world_cy = (min_y + max_y) * 0.5
-                # Keep basemap larger than strict bbox so imported meshes don't visually overflow.
                 coverage_padding = BASEMAP_COVER_PADDING
                 geo_center_lat = (geo_min_lat + geo_max_lat) * 0.5
                 meters_per_deg_lat, meters_per_deg_lon = _degree_to_meter_scales(geo_center_lat)
                 geo_world_w = max(1.0, abs(geo_max_lon - geo_min_lon) * meters_per_deg_lon)
                 geo_world_h = max(1.0, abs(geo_max_lat - geo_min_lat) * meters_per_deg_lat)
-                world_w = geo_world_w * coverage_padding
-                world_h = geo_world_h * coverage_padding
+                world_w, world_h, basemap_alignment_mode = _basemap_size_for_imported_bounds(
+                    args.area_m,
+                    imported_width,
+                    imported_height,
+                )
 
                 def _download_bbox_image(min_lon: float, min_lat: float, max_lon: float, max_lat: float, out_path: Path) -> tuple[str, str]:
                     if args.basemap_style == "satellite":
@@ -711,7 +747,8 @@ def main():
                 bpy.ops.mesh.primitive_plane_add(size=1.0, location=(world_cx, world_cy, ground_z))
                 ground = bpy.context.active_object
                 ground.name = "OSM_BaseMap"
-                ground.scale = (world_w * 0.5, world_h * 0.5, 1.0)
+                scale_x, scale_y = _plane_scale_for_unit_size(world_w, world_h)
+                ground.scale = (scale_x, scale_y, 1.0)
                 mat = _create_tile_material("OSM_BaseMap_Mat", tile_path)
                 ground.data.materials.clear()
                 ground.data.materials.append(mat)
@@ -719,7 +756,7 @@ def main():
 
                 basemap_added = True
                 metadata["basemap_fit_mode"] = "geo_bbox_single_image"
-                metadata["basemap_scale_mode"] = "geo_bbox_meters"
+                metadata["basemap_scale_mode"] = "fixed_meters"
                 metadata["imported_bounds_xy"] = {
                     "min_x": min_x,
                     "max_x": max_x,
@@ -729,6 +766,8 @@ def main():
                     "height": imported_height,
                 }
                 metadata["basemap_applied_size"] = [world_w, world_h]
+                metadata["basemap_plane_scale"] = [scale_x, scale_y, 1.0]
+                metadata["basemap_alignment_mode"] = basemap_alignment_mode
                 metadata["basemap_cover_padding"] = coverage_padding
                 metadata["basemap_tile_strategy"] = "single_image_bbox"
                 metadata["geo_bbox_world_size"] = [geo_world_w, geo_world_h]
@@ -748,11 +787,9 @@ def main():
                     },
                 })
             else:
-                # Fallback for empty imports: keep strict zoom bbox size in meters.
-                meters_lat, meters_lon = _degree_to_meter_scales((geo_min_lat + geo_max_lat) * 0.5)
                 coverage_padding = BASEMAP_COVER_PADDING
-                size_x = max(50.0, abs(geo_max_lon - geo_min_lon) * meters_lon * coverage_padding)
-                size_y = max(50.0, abs(geo_max_lat - geo_min_lat) * meters_lat * coverage_padding)
+                size_x = float(args.area_m)
+                size_y = float(args.area_m)
                 center_x = 0.0
                 center_y = 0.0
                 ground_z = -0.05
@@ -762,15 +799,19 @@ def main():
                 bpy.ops.mesh.primitive_plane_add(size=1.0, location=(center_x, center_y, ground_z))
                 ground = bpy.context.active_object
                 ground.name = "OSM_BaseMap"
-                ground.scale = (size_x * 0.5, size_y * 0.5, 1.0)
+                scale_x, scale_y = _plane_scale_for_unit_size(size_x, size_y)
+                ground.scale = (scale_x, scale_y, 1.0)
                 mat = _create_tile_material("OSM_BaseMap_Mat", tile_path)
                 ground.data.materials.clear()
                 ground.data.materials.append(mat)
                 ground_object = ground
 
                 basemap_added = True
-                metadata["basemap_fit_mode"] = "fixed_size_auto_by_zoom_fallback"
+                metadata["basemap_fit_mode"] = "fixed_meter_fallback"
+                metadata["basemap_scale_mode"] = "fixed_meters"
                 metadata["basemap_cover_padding"] = coverage_padding
+                metadata["basemap_applied_size"] = [size_x, size_y]
+                metadata["basemap_plane_scale"] = [scale_x, scale_y, 1.0]
                 tile_infos.append({
                     "x": center_tile_x,
                     "y": center_tile_y,
@@ -781,7 +822,7 @@ def main():
                 })
 
             metadata["basemap_tile_count"] = len(tile_infos)
-            metadata["basemap_size_mode"] = "strict_zoom_bbox"
+            metadata["basemap_size_mode"] = "fixed_meters"
             metadata["basemap_tiles"] = tile_infos
             if tile_infos:
                 metadata["basemap_tile_url"] = tile_infos[0]["url"]

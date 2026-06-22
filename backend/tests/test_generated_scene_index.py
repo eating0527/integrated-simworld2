@@ -1,5 +1,6 @@
 import json
 import asyncio
+import math
 import shutil
 import unittest
 import uuid
@@ -7,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import main
+from app import blender_generate_scene
 
 
 def _task(
@@ -160,6 +162,125 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         self.assertEqual(updated["stage"], "iss_unet_dataset_failed")
         self.assertEqual(updated["issUnetDataset"]["available"], False)
         self.assertIn("Sionna unavailable", updated["issUnetDataset"]["error"])
+
+    def test_fixed_meter_bbox_is_512m_at_25n_and_independent_of_zoom(self):
+        lat = 25.0
+        lon = 121.0
+
+        bbox_main = main._bbox_by_center_meters(lat, lon, 512.0)
+        bbox_blender = blender_generate_scene._bbox_by_center_meters(lat, lon, 512.0)
+        zoom_bbox = main._bbox_by_zoom_centered(lat, lon, 17, 2.6)
+
+        self.assertEqual(bbox_main, bbox_blender)
+        min_lat, max_lat, min_lon, max_lon = bbox_main
+        meters_per_deg_lat, meters_per_deg_lon = main._degree_to_meter_scales(lat)
+        width_m = (max_lon - min_lon) * meters_per_deg_lon
+        height_m = (max_lat - min_lat) * meters_per_deg_lat
+        zoom_width_m = (zoom_bbox[3] - zoom_bbox[2]) * meters_per_deg_lon
+
+        self.assertTrue(math.isclose(width_m, 512.0, rel_tol=0.0, abs_tol=1.0))
+        self.assertTrue(math.isclose(height_m, 512.0, rel_tol=0.0, abs_tol=1.0))
+        self.assertFalse(math.isclose(zoom_width_m, 512.0, rel_tol=0.0, abs_tol=10.0))
+
+    def test_building_count_uses_fixed_meter_bbox_metadata(self):
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "elements": [
+                        {"tags": {"ways": "3", "relations": "1"}},
+                    ],
+                }).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            body = request.data.decode("utf-8")
+            captured["query"] = body
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        with patch.object(main, "OVERPASS_ENDPOINTS", ["https://example.test/overpass"]):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                result = main._check_building_count_sync(25.0, 121.0)
+
+        bbox = result["bbox"]
+        meters_per_deg_lat, meters_per_deg_lon = main._degree_to_meter_scales(25.0)
+        self.assertEqual(result["building_count"], 4)
+        self.assertEqual(result["zoom"], main.BASEMAP_GENERATION_ZOOM)
+        self.assertEqual(result["bbox_mode"], "fixed_meters")
+        self.assertEqual(result["area_m"], 512.0)
+        self.assertTrue(math.isclose((bbox["east"] - bbox["west"]) * meters_per_deg_lon, 512.0, abs_tol=1.0))
+        self.assertTrue(math.isclose((bbox["north"] - bbox["south"]) * meters_per_deg_lat, 512.0, abs_tol=1.0))
+        self.assertIn(str(bbox["south"]), captured["query"])
+        self.assertIn(str(bbox["east"]), captured["query"])
+
+    def test_blender_command_uses_basemap_zoom_and_area_m(self):
+        task = _task("task-ok", "T-AAAAAAAAAA", status="queued")
+        task["location"]["lat"] = 25.0
+        task["location"]["lon"] = 121.0
+        task["location"]["zoom"] = main.BASEMAP_GENERATION_ZOOM
+        task["location"]["requested_zoom"] = 15
+        task["outputDir"] = str(self.scene_dir / "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        captured = {}
+
+        def fake_run(cmd, capture_output, text, timeout):
+            captured["cmd"] = cmd
+            out_dir = Path(task["outputDir"])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "T-AAAAAAAAAA.glb").write_bytes(b"glb")
+            (out_dir / "T-AAAAAAAAAA.xml").write_text("<scene />", encoding="utf-8")
+            (out_dir / "scene_metadata.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+
+            class Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Result()
+
+        with patch.object(main, "_find_blender_executable", return_value="blender.exe"):
+            with patch("subprocess.run", side_effect=fake_run):
+                result = main._run_blender_task_sync("task-ok")
+
+        cmd = captured["cmd"]
+        self.assertTrue(result["success"])
+        self.assertEqual(cmd[cmd.index("--zoom") + 1], str(main.BASEMAP_GENERATION_ZOOM))
+        self.assertEqual(cmd[cmd.index("--area-m") + 1], "512.0")
+
+    def test_blender_parse_args_accepts_area_m(self):
+        args = blender_generate_scene.parse_args([
+            "--lat", "25.0",
+            "--lon", "121.0",
+            "--zoom", "18",
+            "--area-m", "512.0",
+            "--output-dir", str(self.root),
+        ])
+
+        self.assertEqual(args.area_m, 512.0)
+
+    def test_basemap_size_expands_to_cover_imported_blender_bounds(self):
+        width, height, mode = blender_generate_scene._basemap_size_for_imported_bounds(
+            area_m=512.0,
+            imported_width=593.45,
+            imported_height=591.24,
+        )
+
+        self.assertEqual(width, 593.45)
+        self.assertEqual(height, 591.24)
+        self.assertEqual(mode, "imported_bounds")
+
+    def test_blender_unit_plane_scale_matches_target_size(self):
+        scale_x, scale_y = blender_generate_scene._plane_scale_for_unit_size(593.45, 591.24)
+
+        self.assertEqual(scale_x, 593.45)
+        self.assertEqual(scale_y, 591.24)
 
 
 if __name__ == "__main__":
