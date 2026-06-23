@@ -1883,16 +1883,19 @@ async def usrp_upload_csv_bundle_post(
     }
 
 
-def _usrp_sampling_error_response(exc: Exception) -> JSONResponse:
+def _usrp_sampling_error_response(exc: Exception, mode: Literal["test", "usrp"] = "test") -> JSONResponse:
     message = str(exc)
     password = os.environ.get("RASPI_PSW", "")
     if password:
         message = message.replace(password, "[redacted]")
+    service_name = "drone.service" if mode == "usrp" else "drone_test.service"
     return JSONResponse(
         {
             "success": False,
             "raspi_connected": False,
             "session_connected": False,
+            "mode": mode,
+            "service_name": service_name,
             "service_state": "unknown",
             "message": message or "RasPi sampling control failed",
             "service_messages": [],
@@ -1902,23 +1905,23 @@ def _usrp_sampling_error_response(exc: Exception) -> JSONResponse:
 
 
 @app.get("/api/usrp/sampling/status")
-async def usrp_sampling_status_get():
+async def usrp_sampling_status_get(mode: Literal["test", "usrp"] = Query("test")):
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.get_drone_status)
+        return await asyncio.to_thread(usrp_ctl.get_drone_status, mode)
     except Exception as exc:
-        return _usrp_sampling_error_response(exc)
+        return _usrp_sampling_error_response(exc, mode)
 
 
 @app.post("/api/usrp/sampling/connect")
-async def usrp_sampling_connect_post():
+async def usrp_sampling_connect_post(mode: Literal["test", "usrp"] = Query("test")):
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.connect_raspi)
+        return await asyncio.to_thread(usrp_ctl.connect_raspi, mode)
     except Exception as exc:
-        return _usrp_sampling_error_response(exc)
+        return _usrp_sampling_error_response(exc, mode)
 
 
 @app.post("/api/usrp/sampling/disconnect")
@@ -1932,33 +1935,33 @@ async def usrp_sampling_disconnect_post():
 
 
 @app.get("/api/usrp/sampling/messages")
-async def usrp_sampling_messages_get():
+async def usrp_sampling_messages_get(mode: Literal["test", "usrp"] = Query("test")):
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.get_drone_messages)
+        return await asyncio.to_thread(usrp_ctl.get_drone_messages, mode)
     except Exception as exc:
-        return _usrp_sampling_error_response(exc)
+        return _usrp_sampling_error_response(exc, mode)
 
 
 @app.post("/api/usrp/sampling/start")
-async def usrp_sampling_start_post():
+async def usrp_sampling_start_post(mode: Literal["test", "usrp"] = Query("test")):
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.start_drone_service)
+        return await asyncio.to_thread(usrp_ctl.start_drone_service, mode)
     except Exception as exc:
-        return _usrp_sampling_error_response(exc)
+        return _usrp_sampling_error_response(exc, mode)
 
 
 @app.post("/api/usrp/sampling/stop")
-async def usrp_sampling_stop_post():
+async def usrp_sampling_stop_post(mode: Literal["test", "usrp"] = Query("test")):
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.stop_drone_service)
+        return await asyncio.to_thread(usrp_ctl.stop_drone_service, mode)
     except Exception as exc:
-        return _usrp_sampling_error_response(exc)
+        return _usrp_sampling_error_response(exc, mode)
 
 
 def _merge_bundle_metadata(bundle_dir: Path, updates: dict[str, Any]) -> dict[str, Any]:

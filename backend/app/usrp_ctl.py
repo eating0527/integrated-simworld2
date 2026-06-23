@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
+ServiceMode = Literal["test", "usrp"]
 ServiceState = Literal["running", "stopped", "unknown"]
 
 
@@ -15,9 +16,21 @@ class RaspiConfig:
     port: int = 22
 
 
+@dataclass(frozen=True)
+class ServiceTarget:
+    mode: ServiceMode
+    unit: str
+    service_name: str
+
+
 class UsrpControlError(RuntimeError):
     pass
 
+
+SERVICE_TARGETS: dict[str, ServiceTarget] = {
+    "test": ServiceTarget(mode="test", unit="drone_test", service_name="drone_test.service"),
+    "usrp": ServiceTarget(mode="usrp", unit="drone", service_name="drone.service"),
+}
 
 _CLIENT_LOCK = threading.Lock()
 _CONNECTED_CLIENT = None
@@ -54,6 +67,13 @@ def _config_from_env() -> RaspiConfig:
         raise UsrpControlError("RASPI_PORT must be an integer") from exc
 
     return RaspiConfig(host=host, user=user, password=password, port=port)
+
+
+def _service_target(mode: str = "test") -> ServiceTarget:
+    target = SERVICE_TARGETS.get(mode)
+    if target is None:
+        raise UsrpControlError("mode must be one of: test, usrp")
+    return target
 
 
 def _ssh_client(config: RaspiConfig):
@@ -138,21 +158,23 @@ def _state_from_active_output(output: str, exit_code: int) -> ServiceState:
     return "unknown"
 
 
-def _response(state: ServiceState, message: str, service_messages: list[str] | None = None) -> dict:
+def _response(target: ServiceTarget, state: ServiceState, message: str, service_messages: list[str] | None = None) -> dict:
     return {
         "success": True,
         "raspi_connected": True,
         "session_connected": _CONNECTED_CLIENT is not None,
+        "mode": target.mode,
+        "service_name": target.service_name,
         "service_state": state,
         "message": message,
         "service_messages": service_messages or [],
     }
 
 
-def _service_messages() -> list[str]:
+def _service_messages(target: ServiceTarget) -> list[str]:
     commands = [
-        "systemctl status --no-pager -l drone",
-        "journalctl -u drone -n 20 --no-pager",
+        f"systemctl status --no-pager -l {target.unit}",
+        f"journalctl -u {target.unit} -n 20 --no-pager",
     ]
     messages: list[str] = []
     for command in commands:
@@ -165,15 +187,16 @@ def _service_messages() -> list[str]:
     return messages[-40:]
 
 
-def get_drone_status() -> dict:
-    exit_code, out, err = _run_remote("systemctl is-active drone")
+def get_drone_status(mode: str = "test") -> dict:
+    target = _service_target(mode)
+    exit_code, out, err = _run_remote(f"systemctl is-active {target.unit}")
     state = _state_from_active_output(out, exit_code)
     if state == "running":
-        return _response("running", "drone.service running", _service_messages())
+        return _response(target, "running", f"{target.service_name} running", _service_messages(target))
     if state == "stopped":
-        return _response("stopped", "drone.service stopped", _service_messages())
-    detail = err or out or "drone.service status unknown"
-    return _response("unknown", detail, _service_messages())
+        return _response(target, "stopped", f"{target.service_name} stopped", _service_messages(target))
+    detail = err or out or f"{target.service_name} status unknown"
+    return _response(target, "unknown", detail, _service_messages(target))
 
 
 def _needs_interactive_auth(out: str, err: str) -> bool:
@@ -188,46 +211,51 @@ def _run_service_control(command: str) -> tuple[int, str, str]:
     return exit_code, out, err
 
 
-def connect_raspi() -> dict:
+def connect_raspi(mode: str = "test") -> dict:
     _connected_client()
-    status = get_drone_status()
+    status = get_drone_status(mode)
     status["message"] = "RasPi connected"
     return status
 
 
 def disconnect_raspi() -> dict:
     _close_connected_client()
+    target = _service_target("test")
     return {
         "success": True,
         "raspi_connected": False,
         "session_connected": False,
+        "mode": target.mode,
+        "service_name": target.service_name,
         "service_state": "unknown",
         "message": "RasPi disconnected",
         "service_messages": [],
     }
 
 
-def get_drone_messages() -> dict:
-    status = get_drone_status()
-    status["message"] = "drone.service messages loaded"
+def get_drone_messages(mode: str = "test") -> dict:
+    status = get_drone_status(mode)
+    status["message"] = f"{status['service_name']} messages loaded"
     return status
 
 
-def start_drone_service() -> dict:
-    exit_code, out, err = _run_service_control("systemctl start drone")
+def start_drone_service(mode: str = "test") -> dict:
+    target = _service_target(mode)
+    exit_code, out, err = _run_service_control(f"systemctl start {target.unit}")
     if exit_code != 0:
-        raise UsrpControlError(err or out or "systemctl start drone failed")
-    status = get_drone_status()
+        raise UsrpControlError(err or out or f"systemctl start {target.unit} failed")
+    status = get_drone_status(mode)
     status["service_state"] = "running"
-    status["message"] = "drone.service started"
+    status["message"] = f"{target.service_name} started"
     return status
 
 
-def stop_drone_service() -> dict:
-    exit_code, out, err = _run_service_control("systemctl stop drone")
+def stop_drone_service(mode: str = "test") -> dict:
+    target = _service_target(mode)
+    exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}")
     if exit_code != 0:
-        raise UsrpControlError(err or out or "systemctl stop drone failed")
-    status = get_drone_status()
+        raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
+    status = get_drone_status(mode)
     status["service_state"] = "stopped"
-    status["message"] = "drone.service stopped"
+    status["message"] = f"{target.service_name} stopped"
     return status

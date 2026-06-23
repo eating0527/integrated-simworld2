@@ -8,16 +8,29 @@ interface Props {
   event?: USRPSpectrumEvent | null;
 }
 
+type SamplingMode = 'test' | 'usrp';
 type ServiceState = 'running' | 'stopped' | 'unknown';
 
 interface SamplingStatus {
   success: boolean;
   raspi_connected: boolean;
   session_connected: boolean;
+  mode: SamplingMode;
+  service_name: string;
   service_state: ServiceState;
   message: string;
   service_messages: string[];
 }
+
+const MODE_LABELS: Record<SamplingMode, string> = {
+  test: '測試模式',
+  usrp: 'USRP 模式',
+};
+
+const MODE_SERVICE_NAMES: Record<SamplingMode, string> = {
+  test: 'drone_test.service',
+  usrp: 'drone.service',
+};
 
 function ageSeconds(event?: USRPSpectrumEvent | null): number | null {
   if (!event?.timestamp) return null;
@@ -37,11 +50,18 @@ function serviceLabel(status: SamplingStatus | null): string {
   return '狀態未知';
 }
 
-function normalizeStatus(data: Partial<SamplingStatus>, ok: boolean): SamplingStatus {
+function normalizeMode(mode: unknown, fallback: SamplingMode): SamplingMode {
+  return mode === 'usrp' || mode === 'test' ? mode : fallback;
+}
+
+function normalizeStatus(data: Partial<SamplingStatus>, ok: boolean, fallbackMode: SamplingMode): SamplingStatus {
+  const mode = normalizeMode(data.mode, fallbackMode);
   return {
     success: Boolean(data.success ?? ok),
     raspi_connected: Boolean(data.raspi_connected),
     session_connected: Boolean(data.session_connected ?? data.raspi_connected),
+    mode,
+    service_name: String(data.service_name ?? MODE_SERVICE_NAMES[mode]),
     service_state: data.service_state ?? 'unknown',
     message: String(data.message ?? ''),
     service_messages: Array.isArray(data.service_messages)
@@ -103,6 +123,12 @@ const S: Record<string, React.CSSProperties> = {
     background: 'rgba(255, 255, 255, 0.05)',
     border: '1px solid rgba(120, 180, 255, 0.12)',
   },
+  modeSwitch: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 6,
+    marginBottom: 9,
+  },
   statusRows: {
     display: 'grid',
     gridTemplateColumns: '72px 1fr',
@@ -119,6 +145,9 @@ const S: Record<string, React.CSSProperties> = {
   statusValue: {
     color: '#ffffff',
     fontWeight: 700,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   message: {
     marginBottom: 8,
@@ -156,6 +185,10 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontWeight: 700,
     cursor: 'pointer',
+  },
+  activeButton: {
+    background: 'rgba(0, 229, 138, 0.18)',
+    borderColor: 'rgba(0, 229, 138, 0.34)',
   },
   stopButton: {
     background: 'rgba(255, 116, 116, 0.14)',
@@ -227,20 +260,25 @@ const S: Record<string, React.CSSProperties> = {
 
 export function USRPTelemetry({ event }: Props) {
   const age = ageSeconds(event);
+  const [samplingMode, setSamplingMode] = useState<SamplingMode>('test');
   const [samplingStatus, setSamplingStatus] = useState<SamplingStatus | null>(null);
   const [samplingBusy, setSamplingBusy] = useState(false);
 
-  const requestSampling = useCallback(async (path: string, init?: RequestInit) => {
+  const requestSampling = useCallback(async (path: string, init?: RequestInit, options?: { withMode?: boolean }) => {
+    const withMode = options?.withMode ?? true;
+    const requestPath = withMode ? `${path}?mode=${samplingMode}` : path;
     setSamplingBusy(true);
     try {
-      const res = init ? await fetch(`${API}${path}`, init) : await fetch(`${API}${path}`);
+      const res = init ? await fetch(`${API}${requestPath}`, init) : await fetch(`${API}${requestPath}`);
       const data = await res.json().catch(() => ({}));
-      setSamplingStatus(normalizeStatus(data, res.ok));
+      setSamplingStatus(normalizeStatus(data, res.ok, samplingMode));
     } catch (error) {
       setSamplingStatus({
         success: false,
         raspi_connected: false,
         session_connected: false,
+        mode: samplingMode,
+        service_name: MODE_SERVICE_NAMES[samplingMode],
         service_state: 'unknown',
         message: error instanceof Error ? error.message : 'RasPi request failed',
         service_messages: [],
@@ -248,7 +286,7 @@ export function USRPTelemetry({ event }: Props) {
     } finally {
       setSamplingBusy(false);
     }
-  }, []);
+  }, [samplingMode]);
 
   useEffect(() => {
     void requestSampling('/api/usrp/sampling/status');
@@ -258,6 +296,12 @@ export function USRPTelemetry({ event }: Props) {
   const samplingRunning = samplingStatus?.service_state === 'running';
   const disabledOpacity = (disabled: boolean) => ({ opacity: disabled ? 0.48 : 1 });
   const statusMessage = samplingStatus?.message ?? '';
+
+  const handleModeChange = (mode: SamplingMode) => {
+    if (mode === samplingMode || samplingBusy || samplingRunning) return;
+    setSamplingStatus(null);
+    setSamplingMode(mode);
+  };
 
   return (
     <div style={S.panel}>
@@ -270,11 +314,38 @@ export function USRPTelemetry({ event }: Props) {
       </div>
 
       <div style={S.control}>
+        <div style={S.modeSwitch} aria-label="USRP 採樣模式">
+          {(['test', 'usrp'] as SamplingMode[]).map(mode => {
+            const active = samplingMode === mode;
+            const disabled = samplingBusy || samplingRunning;
+            return (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={active}
+                style={{
+                  ...S.button,
+                  ...(active ? S.activeButton : null),
+                  ...disabledOpacity(disabled),
+                }}
+                disabled={disabled}
+                onClick={() => handleModeChange(mode)}
+              >
+                {MODE_LABELS[mode]}
+              </button>
+            );
+          })}
+        </div>
+
         <div style={S.statusRows}>
+          <span style={S.statusKey}>模式</span>
+          <span style={S.statusValue}>{MODE_LABELS[samplingMode]}</span>
           <span style={S.statusKey}>RasPi</span>
           <span style={S.statusValue}>{raspiLabel(samplingStatus, samplingBusy)}</span>
           <span style={S.statusKey}>Service</span>
           <span style={S.statusValue}>{serviceLabel(samplingStatus)}</span>
+          <span style={S.statusKey}>Unit</span>
+          <span style={S.statusValue}>{samplingStatus?.service_name ?? MODE_SERVICE_NAMES[samplingMode]}</span>
         </div>
 
         {statusMessage ? (
@@ -296,7 +367,7 @@ export function USRPTelemetry({ event }: Props) {
             type="button"
             style={{ ...S.button, ...S.stopButton, ...disabledOpacity(samplingBusy || !raspiConnected) }}
             disabled={samplingBusy || !raspiConnected}
-            onClick={() => void requestSampling('/api/usrp/sampling/disconnect', { method: 'POST' })}
+            onClick={() => void requestSampling('/api/usrp/sampling/disconnect', { method: 'POST' }, { withMode: false })}
           >
             中斷
           </button>
