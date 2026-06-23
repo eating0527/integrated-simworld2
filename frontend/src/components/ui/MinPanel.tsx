@@ -55,6 +55,15 @@ export function MinPanel({
       maxHeight: 'max-content',
     } : {}),
   };
+  const bodyLayoutStyle: React.CSSProperties = minimized
+    ? {
+      ...bodyStyle,
+      position: 'absolute',
+      width: 0,
+      height: 0,
+      overflow: 'hidden',
+    }
+    : bodyStyle ?? {};
 
   const stopDrag = () => {
     dragRef.current.active = false;
@@ -127,7 +136,7 @@ export function MinPanel({
       <div
         className={`min-panel__body ${bodyClassName}`.trim()}
         aria-hidden={minimized}
-        style={bodyStyle}
+        style={bodyLayoutStyle}
       >
         <div className="min-panel__body-inner">
           {children}

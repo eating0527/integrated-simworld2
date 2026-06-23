@@ -93,4 +93,20 @@ describe('MinPanel', () => {
     expect(panel.style.width).toBe('max-content');
     expect(panel.style.height).toBe('max-content');
   });
+
+  it('removes minimized body from layout width calculation', async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <MinPanel title="GPS" style={{ position: 'fixed', left: 10, top: 20, width: 360 }}>
+        <div>Very wide panel body content that should not size the minimized shell</div>
+      </MinPanel>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /minimize gps/i }));
+
+    const body = container.querySelector('.min-panel__body') as HTMLElement;
+    expect(body.style.position).toBe('absolute');
+    expect(body.style.width).toBe('0px');
+    expect(body.style.height).toBe('0px');
+  });
 });
