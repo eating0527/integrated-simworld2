@@ -278,6 +278,49 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | Con
 - 生成場景視覺對齊與品質微調
 - 任務狀態與使用者等待體驗
 - Blender/blosm 物件過濾與場景清理策略
+
+## Raspberry Pi USRP 採樣控制
+
+USRP 面板可透過後端 SSH 連線到 Raspberry Pi，並用 `systemctl` 控制已設定好的 `drone.service`。
+
+1. 在 **專案根目錄**的 `.env` 加入下列設定：
+
+    ```dotenv
+    RASPI_HOST=<raspi-ip>
+    RASPI_USER=<raspi-username>
+    RASPI_PSW=<raspi-password>
+    # 選填，未設定時預設為 22
+    RASPI_PORT=22
+    ```
+
+    **注意事項：不要把 Raspberry Pi 密碼放到 `frontend/.env` 或其他前端設定檔。**
+
+2. 操作流程：
+
+    1. 查看 USRP 面板，面板會自動檢查 Raspberry Pi 連線與 `drone.service` 狀態。
+    2. 按下 `連線`，建立 Raspberry Pi SSH session。
+    3. 確認 RasPi 顯示 `已連線` 後，按下 `開始採樣`，後端會在 Raspberry Pi 執行 `drone.service` 紀錄干擾訊號強度。
+    4. 採樣期間 service 會持續在樹莓派端執行，前端不會主動中斷。
+    5. 可以按下 `更新訊息` 手動更新 log。
+    6. 採樣完成後按下 `終止採樣`，後端會在 Raspberry Pi 結束 service。
+    7. 完成後可按下 `中斷` 關閉 Raspberry Pi SSH session。
+
+3. 面板狀態說明：
+
+    ```text
+    RasPi    檢查中 / 已連線 / 未連線
+    Service  採樣中 / 已停止 / 狀態未知
+    ```
+
+4. 若使用 GPS / Noise 分離流程，確認下列兩個檔案都存在後再 replay：
+
+```text
+incoming/<mission-id>/gps.csv
+incoming/<mission-id>/noise.csv
+```
+
+5. 將 mission id、service 訊息、CSV 路徑與 replay / simulation 結果一起保存為該次採樣紀錄。
+
 ## USRP B210 bridge
 
 Use `tools/usrp_to_simulator.py` to capture short B210 snapshots and forward summary RF metrics into the existing simulator WebSocket.
