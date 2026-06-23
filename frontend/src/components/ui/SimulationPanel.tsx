@@ -8,6 +8,7 @@ import {
 } from '../../utils/issUnetRequest';
 import type { CFARCluster } from '../../types/cfar';
 import type { HeatmapGridBounds, HeatmapOverlayConfig } from '../../types/heatmap';
+import { MinPanel } from './MinPanel';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -481,7 +482,10 @@ export function SimulationPanel({
       </button>
 
       {open && (
-        <div style={{
+        <MinPanel
+          title="無線通道模擬"
+          draggable
+          style={{
           position:       'fixed',
           bottom:          60,
           right:           14,
@@ -497,7 +501,8 @@ export function SimulationPanel({
           boxShadow:       '0 8px 40px rgba(0,255,255,.12), 0 2px 8px rgba(0,0,0,.5)',
           overflow:        'hidden',
           animation:       'slide-in-left .25s ease',
-        }}>
+        }}
+        >
 
           <div style={{ padding: '12px 16px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: '#0ff', fontSize: 13, fontWeight: 700, letterSpacing: 1, flex: 1 }}>
@@ -938,7 +943,7 @@ export function SimulationPanel({
               </p>
             )}
           </div>
-        </div>
+        </MinPanel>
       )}
 
       {preview && (

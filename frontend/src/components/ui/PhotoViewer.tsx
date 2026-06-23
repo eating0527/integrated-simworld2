@@ -62,7 +62,7 @@ export function PhotoViewer({ photos, onDelete }: Props) {
         backdropFilter: 'blur(18px)',
         WebkitBackdropFilter: 'blur(18px)',
         border: '1px solid rgba(120,180,255,0.14)',
-        borderRadius: 16,
+        borderRadius: 'var(--panel-radius)',
         boxShadow: '0 8px 32px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06)',
         width: 154,
         maxHeight: collapsed ? 52 : '62vh',

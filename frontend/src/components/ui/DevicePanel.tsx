@@ -1,6 +1,7 @@
 import React from 'react';
 import { useDeviceStore } from '../../store/useDeviceStore';
 import type { Device, DeviceRole } from '../../types/device';
+import { MinPanel } from './MinPanel';
 
 // ─── Single device row ────────────────────────────────────────────────────────
 
@@ -217,7 +218,7 @@ export function DevicePanel({ onApplyRxPosition }: DevicePanelProps = {}) {
   const jammerDevices = devices.filter((d) => d.role === 'jammer');
 
   return (
-    <aside className="device-panel">
+    <MinPanel as="aside" className="device-panel" title="裝置設定">
       <div className="dp-header">裝置設定</div>
 
       <Section
@@ -242,6 +243,6 @@ export function DevicePanel({ onApplyRxPosition }: DevicePanelProps = {}) {
         canAdd
         showPower
       />
-    </aside>
+    </MinPanel>
   );
 }

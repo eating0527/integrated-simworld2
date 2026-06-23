@@ -77,7 +77,7 @@ export function CameraUpload({ currentPosition, deviceId, onUploadSuccess }: Pro
         <div style={{
           background: 'rgba(8,12,28,0.85)',
           backdropFilter: 'blur(16px)',
-          borderRadius: 14,
+          borderRadius: 'var(--panel-radius)',
           padding: 6,
           border: '1px solid rgba(0,255,136,0.3)',
           boxShadow: '0 0 20px rgba(0,255,136,0.2), 0 8px 24px rgba(0,0,0,0.5)',

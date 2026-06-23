@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type React from 'react';
 import type { USRPSpectrumEvent } from '@/hooks/useGPSSync';
+import { MinPanel } from './MinPanel';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -304,15 +305,17 @@ export function USRPTelemetry({ event }: Props) {
   };
 
   return (
-    <div style={S.panel}>
-      <div style={S.header}>
-        <div style={S.title}>USRP Spectrum</div>
+    <MinPanel
+      title="USRP 設定"
+      draggable
+      style={S.panel}
+      actions={(
         <div style={S.pill}>
           <span style={{ ...S.dot, background: event ? '#00e58a' : '#56657a' }} />
           {event ? 'Live' : 'Waiting'}
         </div>
-      </div>
-
+      )}
+    >
       <div style={S.control}>
         <div style={S.modeSwitch} aria-label="USRP 採樣模式">
           {(['test', 'usrp'] as SamplingMode[]).map(mode => {
@@ -448,6 +451,6 @@ export function USRPTelemetry({ event }: Props) {
           </div>
         </>
       )}
-    </div>
+    </MinPanel>
   );
 }

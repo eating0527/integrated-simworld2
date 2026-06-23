@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { GPSDevice } from '@/hooks/useGPSSync';
+import { MinPanel } from './MinPanel';
 
 interface Props {
   deviceId?: string | null;
@@ -131,7 +132,9 @@ export function AircraftTelemetry({ deviceId, device, isTracked, compact = false
   const age = ageSeconds(device);
 
   return (
-    <div
+    <MinPanel
+      title="無人機遙測"
+      draggable
       style={{
         ...S.panel,
         left: compact ? 12 : S.panel.left,
@@ -141,15 +144,13 @@ export function AircraftTelemetry({ deviceId, device, isTracked, compact = false
         width: compact ? 'calc(100vw - 24px)' : S.panel.width,
         maxWidth: compact ? 320 : undefined,
       }}
-    >
-      <div style={S.header}>
-        <div style={S.title}>Aircraft Telemetry</div>
+      actions={(
         <div style={S.pill}>
           <span style={{ ...S.dot, background: device ? '#00e58a' : '#56657a' }} />
           {device ? 'Live' : 'Waiting'}
         </div>
-      </div>
-
+      )}
+    >
       {!device ? (
         <div style={S.empty}>
           Waiting for AP3 MAVLink GPS. Keep the controller connected by USB and the AP3 bridge running.
@@ -187,6 +188,6 @@ export function AircraftTelemetry({ deviceId, device, isTracked, compact = false
           </div>
         </>
       )}
-    </div>
+    </MinPanel>
   );
 }

@@ -48,7 +48,7 @@ export function GPSStatus({
       background: 'rgba(8,12,28,0.75)',
       backdropFilter: 'blur(18px)',
       WebkitBackdropFilter: 'blur(18px)',
-      borderRadius: 16,
+      borderRadius: 'var(--panel-radius)',
       padding: '14px 16px',
       color: 'white',
       fontSize: 13,
@@ -61,6 +61,14 @@ export function GPSStatus({
 
       {/* ── 連線狀態 ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span style={{
+          color: 'white',
+          fontSize: 12,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          whiteSpace: 'nowrap',
+        }}>連線狀態</span>
         <div style={{ position: 'relative', width: 10, height: 10, flexShrink: 0 }}>
           {st.pulse && (
             <span style={{

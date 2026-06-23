@@ -38,6 +38,7 @@ describe('USRPTelemetry Raspberry Pi dual-mode control', () => {
   it('defaults to test mode and checks drone_test.service when the panel loads', async () => {
     render(<USRPTelemetry event={null} />);
 
+    expect(screen.getAllByText('USRP 設定')).toHaveLength(1);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/usrp/sampling/status?mode=test'));
     expect(screen.getByRole('button', { name: '測試模式' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getAllByText('測試模式').length).toBeGreaterThan(0);

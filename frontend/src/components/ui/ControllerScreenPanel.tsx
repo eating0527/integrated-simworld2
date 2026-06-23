@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MinPanel } from './MinPanel';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -8,17 +9,16 @@ export function ControllerScreenPanel() {
   const streamUrl = `${API}/api/controller-stream.mjpg`;
 
   return (
-    <div className="controller-screen-panel">
-      <div className="controller-screen-panel__header">
-        <div>
-          <div className="controller-screen-panel__eyebrow">Controller Feed</div>
-          <div className="controller-screen-panel__title">ALIGN AP3 Screen</div>
-        </div>
+    <MinPanel
+      className="controller-screen-panel"
+      title="無人機畫面"
+      draggable
+      actions={(
         <div className={`controller-screen-panel__status ${connected ? 'is-live' : ''}`}>
           {connected ? 'Live' : 'Waiting'}
         </div>
-      </div>
-
+      )}
+    >
       <div className="controller-screen-panel__frame">
         <img
           className="controller-screen-panel__image"
@@ -40,6 +40,6 @@ export function ControllerScreenPanel() {
           </div>
         )}
       </div>
-    </div>
+    </MinPanel>
   );
 }
