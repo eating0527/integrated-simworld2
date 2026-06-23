@@ -3,6 +3,8 @@ uvicorn[standard]==0.30.6
 python-multipart==0.0.12
 aiofiles==24.1.0
 websockets>=12,<16
+paramiko>=3.5.0
+python-dotenv>=1.0.1
 
 # Sionna simulation
 sionna==2.0.1
