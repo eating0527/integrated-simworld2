@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import math
 import os
@@ -2130,15 +2131,34 @@ async def usrp_upload_noise_csv_post(
     device_type: str = Form("uav"),
     role: Literal["rx", "tx", "jammer"] = Form("rx"),
     devices_json: str = Form(""),
+    noise_size: int = Form(...),
+    noise_sha256: str = Form(...),
     noise_file: UploadFile = File(...),
 ):
     if not noise_file.filename:
         return JSONResponse({"success": False, "error": "noise_file filename is required"}, status_code=422)
 
-    bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    bundle_id = mission_id.strip()
+    if not bundle_id:
+        return JSONResponse({"success": False, "error": "mission_id is required"}, status_code=422)
+    noise_bytes = await noise_file.read()
+    actual_sha256 = hashlib.sha256(noise_bytes).hexdigest()
+    if noise_size != len(noise_bytes) or noise_sha256.lower() != actual_sha256:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "noise file size or sha256 mismatch",
+                "actual_size": len(noise_bytes),
+                "actual_sha256": actual_sha256,
+            },
+            status_code=422,
+        )
     bundle_dir = INCOMING_CSV_DIR / bundle_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    (bundle_dir / "noise.csv").write_bytes(await noise_file.read())
+    noise_path = bundle_dir / "noise.csv"
+    temp_path = noise_path.with_suffix(".csv.tmp")
+    temp_path.write_bytes(noise_bytes)
+    temp_path.replace(noise_path)
 
     updates: dict[str, Any] = {
         "scene": scene,
@@ -2159,12 +2179,23 @@ async def usrp_upload_noise_csv_post(
             return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
 
     metadata = _merge_bundle_metadata(bundle_dir, updates)
+    capture = None
+    try:
+        capture = capture_coordinator.ack_noise_upload(
+            bundle_id,
+            path=noise_path,
+            size=len(noise_bytes),
+            sha256=actual_sha256,
+        )
+    except CaptureNotFoundError:
+        pass
     return {
         "success": True,
         "mission_id": bundle_id,
         "bundle_dir": str(bundle_dir),
         "watch_dir": str(INCOMING_CSV_DIR),
         "metadata": metadata,
+        "capture": capture,
     }
 
 

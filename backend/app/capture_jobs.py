@@ -534,3 +534,18 @@ class CaptureCoordinator:
         if state.usrp.service not in {"idle", "stopped", "failed"}:
             self.stop_usrp(mission_id)
         return self.store.load(mission_id)
+
+    def ack_noise_upload(
+        self,
+        mission_id: str,
+        *,
+        path: Path,
+        size: int,
+        sha256: str,
+    ) -> CaptureState:
+        state = self.store.load(mission_id)
+        state.usrp.path = str(path)
+        state.usrp.service = "stopped"
+        state.usrp.file = "uploaded"
+        state.usrp.error = ""
+        return self.store.save(state)

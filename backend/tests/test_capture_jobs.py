@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import sys
 import types
@@ -368,6 +369,102 @@ class CaptureApiTests(unittest.TestCase):
         coordinator.start_uav.assert_called_once()
         coordinator.start_usrp.assert_called_once()
         coordinator.stop_bind.assert_called_once_with("flight_api")
+
+
+class NoiseUploadTests(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        self.main = main
+        self.client = TestClient(main.app)
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.root = self.repo_root / ".test_tmp" / uuid.uuid4().hex
+        self.root.mkdir(parents=True)
+        self.coordinator = CaptureCoordinator(
+            CaptureStore(self.root),
+            repo_root=self.repo_root,
+            usrp_backend=Mock(),
+        )
+        self.state = self.coordinator.store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="noise_upload",
+        )
+        self.state.usrp.connection = "ready"
+        self.state.usrp.service = "stopped"
+        self.state.usrp.file = "upload_pending"
+        self.coordinator.store.save(self.state)
+
+    def test_noise_upload_rejects_mismatched_size_and_hash(self):
+        payload = b"time_stamp,noise_floor_db\n"
+
+        with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
+            with patch.object(self.main, "capture_coordinator", self.coordinator):
+                response = self.client.post(
+                    "/api/usrp/upload-noise-csv",
+                    data={
+                        "mission_id": "noise_upload",
+                        "noise_size": "1",
+                        "noise_sha256": "bad",
+                    },
+                    files={"noise_file": ("noise.csv", payload, "text/csv")},
+                )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            self.coordinator.store.load("noise_upload").usrp.file,
+            "upload_pending",
+        )
+
+    def test_valid_noise_upload_completes_usrp_child(self):
+        payload = b"time_stamp,noise_floor_db\n2026-06-24T00:00:00, -42.0\n"
+
+        with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
+            with patch.object(self.main, "capture_coordinator", self.coordinator):
+                response = self.client.post(
+                    "/api/usrp/upload-noise-csv",
+                    data={
+                        "mission_id": "noise_upload",
+                        "noise_size": str(len(payload)),
+                        "noise_sha256": hashlib.sha256(payload).hexdigest(),
+                    },
+                    files={"noise_file": ("noise.csv", payload, "text/csv")},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["capture"]["usrp"]["file"], "uploaded")
+        self.assertEqual(
+            (self.root / "noise_upload" / "noise.csv").read_bytes(),
+            payload,
+        )
+
+
+class NoiseUploaderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        script = Path(__file__).resolve().parents[2] / "tools" / "upload_noise_csv.py"
+        spec = importlib.util.spec_from_file_location("upload_noise_csv_test", script)
+        cls.module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(cls.module)
+
+    def test_file_metadata_returns_size_and_sha256(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        path = repo_root / ".test_tmp" / f"{uuid.uuid4().hex}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = b"time_stamp,noise_floor_db\n"
+        path.write_bytes(data)
+
+        metadata = self.module.file_metadata(path)
+
+        self.assertEqual(metadata["noise_size"], str(len(data)))
+        self.assertEqual(
+            metadata["noise_sha256"],
+            hashlib.sha256(data).hexdigest(),
+        )
 
 
 if __name__ == "__main__":

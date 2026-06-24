@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import sys
 import uuid
@@ -29,6 +30,14 @@ def load_devices_json(path_value: str) -> str:
     if not path_value:
         return ""
     return Path(path_value).read_text(encoding="utf-8")
+
+
+def file_metadata(path: Path) -> dict[str, str]:
+    data = path.read_bytes()
+    return {
+        "noise_size": str(len(data)),
+        "noise_sha256": hashlib.sha256(data).hexdigest(),
+    }
 
 
 def build_multipart(fields: dict[str, str], file_field_name: str, file_path: Path) -> tuple[bytes, str]:
@@ -88,6 +97,7 @@ def main() -> int:
         "device_type": args.device_type,
         "role": args.role,
         "devices_json": load_devices_json(args.devices_file),
+        **file_metadata(noise_path),
     }
     try:
         response = post_noise(args.api_url, fields, noise_path)
