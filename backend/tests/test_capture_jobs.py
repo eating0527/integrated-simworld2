@@ -192,5 +192,183 @@ class UsrpRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered.usrp.file, "recording")
 
 
+class BindCoordinatorTests(unittest.TestCase):
+    def setUp(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        self.repo_root = Path(__file__).resolve().parents[2]
+        root = self.repo_root / ".test_tmp" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        self.process = FakeProcess()
+        self.run_command = Mock(return_value=Mock(returncode=0, stdout="", stderr=""))
+        self.popen = Mock(return_value=self.process)
+        self.backend = Mock()
+        self.backend.RemoteMission = lambda **kwargs: kwargs
+        self.backend.get_drone_status.return_value = {
+            "success": True,
+            "service_state": "stopped",
+        }
+        self.backend.start_capture_job.return_value = {
+            "success": True,
+            "service_state": "running",
+            "mission_state": {
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+        self.backend.stop_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "state": "stopped",
+                "upload_state": "uploaded",
+            },
+        }
+        self.coordinator = CaptureCoordinator(
+            CaptureStore(root),
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=self.popen,
+            usrp_backend=self.backend,
+        )
+
+    def test_bind_start_preflights_both_before_launching(self):
+        from app.capture_jobs import CaptureUnavailableError
+
+        self.backend.get_drone_status.side_effect = RuntimeError("SSH timeout")
+
+        with self.assertRaises(CaptureUnavailableError):
+            self.coordinator.start_bind("test")
+
+        self.popen.assert_not_called()
+        self.backend.start_capture_job.assert_not_called()
+
+    def test_bind_start_shares_mission_id(self):
+        state = self.coordinator.start_bind("usrp")
+
+        self.assertTrue(state.bind)
+        self.assertEqual(state.uav.mission_id, state.mission_id)
+        self.assertEqual(state.usrp.mission_id, state.mission_id)
+        self.assertEqual(state.uav.service, "running")
+        self.assertEqual(state.usrp.service, "running")
+
+    def test_bind_child_failure_preserves_other_child(self):
+        self.backend.start_capture_job.side_effect = RuntimeError("systemctl failed")
+
+        state = self.coordinator.start_bind("usrp")
+
+        self.assertEqual(state.overall_state, "partial_failed")
+        self.assertEqual(state.uav.service, "running")
+        self.assertEqual(state.usrp.service, "failed")
+
+    def test_stop_all_waits_for_both_finalizers(self):
+        state = self.coordinator.start_bind("test")
+
+        stopped = self.coordinator.stop_bind(state.mission_id)
+
+        self.assertEqual(stopped.uav.file, "ready")
+        self.assertEqual(stopped.usrp.file, "uploaded")
+        self.assertEqual(stopped.overall_state, "completed")
+
+
+class CaptureApiTests(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from app import main
+
+        self.main = main
+        self.client = TestClient(main.app)
+
+    def _state(self, target="bind"):
+        from app.capture_jobs import CaptureState
+
+        return CaptureState(
+            mission_id="flight_api",
+            target=target,
+            bind=target == "bind",
+            selected_usrp_mode="usrp",
+            created_at="2026-06-24T00:00:00+00:00",
+        )
+
+    def test_bind_start_uses_shared_capture_endpoint(self):
+        coordinator = Mock()
+        coordinator.start_bind.return_value = self._state()
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            response = self.client.post(
+                "/api/capture/bind/start",
+                json={"usrp_mode": "usrp", "scene": "NTPU", "map_type": "iss"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["mission_id"], "flight_api")
+        coordinator.start_bind.assert_called_once_with(
+            "usrp",
+            scene="NTPU",
+            map_type="iss",
+        )
+
+    def test_bind_start_maps_unavailable_dependency_to_503(self):
+        from app.capture_jobs import CaptureUnavailableError
+
+        coordinator = Mock()
+        coordinator.start_bind.side_effect = CaptureUnavailableError("SSH timeout")
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            response = self.client.post(
+                "/api/capture/bind/start",
+                json={"usrp_mode": "test"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "SSH timeout")
+
+    def test_independent_and_stop_all_routes_delegate_to_coordinator(self):
+        coordinator = Mock()
+        coordinator.start_uav.return_value = self._state("uav")
+        coordinator.start_usrp.return_value = self._state("usrp")
+        coordinator.stop_uav.return_value = self._state("uav")
+        coordinator.stop_usrp.return_value = self._state("usrp")
+        coordinator.stop_bind.return_value = self._state("bind")
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            self.assertEqual(
+                self.client.post("/api/capture/uav/start").status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.post(
+                    "/api/capture/usrp/start",
+                    json={"usrp_mode": "test"},
+                ).status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.post(
+                    "/api/capture/uav/stop",
+                    params={"mission_id": "flight_api"},
+                ).status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.post(
+                    "/api/capture/usrp/stop",
+                    params={"mission_id": "flight_api"},
+                ).status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.post(
+                    "/api/capture/bind/stop",
+                    params={"mission_id": "flight_api"},
+                ).status_code,
+                200,
+            )
+
+        coordinator.start_uav.assert_called_once()
+        coordinator.start_usrp.assert_called_once()
+        coordinator.stop_bind.assert_called_once_with("flight_api")
+
+
 if __name__ == "__main__":
     unittest.main()

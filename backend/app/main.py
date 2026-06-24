@@ -33,6 +33,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from app.capture_jobs import (
+    CaptureConflictError,
+    CaptureCoordinator,
+    CaptureNotFoundError,
+    CaptureStore,
+    CaptureUnavailableError,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +59,10 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 INCOMING_CSV_DIR = REPO_ROOT / "incoming"
 INCOMING_CSV_DIR.mkdir(parents=True, exist_ok=True)
+capture_coordinator = CaptureCoordinator(
+    CaptureStore(INCOMING_CSV_DIR),
+    repo_root=REPO_ROOT,
+)
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
@@ -1484,6 +1495,12 @@ class USRPMeasurementRequest(BaseModel):
     devices: List[DeviceIn] = Field(default_factory=list)
 
 
+class CaptureStartRequest(BaseModel):
+    usrp_mode: Literal["test", "usrp"] = "test"
+    scene: str = "NTPU"
+    map_type: Literal["sinr", "iss", "tss", "cfar"] = "iss"
+
+
 def _coerce_iss_unet_pixel_size(value: Any) -> int:
     if isinstance(value, (int, float, str)):
         try:
@@ -1820,6 +1837,82 @@ async def iss_unet_statistics_upload_post(
     except Exception as exc:
         logger.exception("ISS_UNET statistics generation failed")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+def _capture_error(exc: Exception):
+    if isinstance(exc, CaptureNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, CaptureConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, CaptureUnavailableError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    raise exc
+
+
+@app.get("/api/capture/status")
+async def capture_status_get():
+    try:
+        return await asyncio.to_thread(capture_coordinator.status)
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/uav/start")
+async def capture_uav_start_post():
+    try:
+        return await asyncio.to_thread(capture_coordinator.start_uav)
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/uav/stop")
+async def capture_uav_stop_post(mission_id: str = Query(...)):
+    try:
+        return await asyncio.to_thread(capture_coordinator.stop_uav, mission_id)
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/usrp/start")
+async def capture_usrp_start_post(req: CaptureStartRequest):
+    try:
+        return await asyncio.to_thread(
+            capture_coordinator.start_usrp,
+            req.usrp_mode,
+            scene=req.scene,
+            map_type=req.map_type,
+        )
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/usrp/stop")
+async def capture_usrp_stop_post(mission_id: str = Query(...)):
+    try:
+        return await asyncio.to_thread(capture_coordinator.stop_usrp, mission_id)
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/bind/start")
+async def capture_bind_start_post(req: CaptureStartRequest):
+    try:
+        return await asyncio.to_thread(
+            capture_coordinator.start_bind,
+            req.usrp_mode,
+            scene=req.scene,
+            map_type=req.map_type,
+        )
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/bind/stop")
+async def capture_bind_stop_post(mission_id: str = Query(...)):
+    try:
+        return await asyncio.to_thread(capture_coordinator.stop_bind, mission_id)
+    except Exception as exc:
+        _capture_error(exc)
 
 
 @app.post("/api/usrp/upload-csv-bundle")

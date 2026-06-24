@@ -230,6 +230,19 @@ class CaptureCoordinator:
                 return state
         return None
 
+    def _active_usrp(self) -> CaptureState | None:
+        for state in reversed(self.store.list()):
+            if state.target not in {"usrp", "bind"}:
+                continue
+            if state.usrp.service in {
+                "starting",
+                "running",
+                "presumed_running",
+                "stopping",
+            }:
+                return state
+        return None
+
     def _ap3_command(self, *extra: str) -> list[str]:
         script = self.repo_root / "tools" / "ap3_to_gps_csv.py"
         return [sys.executable, str(script), *extra]
@@ -245,6 +258,88 @@ class CaptureCoordinator:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "AP3 is unavailable").strip()
             raise CaptureUnavailableError(detail)
+
+    def preflight_usrp(self, mode: UsrpMode) -> None:
+        try:
+            status = self.usrp_backend.get_drone_status(mode)
+        except Exception as exc:
+            raise CaptureUnavailableError(str(exc)) from exc
+        if status.get("service_state") == "running":
+            raise CaptureConflictError(f"{mode} capture service is already running")
+
+    def _launch_uav(self, state: CaptureState) -> CaptureState:
+        csv_path = self.store.root / state.mission_id / "gps.csv"
+        csv_path.write_text("time_stamp,lat,lon,alt\n", encoding="utf-8")
+        state.uav.connection = "ready"
+        state.uav.service = "starting"
+        state.uav.file = "recording"
+        state.uav.path = str(csv_path)
+        state.started_at = state.started_at or _now_iso()
+        self.store.save(state)
+
+        process = self.popen_factory(
+            self._ap3_command(
+                "--mission-id",
+                state.mission_id,
+                "--incoming-dir",
+                str(self.store.root),
+            ),
+            cwd=self.repo_root,
+        )
+        self._uav_processes[state.mission_id] = process
+        state.uav.pid = process.pid
+        state.uav.service = "running"
+        return self.store.save(state)
+
+    def _remote_mission(
+        self,
+        state: CaptureState,
+        *,
+        scene: str,
+        map_type: str,
+    ):
+        api_url = os.environ.get(
+            "USRP_UPLOAD_API_URL",
+            "http://127.0.0.1:8888/api/usrp/upload-noise-csv",
+        )
+        return self.usrp_backend.RemoteMission(
+            mission_id=state.mission_id,
+            api_url=api_url,
+            scene=scene,
+            map_type=map_type,
+            work_dir=os.environ.get(
+                "USRP_REMOTE_WORK_DIR",
+                "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect",
+            ),
+            noise_csv=os.environ.get(
+                "USRP_REMOTE_NOISE_CSV",
+                "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv",
+            ),
+        )
+
+    def _launch_usrp(
+        self,
+        state: CaptureState,
+        *,
+        scene: str,
+        map_type: str,
+    ) -> CaptureState:
+        state.usrp.connection = "ready"
+        state.usrp.service = "starting"
+        state.usrp.file = "recording"
+        state.started_at = state.started_at or _now_iso()
+        self.store.save(state)
+        remote = self.usrp_backend.start_capture_job(
+            state.selected_usrp_mode,
+            self._remote_mission(state, scene=scene, map_type=map_type),
+        )
+        state.usrp.service = (
+            "running" if remote.get("service_state") == "running" else "starting"
+        )
+        mission_state = remote.get("mission_state") or {}
+        if mission_state.get("upload_state") == "recording":
+            state.usrp.file = "recording"
+        return self.store.save(state)
 
     def start_uav(
         self,
@@ -262,28 +357,61 @@ class CaptureCoordinator:
             target="bind" if bind else "uav",
             mission_id=mission_id,
         )
-        csv_path = self.store.root / state.mission_id / "gps.csv"
-        csv_path.write_text("time_stamp,lat,lon,alt\n", encoding="utf-8")
-        state.uav.connection = "ready"
-        state.uav.service = "starting"
-        state.uav.file = "recording"
-        state.uav.path = str(csv_path)
-        state.started_at = _now_iso()
-        self.store.save(state)
+        return self._launch_uav(state)
 
-        process = self.popen_factory(
-            self._ap3_command(
-                "--mission-id",
-                state.mission_id,
-                "--incoming-dir",
-                str(self.store.root),
-            ),
-            cwd=self.repo_root,
+    def start_usrp(
+        self,
+        mode: UsrpMode,
+        *,
+        mission_id: str | None = None,
+        bind: bool = False,
+        scene: str = "NTPU",
+        map_type: str = "iss",
+    ) -> CaptureState:
+        if self._active_usrp() is not None:
+            raise CaptureConflictError("USRP capture is already running")
+        self.preflight_usrp(mode)
+        state = self.store.create(
+            bind=bind,
+            selected_usrp_mode=mode,
+            target="bind" if bind else "usrp",
+            mission_id=mission_id,
         )
-        self._uav_processes[state.mission_id] = process
-        state.uav.pid = process.pid
-        state.uav.service = "running"
-        return self.store.save(state)
+        return self._launch_usrp(state, scene=scene, map_type=map_type)
+
+    def start_bind(
+        self,
+        mode: UsrpMode,
+        *,
+        scene: str = "NTPU",
+        map_type: str = "iss",
+    ) -> CaptureState:
+        if self._active_uav() is not None or self._active_usrp() is not None:
+            raise CaptureConflictError("a capture job is already running")
+        self.preflight_uav()
+        self.preflight_usrp(mode)
+        state = self.store.create(
+            bind=True,
+            selected_usrp_mode=mode,
+            target="bind",
+        )
+        try:
+            state = self._launch_uav(state)
+        except Exception as exc:
+            state.uav.connection = "offline"
+            state.uav.service = "failed"
+            state.uav.file = "failed"
+            state.uav.error = str(exc)
+            self.store.save(state)
+        try:
+            state = self._launch_usrp(state, scene=scene, map_type=map_type)
+        except Exception as exc:
+            state.usrp.connection = "offline"
+            state.usrp.service = "failed"
+            state.usrp.file = "failed"
+            state.usrp.error = str(exc)
+            self.store.save(state)
+        return self.store.load(state.mission_id)
 
     def stop_uav(self, mission_id: str) -> CaptureState:
         state = self.store.load(mission_id)
@@ -356,3 +484,53 @@ class CaptureCoordinator:
         }:
             state.usrp.file = upload_state
         return self.store.save(state)
+
+    def status(self) -> CaptureState:
+        states = self.store.list()
+        if not states:
+            return CaptureState(
+                mission_id="",
+                target="bind",
+                bind=False,
+                created_at=_now_iso(),
+            )
+        state = states[-1]
+        if state.usrp.service in {"starting", "running", "presumed_running", "stopping"}:
+            return self.refresh_usrp(state.mission_id)
+        return state
+
+    def stop_usrp(self, mission_id: str) -> CaptureState:
+        state = self.store.load(mission_id)
+        if state.usrp.service == "stopped" and state.usrp.file == "uploaded":
+            return state
+        state.usrp.service = "stopping"
+        state.usrp.file = "finalizing"
+        self.store.save(state)
+        try:
+            remote = self.usrp_backend.stop_capture_job(
+                state.selected_usrp_mode,
+                mission_id,
+            )
+        except Exception as exc:
+            state.usrp.connection = "offline"
+            state.usrp.service = "presumed_running"
+            state.usrp.file = "upload_pending"
+            state.usrp.error = str(exc)
+            return self.store.save(state)
+
+        state.usrp.connection = "ready"
+        state.usrp.service = "stopped"
+        mission_state = remote.get("mission_state") or {}
+        upload_state = mission_state.get("upload_state")
+        state.usrp.file = "uploaded" if upload_state == "uploaded" else "upload_pending"
+        state.usrp.error = ""
+        return self.store.save(state)
+
+    def stop_bind(self, mission_id: str) -> CaptureState:
+        state = self.store.load(mission_id)
+        if state.uav.service not in {"idle", "stopped", "failed"}:
+            self.stop_uav(mission_id)
+        state = self.store.load(mission_id)
+        if state.usrp.service not in {"idle", "stopped", "failed"}:
+            self.stop_usrp(mission_id)
+        return self.store.load(mission_id)
