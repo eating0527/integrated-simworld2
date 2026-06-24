@@ -271,6 +271,43 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(stopped.usrp.file, "uploaded")
         self.assertEqual(stopped.overall_state, "completed")
 
+    def test_idle_status_reports_independent_readiness(self):
+        state = self.coordinator.status("test")
+
+        self.assertEqual(state.uav.connection, "ready")
+        self.assertEqual(state.usrp.connection, "ready")
+        self.backend.get_drone_status.assert_called_with("test")
+
+    def test_status_merges_simultaneous_independent_jobs(self):
+        uav_state = self.coordinator.start_uav()
+        usrp_state = self.coordinator.start_usrp("usrp")
+
+        dashboard = self.coordinator.status("usrp")
+
+        self.assertNotEqual(uav_state.mission_id, usrp_state.mission_id)
+        self.assertEqual(dashboard.uav.mission_id, uav_state.mission_id)
+        self.assertEqual(dashboard.usrp.mission_id, usrp_state.mission_id)
+        self.assertEqual(dashboard.uav.service, "running")
+        self.assertEqual(dashboard.usrp.service, "running")
+
+    def test_status_marks_lost_local_process_failed_after_backend_restart(self):
+        from app.capture_jobs import CaptureCoordinator
+
+        state = self.coordinator.start_uav()
+        restarted = CaptureCoordinator(
+            self.coordinator.store,
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=self.popen,
+            usrp_backend=self.backend,
+        )
+
+        dashboard = restarted.status("test")
+
+        self.assertEqual(dashboard.uav.mission_id, state.mission_id)
+        self.assertEqual(dashboard.uav.service, "failed")
+        self.assertIn("process", dashboard.uav.error.lower())
+
 
 class CaptureApiTests(unittest.TestCase):
     def setUp(self):

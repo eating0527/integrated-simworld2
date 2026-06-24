@@ -315,6 +315,7 @@ class CaptureCoordinator:
                 "USRP_REMOTE_NOISE_CSV",
                 "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv",
             ),
+            run_user=os.environ.get("RASPI_USER", "user"),
         )
 
     def _launch_usrp(
@@ -485,18 +486,103 @@ class CaptureCoordinator:
             state.usrp.file = upload_state
         return self.store.save(state)
 
-    def status(self) -> CaptureState:
+    def status(self, mode: UsrpMode = "test") -> CaptureState:
         states = self.store.list()
-        if not states:
-            return CaptureState(
+        uav_state = next(
+            (item for item in reversed(states) if item.target in {"uav", "bind"}),
+            None,
+        )
+        usrp_state = next(
+            (item for item in reversed(states) if item.target in {"usrp", "bind"}),
+            None,
+        )
+
+        if uav_state and uav_state.uav.service in {
+            "starting",
+            "running",
+            "presumed_running",
+            "stopping",
+        }:
+            process = self._uav_processes.get(uav_state.mission_id)
+            if process is None or process.poll() is not None:
+                uav_state.uav.connection = "offline"
+                uav_state.uav.service = "failed"
+                uav_state.uav.file = "failed"
+                uav_state.uav.error = "UAV capture process is no longer owned by the backend"
+                self.store.save(uav_state)
+
+        if usrp_state and usrp_state.usrp.service in {
+            "starting",
+            "running",
+            "presumed_running",
+            "stopping",
+        }:
+            usrp_state = self.refresh_usrp(usrp_state.mission_id)
+
+        same_mission = bool(
+            uav_state
+            and usrp_state
+            and uav_state.mission_id == usrp_state.mission_id
+        )
+        if same_mission:
+            state = self.store.load(uav_state.mission_id)
+        else:
+            state = CaptureState(
                 mission_id="",
                 target="bind",
                 bind=False,
+                selected_usrp_mode=(
+                    usrp_state.selected_usrp_mode if usrp_state else mode
+                ),
                 created_at=_now_iso(),
+                uav=(
+                    uav_state.uav.model_copy(deep=True)
+                    if uav_state
+                    else ChildState()
+                ),
+                usrp=(
+                    usrp_state.usrp.model_copy(deep=True)
+                    if usrp_state
+                    else ChildState()
+                ),
             )
-        state = states[-1]
-        if state.usrp.service in {"starting", "running", "presumed_running", "stopping"}:
-            return self.refresh_usrp(state.mission_id)
+            state.overall_state = _aggregate_state(state)
+
+        uav_active = state.uav.service in {
+            "starting",
+            "running",
+            "presumed_running",
+            "stopping",
+        }
+        usrp_active = state.usrp.service in {
+            "starting",
+            "running",
+            "presumed_running",
+            "stopping",
+        }
+        if not uav_active:
+            try:
+                self.preflight_uav()
+                state.uav.connection = "ready"
+                if state.uav.service != "failed":
+                    state.uav.error = ""
+            except CaptureError as exc:
+                state.uav.connection = "offline"
+                state.uav.error = str(exc)
+        if not usrp_active:
+            state.selected_usrp_mode = mode
+            try:
+                self.preflight_usrp(mode)
+                state.usrp.connection = "ready"
+                if state.usrp.service != "failed":
+                    state.usrp.error = ""
+            except CaptureConflictError:
+                state.usrp.connection = "ready"
+            except CaptureError as exc:
+                state.usrp.connection = "offline"
+                state.usrp.error = str(exc)
+        if same_mission and state.mission_id:
+            return self.store.save(state)
         return state
 
     def stop_usrp(self, mission_id: str) -> CaptureState:

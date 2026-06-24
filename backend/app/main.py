@@ -1851,9 +1851,9 @@ def _capture_error(exc: Exception):
 
 
 @app.get("/api/capture/status")
-async def capture_status_get():
+async def capture_status_get(usrp_mode: Literal["test", "usrp"] = Query("test")):
     try:
-        return await asyncio.to_thread(capture_coordinator.status)
+        return await asyncio.to_thread(capture_coordinator.status, usrp_mode)
     except Exception as exc:
         _capture_error(exc)
 
@@ -2013,7 +2013,8 @@ async def usrp_sampling_connect_post(mode: Literal["test", "usrp"] = Query("test
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.connect_raspi, mode)
+        result = await asyncio.to_thread(usrp_ctl.connect_raspi, mode)
+        return {**result, "deprecated": True}
     except Exception as exc:
         return _usrp_sampling_error_response(exc, mode)
 
@@ -2023,7 +2024,8 @@ async def usrp_sampling_disconnect_post():
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.disconnect_raspi)
+        result = await asyncio.to_thread(usrp_ctl.disconnect_raspi)
+        return {**result, "deprecated": True}
     except Exception as exc:
         return _usrp_sampling_error_response(exc)
 
@@ -2033,7 +2035,8 @@ async def usrp_sampling_messages_get(mode: Literal["test", "usrp"] = Query("test
     try:
         from app import usrp_ctl
 
-        return await asyncio.to_thread(usrp_ctl.get_drone_messages, mode)
+        result = await asyncio.to_thread(usrp_ctl.get_drone_messages, mode)
+        return {**result, "deprecated": True}
     except Exception as exc:
         return _usrp_sampling_error_response(exc, mode)
 

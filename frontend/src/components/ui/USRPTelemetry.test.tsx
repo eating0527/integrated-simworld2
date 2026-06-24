@@ -4,30 +4,55 @@ import userEvent from '@testing-library/user-event';
 
 import { USRPTelemetry } from './USRPTelemetry';
 
-function samplingResponse(payload: unknown, ok = true) {
+type ChildOverrides = {
+  connection?: string;
+  service?: string;
+  file?: string;
+  error?: string;
+};
+
+function captureStatus(options: {
+  missionId?: string;
+  bind?: boolean;
+  mode?: 'test' | 'usrp';
+  overall?: string;
+  uav?: ChildOverrides;
+  usrp?: ChildOverrides;
+} = {}) {
+  const child = (overrides: ChildOverrides = {}) => ({
+    mission_id: options.missionId ?? '',
+    connection: 'ready',
+    service: 'idle',
+    file: 'none',
+    error: '',
+    path: '',
+    pid: null,
+    ...overrides,
+  });
+  return {
+    mission_id: options.missionId ?? '',
+    target: options.bind ? 'bind' : 'uav',
+    bind: options.bind ?? false,
+    selected_usrp_mode: options.mode ?? 'test',
+    overall_state: options.overall ?? 'ready',
+    created_at: '2026-06-24T00:00:00Z',
+    started_at: null,
+    finished_at: null,
+    uav: child(options.uav),
+    usrp: child(options.usrp),
+  };
+}
+
+function jsonResponse(payload: unknown, ok = true) {
   return Promise.resolve({
     ok,
     json: () => Promise.resolve(payload),
   } as Response);
 }
 
-function statusPayload(overrides: Record<string, unknown> = {}) {
-  return {
-    success: true,
-    raspi_connected: true,
-    session_connected: true,
-    mode: 'test',
-    service_name: 'drone_test.service',
-    service_state: 'stopped',
-    message: 'drone_test.service stopped',
-    service_messages: ['Active: inactive'],
-    ...overrides,
-  };
-}
-
-describe('USRPTelemetry Raspberry Pi dual-mode control', () => {
+describe('USRPTelemetry capture controls', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn(() => samplingResponse(statusPayload())));
+    vi.stubGlobal('fetch', vi.fn(() => jsonResponse(captureStatus())));
   });
 
   afterEach(() => {
@@ -35,113 +60,135 @@ describe('USRPTelemetry Raspberry Pi dual-mode control', () => {
     vi.unstubAllGlobals();
   });
 
-  it('defaults to test mode and checks drone_test.service when the panel loads', async () => {
+  it('defaults Bind off and exposes independent UAV and USRP controls', async () => {
     render(<USRPTelemetry event={null} />);
 
-    expect(screen.getAllByText('USRP 設定')).toHaveLength(1);
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/usrp/sampling/status?mode=test'));
-    expect(screen.getByRole('button', { name: '測試模式' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getAllByText('測試模式').length).toBeGreaterThan(0);
-    expect(screen.getByText('drone_test.service')).toBeInTheDocument();
-    expect(screen.getByText('已連線')).toBeInTheDocument();
-    expect(screen.getByText('已停止')).toBeInTheDocument();
-    expect(screen.getByText('drone_test.service stopped')).toBeInTheDocument();
+    expect(await screen.findByText('UAV / AP3 GPS')).toBeInTheDocument();
+    expect(screen.getByText('RasPi / USRP Noise')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Bind services' }))
+      .toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/capture/status?usrp_mode=test');
   });
 
-  it('switches to USRP mode and reloads drone.service status', async () => {
-    vi.mocked(globalThis.fetch)
-      .mockImplementationOnce(() => samplingResponse(statusPayload()))
-      .mockImplementationOnce(() => samplingResponse(statusPayload({
+  it('starts USRP independently when UAV is offline', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      if (String(input).includes('/api/capture/usrp/start')) {
+        return jsonResponse(captureStatus({
+          missionId: 'noise_1',
+          mode: 'usrp',
+          uav: { connection: 'offline' },
+          usrp: { service: 'running', file: 'recording' },
+        }));
+      }
+      return jsonResponse(captureStatus({
         mode: 'usrp',
-        service_name: 'drone.service',
-        message: 'drone.service stopped',
-      })));
+        uav: { connection: 'offline' },
+      }));
+    });
     const user = userEvent.setup();
-
     render(<USRPTelemetry event={null} />);
 
-    await user.click(await screen.findByRole('button', { name: 'USRP 模式' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/usrp/sampling/status?mode=usrp'));
-    expect(screen.getByRole('button', { name: 'USRP 模式' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('drone.service')).toBeInTheDocument();
-    expect(screen.getByText('drone.service stopped')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'USRP mode' }));
+    await user.click(screen.getByRole('button', { name: 'Start USRP' }));
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/usrp/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ usrp_mode: 'usrp', scene: 'NTPU', map_type: 'iss' }),
+      }),
+    ));
   });
 
-  it('sends the selected mode when starting, refreshing messages, and stopping', async () => {
-    vi.mocked(globalThis.fetch)
-      .mockImplementationOnce(() => samplingResponse(statusPayload()))
-      .mockImplementationOnce(() => samplingResponse(statusPayload({
-        service_state: 'running',
-        message: 'drone_test.service started',
-        service_messages: ['Started test sampler', 'Active: active (running)'],
-      })))
-      .mockImplementationOnce(() => samplingResponse(statusPayload({
-        service_state: 'running',
-        message: 'drone_test.service messages loaded',
-        service_messages: ['Processing test samples'],
-      })))
-      .mockImplementationOnce(() => samplingResponse(statusPayload({
-        service_state: 'stopped',
-        message: 'drone_test.service stopped',
-        service_messages: ['Stopped test sampler', 'Active: inactive'],
-      })));
+  it('uses a shared Bind start only when both services are ready', async () => {
     const user = userEvent.setup();
-
     render(<USRPTelemetry event={null} />);
 
-    await user.click(await screen.findByRole('button', { name: '開始採樣' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/usrp/sampling/start?mode=test', { method: 'POST' }));
-    expect(await screen.findByText('採樣中')).toBeInTheDocument();
-    expect(screen.getByText('Started test sampler')).toBeInTheDocument();
+    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
+    await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
 
-    await user.click(screen.getByRole('button', { name: '更新訊息' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/usrp/sampling/messages?mode=test'));
-    expect(await screen.findByText('Processing test samples')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: '終止採樣' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/usrp/sampling/stop?mode=test', { method: 'POST' }));
-    expect(await screen.findByText('已停止')).toBeInTheDocument();
-    expect(screen.getByText('Stopped test sampler')).toBeInTheDocument();
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/bind/start',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeDisabled();
   });
 
-  it('locks mode switching while sampling is running and unlocks it after stop', async () => {
-    vi.mocked(globalThis.fetch)
-      .mockImplementationOnce(() => samplingResponse(statusPayload()))
-      .mockImplementationOnce(() => samplingResponse(statusPayload({
-        service_state: 'running',
-        message: 'drone_test.service started',
-      })))
-      .mockImplementationOnce(() => samplingResponse(statusPayload({
-        service_state: 'stopped',
-        message: 'drone_test.service stopped',
-      })));
-    const user = userEvent.setup();
+  it('locks Bind and mode switching while USRP is running', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'noise_2',
+      mode: 'usrp',
+      usrp: { service: 'running', file: 'recording' },
+    })));
 
     render(<USRPTelemetry event={null} />);
 
-    await user.click(await screen.findByRole('button', { name: '開始採樣' }));
-    expect(await screen.findByText('採樣中')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'USRP 模式' })).toBeDisabled();
-
-    await user.click(screen.getByRole('button', { name: '終止採樣' }));
-    expect(await screen.findByText('已停止')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'USRP 模式' })).not.toBeDisabled();
+    expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
   });
 
-  it('keeps start disabled when Raspberry Pi is not connected', async () => {
-    vi.mocked(globalThis.fetch).mockImplementation(() => samplingResponse(statusPayload({
-      success: false,
-      raspi_connected: false,
-      session_connected: false,
-      service_state: 'unknown',
-      message: 'SSH timeout',
-      service_messages: [],
-    }), false));
+  it('shows presumed running and pending upload without reporting completion', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'noise_3',
+      overall: 'finalizing',
+      usrp: {
+        connection: 'offline',
+        service: 'presumed_running',
+        file: 'upload_pending',
+      },
+    })));
 
     render(<USRPTelemetry event={null} />);
 
-    expect(await screen.findByText('未連線')).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('SSH timeout');
-    expect(screen.getByRole('button', { name: '開始採樣' })).toBeDisabled();
+    expect(await screen.findByText('Presumed running')).toBeInTheDocument();
+    expect(screen.getByText('Pending upload')).toBeInTheDocument();
+    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+  });
+
+  it('restores active Bind missions and offers individual stop plus Stop All', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_1',
+      bind: true,
+      overall: 'running',
+      uav: { service: 'running', file: 'recording' },
+      usrp: { service: 'running', file: 'recording' },
+    })));
+
+    render(<USRPTelemetry event={null} />);
+
+    expect(await screen.findByRole('switch', { name: 'Bind services' }))
+      .toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('button', { name: 'Stop UAV' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Stop USRP' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Stop All' })).toBeEnabled();
+  });
+
+  it('stops independent jobs with each child mission id', async () => {
+    const status = captureStatus({
+      usrp: { service: 'running', file: 'recording' },
+      uav: { service: 'running', file: 'recording' },
+    });
+    status.mission_id = '';
+    status.uav.mission_id = 'gps_job';
+    status.usrp.mission_id = 'noise_job';
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+    const user = userEvent.setup();
+    render(<USRPTelemetry event={null} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Stop UAV' }));
+    await user.click(screen.getByRole('button', { name: 'Stop USRP' }));
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/uav/stop?mission_id=gps_job',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/usrp/stop?mission_id=noise_job',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

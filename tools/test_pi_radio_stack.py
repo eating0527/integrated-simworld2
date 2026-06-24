@@ -15,6 +15,8 @@ class PiRadioStackContractTests(unittest.TestCase):
         self.assertIn('write_state "finalizing"', stack)
         self.assertIn('write_state "${final_state}" "upload_pending"', stack)
         self.assertIn('write_state "${final_state}" "uploaded"', stack)
+        self.assertIn('UPLOAD_RETRY_SECONDS="${UPLOAD_RETRY_SECONDS:-5}"', stack)
+        self.assertIn("while ! upload_noise; do", stack)
 
     def test_service_loads_runtime_environment_and_allows_finalization(self):
         unit = (

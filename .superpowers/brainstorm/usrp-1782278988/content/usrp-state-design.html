@@ -1,0 +1,56 @@
+<h2>設計一：任務與雙服務狀態</h2>
+<p class="subtitle">一個 mission 包含 UAV GPS 與 USRP Noise 兩個獨立子任務；同時啟動、分開監控、以相同 mission_id 配對。</p>
+
+<div class="mockup">
+  <div class="mockup-header">本機任務協調器</div>
+  <div class="mockup-body">
+    <div class="placeholder">mission_id · selected_mode · created_at · overall_state</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+      <div>
+        <div class="label">UAV GPS</div>
+        <div class="placeholder">connection: ready / offline</div>
+        <div class="placeholder">state: idle / running / stopped / failed</div>
+        <div class="placeholder">file: gps.csv</div>
+      </div>
+      <div>
+        <div class="label">USRP Noise</div>
+        <div class="placeholder">connection: ready / offline</div>
+        <div class="placeholder">state: idle / running / stopped / failed</div>
+        <div class="placeholder">file: noise.csv</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>開始規則</h3>
+  <ol>
+    <li>確認 AP3／USB GPS 可用。</li>
+    <li>透過短 SSH 連線確認 RasPi 可達、目標 service 可操作，而且沒有既有任務。</li>
+    <li>建立唯一 mission_id，先持久化本機任務狀態。</li>
+    <li>以同一 mission_id 啟動本機 GPS worker 與遠端 test／usrp service。</li>
+    <li>若啟動階段其中一路仍失敗，另一條已啟動的服務繼續執行，整體標記 partial_failed。</li>
+  </ol>
+</div>
+
+<div class="section">
+  <h3>連線與執行狀態分離</h3>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
+    <div class="placeholder">connected + running</div>
+    <div class="placeholder">offline + presumed_running</div>
+    <div class="placeholder">connected + stopped</div>
+    <div class="placeholder">connected + failed</div>
+  </div>
+  <p class="subtitle">SSH 中斷時不能把 service 標記 stopped；只能顯示離線且最後已知為 running。重連後重新查 systemd 與 RasPi mission.json 校正。</p>
+</div>
+
+<div class="section">
+  <h3>整體任務狀態</h3>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">
+    <div class="placeholder">ready</div>
+    <div class="placeholder">running</div>
+    <div class="placeholder">partial_failed</div>
+    <div class="placeholder">finalizing</div>
+    <div class="placeholder">completed / failed</div>
+  </div>
+</div>

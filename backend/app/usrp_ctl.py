@@ -34,6 +34,7 @@ class RemoteMission:
     noise_csv: str = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv"
     state_dir: str = "/var/lib/simworld/capture"
     env_file: str = "/run/simworld/usrp.env"
+    run_user: str = "user"
 
 
 class UsrpControlError(RuntimeError):
@@ -189,7 +190,11 @@ def get_drone_status(mode: str = "test") -> dict:
 
 def _needs_interactive_auth(out: str, err: str) -> bool:
     text = f"{out}\n{err}".lower()
-    return "interactive authentication required" in text or "authentication is required" in text
+    return (
+        "interactive authentication required" in text
+        or "authentication is required" in text
+        or "permission denied" in text
+    )
 
 
 def _run_service_control(command: str) -> tuple[int, str, str]:
@@ -294,7 +299,10 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
     runtime_dir = str(os.path.dirname(mission.env_file))
     mission_dir = str(os.path.dirname(_mission_state_path(mission)))
     for command in (
-        f"install -d {shlex.quote(runtime_dir)} {shlex.quote(mission_dir)}",
+        (
+            f"install -d {shlex.quote(runtime_dir)} && "
+            f"install -d -o {shlex.quote(mission.run_user)} {shlex.quote(mission_dir)}"
+        ),
         _mission_environment(mission),
         f"systemctl start {target.unit}",
     ):

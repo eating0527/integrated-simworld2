@@ -281,6 +281,52 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | Con
 
 ## Raspberry Pi USRP 採樣控制
 
+### Frontend capture jobs
+
+The Capture Control panel now owns GPS/Noise recording:
+
+- **Bind OFF (default):** UAV/AP3 GPS and Raspberry Pi USRP can start and stop independently.
+- **Bind ON:** both connections must be ready before one shared mission starts.
+- Test/USRP mode only changes the Raspberry Pi unit (`drone_test.service` or `drone.service`).
+- UAV and USRP show separate connection, service, and file states.
+- An SSH outage reports USRP as `Offline / Presumed running`; it does not stop the remote unit.
+- USRP Stop is complete only after `noise.csv` is finalized, uploaded, and verified.
+- Failed uploads remain `Pending upload`; the Raspberry Pi keeps the CSV for retry.
+
+Bind missions share one `mission_id`, while independent runs create separate missions.
+`gps.csv` is written locally from the AP3 USB connection and `noise.csv` is uploaded
+from the Raspberry Pi into `incoming/<mission_id>/`.
+
+Required backend environment:
+
+```dotenv
+RASPI_HOST=<raspi-ip>
+RASPI_USER=<raspi-user>
+RASPI_PSW=<raspi-password>
+RASPI_PORT=22
+USRP_UPLOAD_API_URL=http://<laptop-ip>:8888/api/usrp/upload-noise-csv
+```
+
+Install the updated Raspberry Pi files:
+
+```bash
+sudo cp tools/pi_radio_stack.sh /home/user/pi_radio_stack.sh
+sudo cp tools/pi_radio_stack.service.example /etc/systemd/system/drone.service
+sudo systemctl daemon-reload
+```
+
+Create a corresponding `drone_test.service` using the same mission contract but
+the test capture command. Do not enable either capture unit at boot; the frontend
+starts one unit per mission. The backend writes `/run/simworld/usrp.env` before
+starting the selected unit.
+
+`start.ps1` no longer starts `gps.csv` recording automatically. Use `-GpsCsv`
+only for the legacy startup-owned writer:
+
+```powershell
+.\start.ps1 -GpsCsv
+```
+
 USRP 面板可透過後端 SSH 連線到 Raspberry Pi，並用 `systemctl` 控制已設定好的 `drone.service`。
 
 1. 在 **專案根目錄**的 `.env` 加入下列設定：

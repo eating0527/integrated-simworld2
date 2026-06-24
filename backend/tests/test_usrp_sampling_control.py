@@ -78,7 +78,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             response = self.client.post("/api/usrp/sampling/connect?mode=usrp")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), payload)
+        self.assertTrue(response.json()["deprecated"])
 
     def test_disconnect_reports_disconnected_session(self):
         payload = {
@@ -95,7 +95,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             response = self.client.post("/api/usrp/sampling/disconnect")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), payload)
+        self.assertTrue(response.json()["deprecated"])
 
     def test_messages_returns_service_status_and_recent_logs(self):
         payload = {
@@ -116,7 +116,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             response = self.client.get("/api/usrp/sampling/messages?mode=test")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), payload)
+        self.assertTrue(response.json()["deprecated"])
 
     def test_start_reports_running_service(self):
         payload = {
@@ -271,6 +271,7 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
 
         self.assertEqual(result["mission_id"], "flight_001")
         self.assertTrue(commands[0].startswith("install -d "))
+        self.assertIn("-o user", commands[0])
         self.assertIn("/run/simworld/usrp.env", commands[1])
         self.assertEqual(commands[2], "systemctl start drone")
 
@@ -292,6 +293,32 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertEqual(result["service_state"], "running")
         self.assertEqual(result["mission_state"]["mission_id"], "flight_002")
         self.assertEqual(result["mission_state"]["upload_state"], "recording")
+
+    def test_remote_mission_setup_falls_back_to_sudo_on_permission_denied(self):
+        from app import usrp_ctl
+
+        mission = usrp_ctl.RemoteMission(
+            mission_id="flight_003",
+            api_url="http://192.168.50.95:8888/api/usrp/upload-noise-csv",
+        )
+        calls: list[tuple[str, bool]] = []
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            calls.append((command, use_sudo_password))
+            if command.startswith("install -d") and not use_sudo_password:
+                return 1, "", "Permission denied"
+            if command == "systemctl is-active drone":
+                return 0, "active", ""
+            if command.startswith("cat "):
+                return 0, '{"mission_id":"flight_003","state":"running"}', ""
+            return 0, "", ""
+
+        with patch.dict("os.environ", {"RASPI_PSW": "secret"}):
+            with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+                usrp_ctl.start_capture_job("usrp", mission)
+
+        install_command = next(command for command, _ in calls if command.startswith("install -d"))
+        self.assertIn((install_command, True), calls)
 
     def test_each_remote_command_closes_its_ssh_client(self):
         from app import usrp_ctl

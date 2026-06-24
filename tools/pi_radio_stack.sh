@@ -15,6 +15,7 @@ UPLOAD_API_URL="${UPLOAD_API_URL:-}"
 SCENE="${SCENE:-NTPU}"
 MAP_TYPE="${MAP_TYPE:-iss}"
 START_NOISE_LOGGER="${START_NOISE_LOGGER:-1}"
+UPLOAD_RETRY_SECONDS="${UPLOAD_RETRY_SECONDS:-5}"
 
 MISSION_DIR="${MISSION_STATE_DIR%/}/${MISSION_ID}"
 STATE_FILE="${MISSION_DIR}/mission.json"
@@ -83,11 +84,15 @@ cleanup() {
   if [[ "${final_state}" == "running" ]]; then
     final_state="stopped"
   fi
-  if upload_noise; then
-    write_state "${final_state}" "uploaded" "${JOB_ERROR}"
-  else
-    write_state "${final_state}" "upload_pending" "${JOB_ERROR}"
+  if [[ ! -s "${NOISE_CSV}" ]]; then
+    write_state "failed" "failed" "noise.csv is missing or empty"
+    return
   fi
+  while ! upload_noise; do
+    write_state "${final_state}" "upload_pending" "${JOB_ERROR}"
+    sleep "${UPLOAD_RETRY_SECONDS}"
+  done
+  write_state "${final_state}" "uploaded" "${JOB_ERROR}"
 }
 
 trap cleanup EXIT

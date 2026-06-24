@@ -1,0 +1,50 @@
+<h2>設計一修訂：Bind 控制模式</h2>
+<p class="subtitle">Bind 預設關閉，讓 UAV GPS 與 USRP 可獨立測試；開啟後才組成同一個聯合任務。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Bind OFF（預設）</div>
+    <div class="mockup-body">
+      <div class="placeholder">UAV GPS：獨立 Start / Stop</div>
+      <div style="text-align:center">↓</div>
+      <div class="placeholder">gps mission_id → gps.csv</div>
+      <div style="height:12px"></div>
+      <div class="placeholder">USRP：Test / USRP + Start / Stop</div>
+      <div style="text-align:center">↓</div>
+      <div class="placeholder">noise mission_id → noise.csv</div>
+      <p class="subtitle">不要求另一台裝置連線；適合各自測試與除錯。</p>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Bind ON</div>
+    <div class="mockup-body">
+      <div class="placeholder">開始前檢查 GPS + RasPi 都 ready</div>
+      <div style="text-align:center">↓</div>
+      <div class="placeholder">一個共同 mission_id</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <div class="placeholder">GPS Start</div>
+        <div class="placeholder">USRP Start</div>
+      </div>
+      <div style="text-align:center">↓ 分開監控與留檔</div>
+      <div class="placeholder">gps.csv + noise.csv 配對</div>
+      <p class="subtitle">單路失敗不停止另一條；整體顯示 partial_failed。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>前端控制規則</h3>
+  <ul>
+    <li>Bind 開關不應在任一服務執行期間變更。</li>
+    <li>Bind OFF：兩個狀態區各有獨立 Start / Stop。</li>
+    <li>Bind ON：顯示共同 Start；Stop 建議仍可選「全部停止」或個別停止。</li>
+    <li>Test／USRP 模式只影響 RasPi service，不影響 GPS。</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>任務資料</h3>
+  <div class="placeholder">bind: false → 各自 mission_id</div>
+  <div class="placeholder">bind: true → shared mission_id + gps/noise 子任務狀態</div>
+</div>
