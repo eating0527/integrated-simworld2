@@ -247,7 +247,7 @@ $gpsCsvScript = Join-Path $ToolsDir "ap3_to_gps_csv.py"
 $gpsCsvLog = Join-Path $LogDir "ap3_gps_csv.log"
 $usrpRemoteJob = $null
 $usrpRemoteLog = Join-Path $LogDir "usrp_remote_start.log"
-$enableGpsCsv = $GpsCsv -or (-not $NoAP3 -and -not $NoGpsCsv)
+$enableGpsCsv = $GpsCsv -and -not $NoGpsCsv
 
 if (-not $GpsMissionId) {
     $GpsMissionId = Get-Date -Format "yyyyMMdd_HHmmss"

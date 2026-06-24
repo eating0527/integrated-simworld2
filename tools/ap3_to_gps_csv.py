@@ -5,8 +5,6 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from pymavlink import mavutil
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ADB = ROOT / "tools" / "platform-tools" / "adb.exe"
@@ -31,11 +29,19 @@ def wait_for_device(poll_interval: float = 2.0) -> None:
         time.sleep(poll_interval)
 
 
+def check_device(local_port: int, remote_port: int) -> bool:
+    if not has_authorized_device():
+        return False
+    run_adb_forward(local_port, remote_port)
+    return True
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Write AP3 GPS telemetry into incoming/<mission_id>/gps.csv for later pairing with noise.csv."
     )
-    parser.add_argument("--mission-id", required=True)
+    parser.add_argument("--mission-id", default="")
+    parser.add_argument("--check", action="store_true", help="Check AP3 USB/ADB readiness and exit.")
     parser.add_argument("--incoming-dir", default=str(ROOT / "incoming"))
     parser.add_argument("--mavlink-url", default="", help="Direct MAVLink URL. If omitted, adb forward is used.")
     parser.add_argument("--local-port", type=int, default=15760)
@@ -65,6 +71,13 @@ def ensure_csv(csv_path: Path) -> None:
 
 def main() -> int:
     args = parse_args()
+    if args.check:
+        return 0 if check_device(args.local_port, args.remote_port) else 1
+    if not args.mission_id:
+        raise SystemExit("--mission-id is required unless --check is used")
+
+    from pymavlink import mavutil
+
     bundle_dir = Path(args.incoming_dir) / args.mission_id
     csv_path = bundle_dir / "gps.csv"
     ensure_csv(csv_path)
