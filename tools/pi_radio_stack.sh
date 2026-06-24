@@ -1,19 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+MISSION_ID="${MISSION_ID:?MISSION_ID is required}"
+MISSION_STATE_DIR="${MISSION_STATE_DIR:-/var/lib/simworld/capture}"
 WORKDIR="${WORKDIR:-/home/user/digitaltwin-modulation/USRP_transmit/noise_detect}"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 RX_SCRIPT="${RX_SCRIPT:-$WORKDIR/chan_est_rx.py}"
 TX_SCRIPT="${TX_SCRIPT:-$WORKDIR/chan_est_tx.py}"
 JAMMER_SCRIPT="${JAMMER_SCRIPT:-$WORKDIR/noise.py}"
 NOISE_LOGGER_SCRIPT="${NOISE_LOGGER_SCRIPT:-/home/user/zmq_to_noise_csv.py}"
+NOISE_UPLOAD_HELPER="${NOISE_UPLOAD_HELPER:-/home/user/upload_noise_csv.py}"
 NOISE_CSV="${NOISE_CSV:-$WORKDIR/noise.csv}"
+UPLOAD_API_URL="${UPLOAD_API_URL:-}"
+SCENE="${SCENE:-NTPU}"
+MAP_TYPE="${MAP_TYPE:-iss}"
 START_NOISE_LOGGER="${START_NOISE_LOGGER:-1}"
-START_NOISE_UPLOADER="${START_NOISE_UPLOADER:-0}"
-NOISE_UPLOADER_SCRIPT="${NOISE_UPLOADER_SCRIPT:-/home/user/watch_and_upload_noise.py}"
-NOISE_UPLOADER_ARGS="${NOISE_UPLOADER_ARGS:-}"
 
+MISSION_DIR="${MISSION_STATE_DIR%/}/${MISSION_ID}"
+STATE_FILE="${MISSION_DIR}/mission.json"
 PIDS=()
+FINALIZED=0
+JOB_STATE="running"
+JOB_ERROR=""
+
+write_state() {
+  local state="$1"
+  local upload_state="${2:-recording}"
+  local error="${3:-}"
+  local temp_file="${STATE_FILE}.tmp"
+  mkdir -p "${MISSION_DIR}"
+  printf '{\n  "mission_id": "%s",\n  "state": "%s",\n  "upload_state": "%s",\n  "noise_csv": "%s",\n  "error": "%s",\n  "updated_at": "%s"\n}\n' \
+    "${MISSION_ID}" "${state}" "${upload_state}" "${NOISE_CSV}" "${error}" "$(date -Iseconds)" \
+    > "${temp_file}"
+  mv "${temp_file}" "${STATE_FILE}"
+}
 
 start_gui() {
   local label="$1"
@@ -31,7 +51,26 @@ start_bg() {
   PIDS+=("$!")
 }
 
+upload_noise() {
+  if [[ ! -s "${NOISE_CSV}" || -z "${UPLOAD_API_URL}" ]]; then
+    return 1
+  fi
+  "${PYTHON_BIN}" "${NOISE_UPLOAD_HELPER}" \
+    --api-url "${UPLOAD_API_URL}" \
+    --scene "${SCENE}" \
+    --mission-id "${MISSION_ID}" \
+    --noise-csv "${NOISE_CSV}" \
+    --map-type "${MAP_TYPE}" \
+    --auto-simulate-last
+}
+
 cleanup() {
+  if [[ "${FINALIZED}" == "1" ]]; then
+    return
+  fi
+  FINALIZED=1
+  trap - EXIT INT TERM
+  write_state "finalizing" "finalizing" "${JOB_ERROR}"
   echo "[pi-radio-stack] stopping child processes"
   for pid in "${PIDS[@]:-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
@@ -39,11 +78,24 @@ cleanup() {
     fi
   done
   wait || true
+
+  local final_state="${JOB_STATE}"
+  if [[ "${final_state}" == "running" ]]; then
+    final_state="stopped"
+  fi
+  if upload_noise; then
+    write_state "${final_state}" "uploaded" "${JOB_ERROR}"
+  else
+    write_state "${final_state}" "upload_pending" "${JOB_ERROR}"
+  fi
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 0' INT TERM
 
+mkdir -p "${MISSION_DIR}"
 cd "${WORKDIR}"
+write_state "starting" "recording"
 
 start_gui "rx" "${RX_SCRIPT}"
 sleep 2
@@ -56,11 +108,14 @@ if [[ "${START_NOISE_LOGGER}" == "1" ]]; then
   start_bg "noise-csv-logger" "${PYTHON_BIN}" "${NOISE_LOGGER_SCRIPT}" --noise-csv "${NOISE_CSV}"
 fi
 
-if [[ "${START_NOISE_UPLOADER}" == "1" ]]; then
-  sleep 2
-  # shellcheck disable=SC2206
-  EXTRA_ARGS=(${NOISE_UPLOADER_ARGS})
-  start_bg "noise-uploader" "${PYTHON_BIN}" "${NOISE_UPLOADER_SCRIPT}" "${EXTRA_ARGS[@]}"
-fi
+write_state "running" "recording"
 
+set +e
 wait -n
+EXIT_CODE=$?
+set -e
+if [[ "${EXIT_CODE}" -ne 0 ]]; then
+  JOB_STATE="failed"
+  JOB_ERROR="capture child exited with ${EXIT_CODE}"
+fi
+exit "${EXIT_CODE}"

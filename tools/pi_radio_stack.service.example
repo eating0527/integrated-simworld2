@@ -10,11 +10,12 @@ WorkingDirectory=/home/user
 Environment=WORKDIR=/home/user/digitaltwin-modulation/USRP_transmit/noise_detect
 Environment=PYTHON_BIN=/usr/bin/python3
 Environment=START_NOISE_LOGGER=1
-Environment=START_NOISE_UPLOADER=0
 Environment=NOISE_CSV=/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv
+EnvironmentFile=-/run/simworld/usrp.env
 ExecStart=/bin/bash /home/user/pi_radio_stack.sh
-Restart=always
-RestartSec=5
+KillMode=control-group
+TimeoutStopSec=0
+Restart=no
 
 [Install]
-WantedBy=multi-user.target
+# Intentionally not enabled at boot. The frontend starts this unit per mission.
