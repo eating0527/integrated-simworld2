@@ -160,5 +160,37 @@ class StartupScriptTests(unittest.TestCase):
         self.assertIn("$enableGpsCsv = $GpsCsv -and -not $NoGpsCsv", script)
 
 
+class UsrpRecoveryTests(unittest.TestCase):
+    def test_status_disconnect_reports_presumed_running(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        repo_root = Path(__file__).resolve().parents[2]
+        root = repo_root / ".test_tmp" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        store = CaptureStore(root)
+        state = store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+        )
+        state.usrp.connection = "ready"
+        state.usrp.service = "running"
+        state.usrp.file = "recording"
+        store.save(state)
+        backend = Mock()
+        backend.get_capture_job.side_effect = RuntimeError("SSH timeout")
+        coordinator = CaptureCoordinator(
+            store,
+            repo_root=repo_root,
+            usrp_backend=backend,
+        )
+
+        recovered = coordinator.refresh_usrp(state.mission_id)
+
+        self.assertEqual(recovered.usrp.connection, "offline")
+        self.assertEqual(recovered.usrp.service, "presumed_running")
+        self.assertEqual(recovered.usrp.file, "recording")
+
+
 if __name__ == "__main__":
     unittest.main()

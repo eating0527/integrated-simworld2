@@ -1,5 +1,6 @@
+import json
 import os
-import threading
+import shlex
 from dataclasses import dataclass
 from typing import Literal
 
@@ -23,6 +24,18 @@ class ServiceTarget:
     service_name: str
 
 
+@dataclass(frozen=True)
+class RemoteMission:
+    mission_id: str
+    api_url: str
+    scene: str = "NTPU"
+    map_type: str = "iss"
+    work_dir: str = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect"
+    noise_csv: str = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv"
+    state_dir: str = "/var/lib/simworld/capture"
+    env_file: str = "/run/simworld/usrp.env"
+
+
 class UsrpControlError(RuntimeError):
     pass
 
@@ -31,10 +44,6 @@ SERVICE_TARGETS: dict[str, ServiceTarget] = {
     "test": ServiceTarget(mode="test", unit="drone_test", service_name="drone_test.service"),
     "usrp": ServiceTarget(mode="usrp", unit="drone", service_name="drone.service"),
 }
-
-_CLIENT_LOCK = threading.Lock()
-_CONNECTED_CLIENT = None
-
 
 def _redact(value: str) -> str:
     password = os.environ.get("RASPI_PSW", "")
@@ -104,26 +113,8 @@ def _ssh_client(config: RaspiConfig):
     return client
 
 
-def _close_connected_client() -> None:
-    global _CONNECTED_CLIENT
-    with _CLIENT_LOCK:
-        if _CONNECTED_CLIENT is not None:
-            try:
-                _CONNECTED_CLIENT.close()
-            finally:
-                _CONNECTED_CLIENT = None
-
-
-def _connected_client():
-    global _CONNECTED_CLIENT
-    with _CLIENT_LOCK:
-        if _CONNECTED_CLIENT is None:
-            _CONNECTED_CLIENT = _ssh_client(_config_from_env())
-        return _CONNECTED_CLIENT
-
-
-def _run_remote(command: str, use_sudo_password: bool = False, *, persistent: bool = True) -> tuple[int, str, str]:
-    client = _connected_client() if persistent else _ssh_client(_config_from_env())
+def _run_remote(command: str, use_sudo_password: bool = False) -> tuple[int, str, str]:
+    client = _ssh_client(_config_from_env())
     try:
         remote_command = command
         if use_sudo_password:
@@ -141,12 +132,9 @@ def _run_remote(command: str, use_sudo_password: bool = False, *, persistent: bo
         err = stderr.read().decode("utf-8", errors="replace").strip()
         return exit_code, _redact(out), _redact(err)
     except Exception as exc:
-        if persistent:
-            _close_connected_client()
         raise UsrpControlError(_redact(f"remote command failed: {exc}")) from exc
     finally:
-        if not persistent:
-            client.close()
+        client.close()
 
 
 def _state_from_active_output(output: str, exit_code: int) -> ServiceState:
@@ -162,7 +150,7 @@ def _response(target: ServiceTarget, state: ServiceState, message: str, service_
     return {
         "success": True,
         "raspi_connected": True,
-        "session_connected": _CONNECTED_CLIENT is not None,
+        "session_connected": True,
         "mode": target.mode,
         "service_name": target.service_name,
         "service_state": state,
@@ -212,14 +200,12 @@ def _run_service_control(command: str) -> tuple[int, str, str]:
 
 
 def connect_raspi(mode: str = "test") -> dict:
-    _connected_client()
     status = get_drone_status(mode)
     status["message"] = "RasPi connected"
     return status
 
 
 def disconnect_raspi() -> dict:
-    _close_connected_client()
     target = _service_target("test")
     return {
         "success": True,
@@ -257,5 +243,74 @@ def stop_drone_service(mode: str = "test") -> dict:
         raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
     status = get_drone_status(mode)
     status["service_state"] = "stopped"
+    status["message"] = f"{target.service_name} stopped"
+    return status
+
+
+def _mission_state_path(mission: RemoteMission | str, state_dir: str | None = None) -> str:
+    if isinstance(mission, RemoteMission):
+        return f"{mission.state_dir.rstrip('/')}/{mission.mission_id}/mission.json"
+    root = (state_dir or os.environ.get("RASPI_STATE_DIR", "/var/lib/simworld/capture")).rstrip("/")
+    return f"{root}/{mission}/mission.json"
+
+
+def _read_mission_state(mission_id: str, state_dir: str | None = None) -> dict:
+    path = _mission_state_path(mission_id, state_dir)
+    exit_code, out, _ = _run_remote(f"cat {shlex.quote(path)}")
+    if exit_code != 0 or not out:
+        return {}
+    try:
+        value = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise UsrpControlError(f"invalid remote mission state: {exc}") from exc
+    return value if isinstance(value, dict) else {}
+
+
+def _mission_environment(mission: RemoteMission) -> str:
+    values = {
+        "MISSION_ID": mission.mission_id,
+        "MISSION_STATE_DIR": mission.state_dir,
+        "UPLOAD_API_URL": mission.api_url,
+        "SCENE": mission.scene,
+        "MAP_TYPE": mission.map_type,
+        "WORKDIR": mission.work_dir,
+        "NOISE_CSV": mission.noise_csv,
+    }
+    lines = [f"{key}={value}" for key, value in values.items()]
+    printf_args = " ".join(shlex.quote(line) for line in lines)
+    script = f"printf '%s\\n' {printf_args} > {shlex.quote(mission.env_file)}"
+    return f"sh -c {shlex.quote(script)}"
+
+
+def get_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+    status = get_drone_status(mode)
+    status["mission_id"] = mission_id
+    status["mission_state"] = _read_mission_state(mission_id, state_dir)
+    return status
+
+
+def start_capture_job(mode: str, mission: RemoteMission) -> dict:
+    target = _service_target(mode)
+    runtime_dir = str(os.path.dirname(mission.env_file))
+    mission_dir = str(os.path.dirname(_mission_state_path(mission)))
+    for command in (
+        f"install -d {shlex.quote(runtime_dir)} {shlex.quote(mission_dir)}",
+        _mission_environment(mission),
+        f"systemctl start {target.unit}",
+    ):
+        exit_code, out, err = _run_service_control(command)
+        if exit_code != 0:
+            raise UsrpControlError(err or out or f"{command} failed")
+    status = get_capture_job(mode, mission.mission_id, mission.state_dir)
+    status["message"] = f"{target.service_name} started"
+    return status
+
+
+def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+    target = _service_target(mode)
+    exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}")
+    if exit_code != 0:
+        raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
+    status = get_capture_job(mode, mission_id, state_dir)
     status["message"] = f"{target.service_name} stopped"
     return status

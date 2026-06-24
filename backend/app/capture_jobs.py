@@ -204,11 +204,17 @@ class CaptureCoordinator:
         repo_root: Path,
         run_command=subprocess.run,
         popen_factory=subprocess.Popen,
+        usrp_backend=None,
     ):
         self.store = store
         self.repo_root = Path(repo_root)
         self.run_command = run_command
         self.popen_factory = popen_factory
+        if usrp_backend is None:
+            from app import usrp_ctl
+
+            usrp_backend = usrp_ctl
+        self.usrp_backend = usrp_backend
         self._uav_processes: dict[str, subprocess.Popen] = {}
 
     def _active_uav(self) -> CaptureState | None:
@@ -315,4 +321,38 @@ class CaptureCoordinator:
         state.uav.file = "ready"
         state.uav.pid = None
         self._uav_processes.pop(mission_id, None)
+        return self.store.save(state)
+
+    def refresh_usrp(self, mission_id: str) -> CaptureState:
+        state = self.store.load(mission_id)
+        try:
+            remote = self.usrp_backend.get_capture_job(
+                state.selected_usrp_mode,
+                mission_id,
+            )
+        except Exception as exc:
+            state.usrp.connection = "offline"
+            if state.usrp.service in {"starting", "running", "presumed_running"}:
+                state.usrp.service = "presumed_running"
+            state.usrp.error = str(exc)
+            return self.store.save(state)
+
+        state.usrp.connection = "ready"
+        state.usrp.error = ""
+        service_state = remote.get("service_state", "unknown")
+        if service_state in {"running", "stopped"}:
+            state.usrp.service = service_state
+        mission_state = remote.get("mission_state") or {}
+        remote_state = mission_state.get("state")
+        if remote_state == "failed":
+            state.usrp.service = "failed"
+        upload_state = mission_state.get("upload_state")
+        if upload_state in {
+            "recording",
+            "finalizing",
+            "upload_pending",
+            "uploaded",
+            "failed",
+        }:
+            state.usrp.file = upload_state
         return self.store.save(state)

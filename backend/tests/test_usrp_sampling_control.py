@@ -243,6 +243,102 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
 
         run_remote.assert_not_called()
 
+    def test_remote_start_writes_mission_environment_before_systemctl(self):
+        from app import usrp_ctl
+
+        mission = usrp_ctl.RemoteMission(
+            mission_id="flight_001",
+            api_url="http://192.168.50.95:8888/api/usrp/upload-noise-csv",
+            scene="NTPU",
+            map_type="iss",
+            work_dir="/home/user/noise",
+            noise_csv="/home/user/noise/noise.csv",
+        )
+        commands: list[str] = []
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            commands.append(command)
+            if command == "systemctl is-active drone":
+                return 0, "active", ""
+            if command.startswith("cat "):
+                return 0, '{"mission_id":"flight_001","state":"running","upload_state":"recording"}', ""
+            if command.startswith("systemctl status") or command.startswith("journalctl"):
+                return 0, "Active: active (running)", ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.start_capture_job("usrp", mission)
+
+        self.assertEqual(result["mission_id"], "flight_001")
+        self.assertTrue(commands[0].startswith("install -d "))
+        self.assertIn("/run/simworld/usrp.env", commands[1])
+        self.assertEqual(commands[2], "systemctl start drone")
+
+    def test_remote_status_combines_systemd_and_mission_json(self):
+        from app import usrp_ctl
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            if command == "systemctl is-active drone_test":
+                return 0, "active", ""
+            if command.startswith("cat "):
+                return 0, '{"mission_id":"flight_002","state":"running","upload_state":"recording"}', ""
+            if command.startswith("systemctl status") or command.startswith("journalctl"):
+                return 0, "Active: active (running)", ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.get_capture_job("test", "flight_002")
+
+        self.assertEqual(result["service_state"], "running")
+        self.assertEqual(result["mission_state"]["mission_id"], "flight_002")
+        self.assertEqual(result["mission_state"]["upload_state"], "recording")
+
+    def test_each_remote_command_closes_its_ssh_client(self):
+        from app import usrp_ctl
+
+        class FakeChannel:
+            def recv_exit_status(self):
+                return 0
+
+        class FakeStream:
+            def __init__(self, value: bytes = b""):
+                self.value = value
+                self.channel = FakeChannel()
+
+            def read(self):
+                return self.value
+
+            def close(self):
+                return None
+
+            def write(self, value):
+                return None
+
+            def flush(self):
+                return None
+
+        class FakeClient:
+            def __init__(self):
+                self.closed = False
+
+            def exec_command(self, command, timeout):
+                return FakeStream(), FakeStream(b"ok"), FakeStream()
+
+            def close(self):
+                self.closed = True
+
+        client = FakeClient()
+        with patch.object(usrp_ctl, "_ssh_client", return_value=client):
+            with patch.object(
+                usrp_ctl,
+                "_config_from_env",
+                return_value=usrp_ctl.RaspiConfig("host", "user", "password"),
+            ):
+                exit_code, out, err = usrp_ctl._run_remote("true")
+
+        self.assertEqual((exit_code, out, err), (0, "ok", ""))
+        self.assertTrue(client.closed)
+
 
 if __name__ == "__main__":
     unittest.main()
