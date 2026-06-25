@@ -143,6 +143,21 @@ class Ap3CliTests(unittest.TestCase):
 
         self.assertTrue(args.check)
 
+    def test_uses_bundled_adb(self):
+        self.assertTrue(self.module.ADB.exists(), self.module.ADB)
+
+    def test_simulator_bridge_uses_bundled_adb(self):
+        script = Path(__file__).resolve().parents[2] / "tools" / "ap3_to_simulator.py"
+        spec = importlib.util.spec_from_file_location("ap3_to_simulator_test", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        fake_pymavlink = types.ModuleType("pymavlink")
+        fake_pymavlink.mavutil = Mock()
+        with patch.dict(sys.modules, {"pymavlink": fake_pymavlink}):
+            spec.loader.exec_module(module)
+
+        self.assertTrue(module.ADB.exists(), module.ADB)
+
     def test_check_mode_forwards_authorized_device(self):
         with patch.object(self.module, "has_authorized_device", return_value=True):
             with patch.object(self.module, "run_adb_forward") as forward:
@@ -159,6 +174,19 @@ class StartupScriptTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("$enableGpsCsv = $GpsCsv -and -not $NoGpsCsv", script)
+
+    def test_backend_uses_bundled_adb(self):
+        from app import main
+
+        self.assertTrue(main.ADB_EXE.exists(), main.ADB_EXE)
+
+    def test_startup_port_check_does_not_require_admin(self):
+        script = (
+            Path(__file__).resolve().parents[2] / "start.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("Get-NetTCPConnection", script)
+        self.assertIn("netstat -ano -p TCP", script)
 
 
 class UsrpRecoveryTests(unittest.TestCase):

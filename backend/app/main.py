@@ -112,6 +112,8 @@ app.mount("/simulations", StaticFiles(directory=str(SIMULATION_OUT_DIR)), name="
 app.mount("/generated-scenes", StaticFiles(directory=str(SCENE_DIR)), name="generated-scenes")
 
 ADB_EXE = REPO_ROOT / "tools" / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
+if os.name == "nt" and not ADB_EXE.exists():
+    ADB_EXE = REPO_ROOT / "tools" / "scrcpy" / "scrcpy-win64-v3.3.4" / "adb.exe"
 DEFAULT_CONTROLLER_SERIAL = os.environ.get("ALIGN_CONTROLLER_SERIAL", "58e9dd83")
 ADB_HOME_DIR = UPLOAD_DIR / "adb-home"
 ADB_HOME_DIR.mkdir(parents=True, exist_ok=True)

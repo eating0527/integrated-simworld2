@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 ADB = ROOT / "tools" / "platform-tools" / "adb.exe"
+if not ADB.exists():
+    ADB = ROOT / "tools" / "scrcpy" / "scrcpy-win64-v3.3.4" / "adb.exe"
 
 
 def run_adb_forward(local_port: int, remote_port: int) -> None:

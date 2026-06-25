@@ -173,9 +173,15 @@ function Stop-PortListeners {
     param(
         [int[]]$Ports
     )
-    $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $Ports -contains $_.LocalPort }
-    $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+    $pids = netstat -ano -p TCP | ForEach-Object {
+        $parts = $_.Trim() -split '\s+'
+        if ($parts.Count -eq 5 -and $parts[3] -eq "LISTENING") {
+            $port = [int]($parts[1] -replace '^.*:', '')
+            if ($Ports -contains $port) {
+                [int]$parts[4]
+            }
+        }
+    } | Sort-Object -Unique
     if (-not $pids) {
         return
     }
@@ -405,6 +411,9 @@ function Start-Ap3GpsCsvWriter {
 
 if (-not $NoAP3) {
     $adbExe = Join-Path $ToolsDir "platform-tools\adb.exe"
+    if (-not (Test-Path $adbExe)) {
+        $adbExe = Join-Path $ToolsDir "scrcpy\scrcpy-win64-v3.3.4\adb.exe"
+    }
     if ((Test-Path $adbExe) -and (Test-Path $ap3BridgeScript)) {
         Info "Starting ALIGN AP3 telemetry bridge..."
         $ap3BridgeJob = Start-Ap3Bridge `
