@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -357,6 +358,52 @@ class CaptureApiTests(unittest.TestCase):
 
         self.main = main
 
+    def _post_json(self, path: str, payload: dict):
+        body = json.dumps(payload).encode("utf-8")
+        messages: list[dict] = []
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "app": self.main.app,
+        }
+        asyncio.run(self.main.app(scope, receive, send))
+
+        start = next(
+            message for message in messages if message["type"] == "http.response.start"
+        )
+        chunks = [
+            message.get("body", b"")
+            for message in messages
+            if message["type"] == "http.response.body"
+        ]
+        payload = json.loads(b"".join(chunks).decode("utf-8"))
+        return start["status"], payload
+
     def _state(self, target="bind"):
         from app.capture_jobs import CaptureState
 
@@ -410,7 +457,6 @@ class CaptureApiTests(unittest.TestCase):
 
     def test_usrp_start_maps_launch_failure_to_503(self):
         from app.capture_jobs import CaptureUnavailableError
-        from fastapi import HTTPException
 
         coordinator = Mock()
         coordinator.start_usrp.side_effect = CaptureUnavailableError(
@@ -418,15 +464,13 @@ class CaptureApiTests(unittest.TestCase):
         )
 
         with patch.object(self.main, "capture_coordinator", coordinator):
-            with self.assertRaises(HTTPException) as raised:
-                asyncio.run(
-                    self.main.capture_usrp_start_post(
-                        self.main.CaptureStartRequest(usrp_mode="usrp")
-                    )
-                )
+            status_code, payload = self._post_json(
+                "/api/capture/usrp/start",
+                {"usrp_mode": "usrp"},
+            )
 
-        self.assertEqual(raised.exception.status_code, 503)
-        self.assertEqual(raised.exception.detail, "runtime dir missing")
+        self.assertEqual(status_code, 503)
+        self.assertEqual(payload["detail"], "runtime dir missing")
 
     def test_independent_and_stop_all_routes_delegate_to_coordinator(self):
         coordinator = Mock()
