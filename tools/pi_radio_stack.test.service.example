@@ -1,5 +1,5 @@
 [Unit]
-Description=Start Raspberry Pi USRP RX mission stack
+Description=Start Raspberry Pi TEST RX mission stack
 After=network-online.target
 Wants=network-online.target
 
@@ -7,10 +7,10 @@ Wants=network-online.target
 Type=simple
 User=user
 WorkingDirectory=/home/user
-Environment=MODE=usrp
+Environment=MODE=test
 Environment=WORKDIR=/home/user/rx_sampling
 Environment=PYTHON_BIN=/usr/bin/python3
-Environment=RX_SCRIPT=/home/user/rx_sampling/rx_no_gui.py
+Environment=RX_SCRIPT=/home/user/rx_sampling/rx_no_gui_test.py
 Environment=TX_SCRIPT=/home/user/rx_sampling/tx_no_gui.py
 Environment=JAMMER_SCRIPT=/home/user/rx_sampling/jam_no_gui.py
 Environment=START_TX=0
