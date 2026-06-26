@@ -181,8 +181,13 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
     def test_service_targets_match_test_and_usrp_modes(self):
         from app import usrp_ctl
 
-        self.assertEqual(usrp_ctl._service_target("test").service_name, "drone_test.service")
-        self.assertEqual(usrp_ctl._service_target("usrp").service_name, "drone.service")
+        test_target = usrp_ctl._service_target("test")
+        usrp_target = usrp_ctl._service_target("usrp")
+
+        self.assertEqual(test_target.unit, "drone_test")
+        self.assertEqual(test_target.service_name, "drone_test.service")
+        self.assertEqual(usrp_target.unit, "drone")
+        self.assertEqual(usrp_target.service_name, "drone.service")
 
     def test_start_test_mode_falls_back_to_sudo_when_systemctl_needs_authentication(self):
         from app import usrp_ctl
@@ -317,20 +322,19 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             mission_id="flight_003",
             api_url="http://192.168.50.95:8888/api/usrp/upload-noise-csv",
         )
-        failures = (
-            "Permission denied",
-            "operation not permitted",
-            "cannot change permissions on '/var/lib/simworld/capture'",
-            "cannot create directory '/var/lib/simworld/capture/flight_003'",
+        cases = (
+            ("install -d /run/simworld", "operation not permitted"),
+            ("install -d -o user /var/lib/simworld/capture", "cannot change permissions on '/var/lib/simworld/capture'"),
+            ("install -d -o user /var/lib/simworld/capture/flight_003", "cannot create directory '/var/lib/simworld/capture/flight_003'"),
         )
 
-        for failure in failures:
-            with self.subTest(failure=failure):
+        for failing_command, failure in cases:
+            with self.subTest(command=failing_command, failure=failure):
                 calls: list[tuple[str, bool]] = []
 
                 def fake_run(command: str, use_sudo_password: bool = False):
                     calls.append((command, use_sudo_password))
-                    if command == "install -d -o user /var/lib/simworld/capture" and not use_sudo_password:
+                    if command == failing_command and not use_sudo_password:
                         return 1, "", failure
                     if command == "systemctl is-active drone":
                         return 0, "active", ""
@@ -342,8 +346,8 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
                     with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
                         usrp_ctl.start_capture_job("usrp", mission)
 
-                self.assertIn(("install -d -o user /var/lib/simworld/capture", False), calls)
-                self.assertIn(("install -d -o user /var/lib/simworld/capture", True), calls)
+                self.assertIn((failing_command, False), calls)
+                self.assertIn((failing_command, True), calls)
 
     def test_each_remote_command_closes_its_ssh_client(self):
         from app import usrp_ctl
