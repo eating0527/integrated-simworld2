@@ -355,7 +355,7 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertIn("--noise-csv /home/user/rx_sampling/noise.csv", retry)
         self.assertIn("--api-url http://127.0.0.1:8888/api/usrp/upload-noise-csv", retry)
 
-    def test_remote_stop_does_not_retry_when_only_upload_state_is_pending(self):
+    def test_remote_stop_retries_when_upload_state_is_pending(self):
         from app import usrp_ctl
 
         calls: list[str] = []
@@ -380,14 +380,14 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             result = usrp_ctl.stop_capture_job("usrp", "flight_retry")
 
         self.assertEqual(result["service_state"], "stopped")
-        self.assertFalse(
-            any(
-                command.startswith(
-                    "cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "
-                )
-                for command in calls
-            )
+        retry = next(
+            command
+            for command in calls
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py ")
         )
+        self.assertIn("--mission-id flight_retry", retry)
+        self.assertIn("--noise-csv /home/user/rx_sampling/noise.csv", retry)
+        self.assertIn("--api-url http://127.0.0.1:8888/api/usrp/upload-noise-csv", retry)
 
     def test_remote_setup_falls_back_to_sudo_for_permission_style_failures(self):
         from app import usrp_ctl

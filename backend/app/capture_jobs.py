@@ -624,7 +624,11 @@ class CaptureCoordinator:
         if state.uav.service not in {"idle", "stopped", "failed"}:
             self.stop_uav(mission_id)
         state = self.store.load(mission_id)
-        if state.usrp.service not in {"idle", "stopped", "failed"}:
+        needs_usrp_stop = state.usrp.service not in {"idle", "stopped", "failed"}
+        needs_usrp_retry = (
+            state.usrp.service == "stopped" and state.usrp.file == "upload_pending"
+        )
+        if needs_usrp_stop or needs_usrp_retry:
             self.stop_usrp(mission_id)
         return self.store.load(mission_id)
 

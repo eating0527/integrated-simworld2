@@ -356,15 +356,50 @@ class BindCoordinatorTests(unittest.TestCase):
 
     def test_status_surfaces_upload_pending_without_marking_completed(self):
         state = self.coordinator.start_usrp("usrp")
-        state.usrp.service = "stopped"
-        state.usrp.file = "upload_pending"
-        self.coordinator.store.save(state)
+        self.backend.get_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "state": "stopped",
+                "upload_state": "upload_pending",
+            },
+        }
 
         dashboard = self.coordinator.status("usrp")
 
+        self.assertEqual(dashboard.usrp.service, "stopped")
         self.assertEqual(dashboard.usrp.file, "upload_pending")
         self.assertEqual(dashboard.overall_state, "finalizing")
         self.assertNotEqual(dashboard.overall_state, "completed")
+
+    def test_stop_bind_retries_pending_upload_on_second_stop(self):
+        state = self.coordinator.start_bind("usrp")
+        self.backend.stop_capture_job.side_effect = [
+            {
+                "success": True,
+                "service_state": "stopped",
+                "mission_state": {
+                    "state": "stopped",
+                    "upload_state": "upload_pending",
+                },
+            },
+            {
+                "success": True,
+                "service_state": "stopped",
+                "mission_state": {
+                    "state": "stopped",
+                    "upload_state": "uploaded",
+                },
+            },
+        ]
+
+        first = self.coordinator.stop_bind(state.mission_id)
+        second = self.coordinator.stop_bind(state.mission_id)
+
+        self.assertEqual(first.usrp.service, "stopped")
+        self.assertEqual(first.usrp.file, "upload_pending")
+        self.assertEqual(second.usrp.file, "uploaded")
+        self.assertEqual(self.backend.stop_capture_job.call_count, 2)
 
 
 class CaptureApiTests(unittest.TestCase):
