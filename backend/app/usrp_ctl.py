@@ -2,6 +2,7 @@ import json
 import os
 import shlex
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Literal
 
 
@@ -30,8 +31,8 @@ class RemoteMission:
     api_url: str
     scene: str = "NTPU"
     map_type: str = "iss"
-    work_dir: str = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect"
-    noise_csv: str = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv"
+    work_dir: str = "/home/user/rx_sampling"
+    noise_csv: str = "/home/user/rx_sampling/noise.csv"
     state_dir: str = "/var/lib/simworld/capture"
     env_file: str = "/run/simworld/usrp.env"
     run_user: str = "user"
@@ -194,6 +195,9 @@ def _needs_interactive_auth(out: str, err: str) -> bool:
         "interactive authentication required" in text
         or "authentication is required" in text
         or "permission denied" in text
+        or "operation not permitted" in text
+        or "cannot change permissions" in text
+        or "cannot create directory" in text
     )
 
 
@@ -296,13 +300,12 @@ def get_capture_job(mode: str, mission_id: str, state_dir: str | None = None) ->
 
 def start_capture_job(mode: str, mission: RemoteMission) -> dict:
     target = _service_target(mode)
-    runtime_dir = str(os.path.dirname(mission.env_file))
-    mission_dir = str(os.path.dirname(_mission_state_path(mission)))
+    runtime_dir = str(PurePosixPath(mission.env_file).parent)
+    mission_dir = str(PurePosixPath(mission.state_dir) / mission.mission_id)
     for command in (
-        (
-            f"install -d {shlex.quote(runtime_dir)} && "
-            f"install -d -o {shlex.quote(mission.run_user)} {shlex.quote(mission_dir)}"
-        ),
+        f"install -d {shlex.quote(runtime_dir)}",
+        f"install -d -o {shlex.quote(mission.run_user)} {shlex.quote(mission.state_dir)}",
+        f"install -d -o {shlex.quote(mission.run_user)} {shlex.quote(mission_dir)}",
         _mission_environment(mission),
         f"systemctl start {target.unit}",
     ):

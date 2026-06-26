@@ -1,13 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from app import main
 
 
 class UsrpSamplingControlApiTests(unittest.TestCase):
     def setUp(self):
+        from fastapi.testclient import TestClient
+
         self.client = TestClient(main.app)
 
     def test_status_reports_missing_raspi_configuration(self):
@@ -178,6 +178,12 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
 
 
 class UsrpSamplingControlUnitTests(unittest.TestCase):
+    def test_service_targets_match_test_and_usrp_modes(self):
+        from app import usrp_ctl
+
+        self.assertEqual(usrp_ctl._service_target("test").service_name, "drone_test.service")
+        self.assertEqual(usrp_ctl._service_target("usrp").service_name, "drone.service")
+
     def test_start_test_mode_falls_back_to_sudo_when_systemctl_needs_authentication(self):
         from app import usrp_ctl
 
@@ -243,16 +249,23 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
 
         run_remote.assert_not_called()
 
-    def test_remote_start_writes_mission_environment_before_systemctl(self):
+    def test_remote_mission_defaults_match_rx_sampling_contract(self):
+        from app import usrp_ctl
+
+        mission = usrp_ctl.RemoteMission(
+            mission_id="flight_defaults",
+            api_url="http://192.168.50.95:8888/api/usrp/upload-noise-csv",
+        )
+
+        self.assertEqual(mission.work_dir, "/home/user/rx_sampling")
+        self.assertEqual(mission.noise_csv, "/home/user/rx_sampling/noise.csv")
+
+    def test_remote_start_writes_rx_sampling_contract_before_systemctl(self):
         from app import usrp_ctl
 
         mission = usrp_ctl.RemoteMission(
             mission_id="flight_001",
             api_url="http://192.168.50.95:8888/api/usrp/upload-noise-csv",
-            scene="NTPU",
-            map_type="iss",
-            work_dir="/home/user/noise",
-            noise_csv="/home/user/noise/noise.csv",
         )
         commands: list[str] = []
 
@@ -270,10 +283,13 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             result = usrp_ctl.start_capture_job("usrp", mission)
 
         self.assertEqual(result["mission_id"], "flight_001")
-        self.assertTrue(commands[0].startswith("install -d "))
-        self.assertIn("-o user", commands[0])
-        self.assertIn("/run/simworld/usrp.env", commands[1])
-        self.assertEqual(commands[2], "systemctl start drone")
+        self.assertEqual(commands[0], "install -d /run/simworld")
+        self.assertEqual(commands[1], "install -d -o user /var/lib/simworld/capture")
+        self.assertEqual(commands[2], "install -d -o user /var/lib/simworld/capture/flight_001")
+        self.assertIn("WORKDIR=/home/user/rx_sampling", commands[3])
+        self.assertIn("NOISE_CSV=/home/user/rx_sampling/noise.csv", commands[3])
+        self.assertIn("/run/simworld/usrp.env", commands[3])
+        self.assertEqual(commands[4], "systemctl start drone")
 
     def test_remote_status_combines_systemd_and_mission_json(self):
         from app import usrp_ctl
@@ -294,31 +310,40 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertEqual(result["mission_state"]["mission_id"], "flight_002")
         self.assertEqual(result["mission_state"]["upload_state"], "recording")
 
-    def test_remote_mission_setup_falls_back_to_sudo_on_permission_denied(self):
+    def test_remote_setup_falls_back_to_sudo_for_permission_style_failures(self):
         from app import usrp_ctl
 
         mission = usrp_ctl.RemoteMission(
             mission_id="flight_003",
             api_url="http://192.168.50.95:8888/api/usrp/upload-noise-csv",
         )
-        calls: list[tuple[str, bool]] = []
+        failures = (
+            "Permission denied",
+            "operation not permitted",
+            "cannot change permissions on '/var/lib/simworld/capture'",
+            "cannot create directory '/var/lib/simworld/capture/flight_003'",
+        )
 
-        def fake_run(command: str, use_sudo_password: bool = False):
-            calls.append((command, use_sudo_password))
-            if command.startswith("install -d") and not use_sudo_password:
-                return 1, "", "Permission denied"
-            if command == "systemctl is-active drone":
-                return 0, "active", ""
-            if command.startswith("cat "):
-                return 0, '{"mission_id":"flight_003","state":"running"}', ""
-            return 0, "", ""
+        for failure in failures:
+            with self.subTest(failure=failure):
+                calls: list[tuple[str, bool]] = []
 
-        with patch.dict("os.environ", {"RASPI_PSW": "secret"}):
-            with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
-                usrp_ctl.start_capture_job("usrp", mission)
+                def fake_run(command: str, use_sudo_password: bool = False):
+                    calls.append((command, use_sudo_password))
+                    if command == "install -d -o user /var/lib/simworld/capture" and not use_sudo_password:
+                        return 1, "", failure
+                    if command == "systemctl is-active drone":
+                        return 0, "active", ""
+                    if command.startswith("cat "):
+                        return 0, '{"mission_id":"flight_003","state":"running"}', ""
+                    return 0, "", ""
 
-        install_command = next(command for command, _ in calls if command.startswith("install -d"))
-        self.assertIn((install_command, True), calls)
+                with patch.dict("os.environ", {"RASPI_PSW": "secret"}):
+                    with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+                        usrp_ctl.start_capture_job("usrp", mission)
+
+                self.assertIn(("install -d -o user /var/lib/simworld/capture", False), calls)
+                self.assertIn(("install -d -o user /var/lib/simworld/capture", True), calls)
 
     def test_each_remote_command_closes_its_ssh_client(self):
         from app import usrp_ctl
