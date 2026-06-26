@@ -317,6 +317,12 @@ def _write_remote_mission_state(mission: RemoteMission, payload: dict) -> tuple[
     return _run_service_control(f"sh -c {shlex.quote(script)}")
 
 
+def _persist_remote_mission_state(mission: RemoteMission, payload: dict) -> None:
+    exit_code, out, err = _write_remote_mission_state(mission, payload)
+    if exit_code != 0:
+        raise UsrpControlError(err or out or "failed to write remote mission state")
+
+
 def _read_remote_env(path: str) -> dict[str, str]:
     exit_code, out, _ = _run_remote(f"cat {shlex.quote(path)}")
     if exit_code != 0 or not out:
@@ -426,7 +432,7 @@ def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -
         elif mission_state.get("state") != "failed":
             mission_state["state"] = "stopped"
             mission_state["upload_state"] = "upload_pending"
-        _write_remote_mission_state(
+        _persist_remote_mission_state(
             RemoteMission(
                 mission_id=mission_state["mission_id"],
                 api_url=mission_state["api_url"],

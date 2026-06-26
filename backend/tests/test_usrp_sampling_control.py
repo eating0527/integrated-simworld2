@@ -323,6 +323,8 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         from app import usrp_ctl
 
         calls: list[str] = []
+        mission_path = "/var/lib/simworld/capture/flight_retry/mission.json"
+        env_path = "/run/simworld/usrp.env"
 
         def fake_run(command: str, use_sudo_password: bool = False):
             calls.append(command)
@@ -330,10 +332,65 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
                 return 0, "", ""
             if command == "systemctl is-active drone":
                 return 3, "inactive", ""
-            if command.startswith("cat "):
+            if command == f"cat {mission_path}":
                 return (
                     0,
-                    '{"mission_id":"flight_retry","state":"upload_pending","upload_state":"upload_pending","noise_csv":"/home/user/rx_sampling/noise.csv","scene":"NTPU","map_type":"iss","api_url":"http://127.0.0.1:8888/api/usrp/upload-noise-csv"}',
+                    '{"mission_id":"flight_retry","state":"upload_pending","upload_state":"upload_pending"}',
+                    "",
+                )
+            if command == f"cat {env_path}":
+                return (
+                    0,
+                    "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv",
+                    "",
+                )
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
+                return 0, "uploaded", ""
+            if command.startswith("systemctl status") or command.startswith("journalctl"):
+                return 0, "Active: inactive", ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.stop_capture_job("usrp", "flight_retry")
+
+        self.assertEqual(result["service_state"], "stopped")
+        self.assertEqual(result["mission_state"]["scene"], "NTPU")
+        self.assertEqual(
+            result["mission_state"]["noise_csv"],
+            "/home/user/rx_sampling/noise.csv",
+        )
+        retry = next(
+            command
+            for command in calls
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py ")
+        )
+        self.assertIn("--mission-id flight_retry", retry)
+        self.assertIn("--noise-csv /home/user/rx_sampling/noise.csv", retry)
+        self.assertIn("--api-url http://127.0.0.1:8888/api/usrp/upload-noise-csv", retry)
+
+    def test_remote_stop_retries_when_upload_state_is_pending(self):
+        from app import usrp_ctl
+
+        calls: list[str] = []
+        mission_path = "/var/lib/simworld/capture/flight_retry/mission.json"
+        env_path = "/run/simworld/usrp.env"
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            calls.append(command)
+            if command == "systemctl stop drone":
+                return 0, "", ""
+            if command == "systemctl is-active drone":
+                return 3, "inactive", ""
+            if command == f"cat {mission_path}":
+                return (
+                    0,
+                    '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending"}',
+                    "",
+                )
+            if command == f"cat {env_path}":
+                return (
+                    0,
+                    "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv",
                     "",
                 )
             if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
@@ -355,39 +412,40 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertIn("--noise-csv /home/user/rx_sampling/noise.csv", retry)
         self.assertIn("--api-url http://127.0.0.1:8888/api/usrp/upload-noise-csv", retry)
 
-    def test_remote_stop_retries_when_upload_state_is_pending(self):
+    def test_remote_stop_raises_when_retry_write_back_fails(self):
         from app import usrp_ctl
 
-        calls: list[str] = []
+        mission_path = "/var/lib/simworld/capture/flight_retry/mission.json"
+        env_path = "/run/simworld/usrp.env"
 
         def fake_run(command: str, use_sudo_password: bool = False):
-            calls.append(command)
             if command == "systemctl stop drone":
                 return 0, "", ""
             if command == "systemctl is-active drone":
                 return 3, "inactive", ""
-            if command.startswith("cat "):
+            if command == f"cat {mission_path}":
                 return (
                     0,
-                    '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending","noise_csv":"/home/user/rx_sampling/noise.csv","scene":"NTPU","map_type":"iss","api_url":"http://127.0.0.1:8888/api/usrp/upload-noise-csv"}',
+                    '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending"}',
                     "",
                 )
+            if command == f"cat {env_path}":
+                return (
+                    0,
+                    "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nNOISE_CSV=/home/user/rx_sampling/noise.csv",
+                    "",
+                )
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
+                return 0, "uploaded", ""
+            if command.startswith("sh -c ") and mission_path in command and '"upload_state":"uploaded"' in command:
+                return 1, "", "write failed"
             if command.startswith("systemctl status") or command.startswith("journalctl"):
                 return 0, "Active: inactive", ""
             return 0, "", ""
 
         with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
-            result = usrp_ctl.stop_capture_job("usrp", "flight_retry")
-
-        self.assertEqual(result["service_state"], "stopped")
-        retry = next(
-            command
-            for command in calls
-            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py ")
-        )
-        self.assertIn("--mission-id flight_retry", retry)
-        self.assertIn("--noise-csv /home/user/rx_sampling/noise.csv", retry)
-        self.assertIn("--api-url http://127.0.0.1:8888/api/usrp/upload-noise-csv", retry)
+            with self.assertRaisesRegex(usrp_ctl.UsrpControlError, "write failed"):
+                usrp_ctl.stop_capture_job("usrp", "flight_retry")
 
     def test_remote_setup_falls_back_to_sudo_for_permission_style_failures(self):
         from app import usrp_ctl

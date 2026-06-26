@@ -394,11 +394,18 @@ class BindCoordinatorTests(unittest.TestCase):
         ]
 
         first = self.coordinator.stop_bind(state.mission_id)
+        after_first = self.coordinator.store.load(state.mission_id)
         second = self.coordinator.stop_bind(state.mission_id)
+        after_second = self.coordinator.store.load(state.mission_id)
 
         self.assertEqual(first.usrp.service, "stopped")
         self.assertEqual(first.usrp.file, "upload_pending")
+        self.assertEqual(after_first.usrp.service, "stopped")
+        self.assertEqual(after_first.usrp.file, "upload_pending")
         self.assertEqual(second.usrp.file, "uploaded")
+        self.assertEqual(after_second.usrp.service, "stopped")
+        self.assertEqual(after_second.usrp.file, "uploaded")
+        self.assertEqual(after_second.overall_state, "completed")
         self.assertEqual(self.backend.stop_capture_job.call_count, 2)
 
 
