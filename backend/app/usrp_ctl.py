@@ -38,6 +38,9 @@ class RemoteMission:
     run_user: str = "user"
 
 
+REMOTE_UPLOAD_HELPER = "/home/user/upload_noise_csv.py"
+
+
 class UsrpControlError(RuntimeError):
     pass
 
@@ -291,6 +294,86 @@ def _mission_environment(mission: RemoteMission) -> str:
     return f"sh -c {shlex.quote(script)}"
 
 
+def _mission_metadata(mission: RemoteMission, *, state: str, upload_state: str) -> dict[str, str]:
+    return {
+        "mission_id": mission.mission_id,
+        "state": state,
+        "upload_state": upload_state,
+        "noise_csv": mission.noise_csv,
+        "scene": mission.scene,
+        "map_type": mission.map_type,
+        "api_url": mission.api_url,
+    }
+
+
+def _write_remote_mission_state(mission: RemoteMission, payload: dict) -> tuple[int, str, str]:
+    path = _mission_state_path(mission)
+    directory = str(PurePosixPath(path).parent)
+    compact = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    script = (
+        f"mkdir -p {shlex.quote(directory)} && "
+        f"printf '%s\\n' {shlex.quote(compact)} > {shlex.quote(path)}"
+    )
+    return _run_service_control(f"sh -c {shlex.quote(script)}")
+
+
+def _read_remote_env(path: str) -> dict[str, str]:
+    exit_code, out, _ = _run_remote(f"cat {shlex.quote(path)}")
+    if exit_code != 0 or not out:
+        return {}
+    values: dict[str, str] = {}
+    for line in out.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key:
+            values[key] = value
+    return values
+
+
+def _repair_mission_state(mission_id: str, mission_state: dict, state_dir: str | None = None) -> dict:
+    env = _read_remote_env("/run/simworld/usrp.env")
+    merged = dict(mission_state)
+    merged.setdefault("mission_id", env.get("MISSION_ID", mission_id))
+    merged.setdefault("noise_csv", env.get("NOISE_CSV", "/home/user/rx_sampling/noise.csv"))
+    merged.setdefault("scene", env.get("SCENE", "NTPU"))
+    merged.setdefault("map_type", env.get("MAP_TYPE", "iss"))
+    merged.setdefault("api_url", env.get("UPLOAD_API_URL", ""))
+    path = _mission_state_path(mission_id, state_dir)
+    mission = RemoteMission(
+        mission_id=merged["mission_id"],
+        api_url=merged["api_url"],
+        scene=merged["scene"],
+        map_type=merged["map_type"],
+        noise_csv=merged["noise_csv"],
+        work_dir=str(PurePosixPath(merged["noise_csv"]).parent),
+        state_dir=str(PurePosixPath(path).parent.parent),
+    )
+    _write_remote_mission_state(mission, merged)
+    return merged
+
+
+def _remote_upload_command(mission_state: dict) -> str:
+    noise_csv = mission_state["noise_csv"]
+    work_dir = str(PurePosixPath(noise_csv).parent)
+    parts = [
+        "python3",
+        REMOTE_UPLOAD_HELPER,
+        "--mission-id",
+        mission_state["mission_id"],
+        "--noise-csv",
+        noise_csv,
+        "--api-url",
+        mission_state["api_url"],
+    ]
+    scene = mission_state.get("scene")
+    map_type = mission_state.get("map_type")
+    if scene:
+        parts.extend(["--scene", scene])
+    if map_type:
+        parts.extend(["--map-type", map_type])
+    command = " ".join(shlex.quote(part) for part in parts)
+    return f"cd {shlex.quote(work_dir)} && {command}"
+
+
 def get_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
     status = get_drone_status(mode)
     status["mission_id"] = mission_id
@@ -307,9 +390,16 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
         f"install -d -o {shlex.quote(mission.run_user)} {shlex.quote(mission.state_dir)}",
         f"install -d -o {shlex.quote(mission.run_user)} {shlex.quote(mission_dir)}",
         _mission_environment(mission),
+        _write_remote_mission_state.__name__,
         f"systemctl start {target.unit}",
     ):
-        exit_code, out, err = _run_service_control(command)
+        if command == _write_remote_mission_state.__name__:
+            exit_code, out, err = _write_remote_mission_state(
+                mission,
+                _mission_metadata(mission, state="starting", upload_state="recording"),
+            )
+        else:
+            exit_code, out, err = _run_service_control(command)
         if exit_code != 0:
             raise UsrpControlError(err or out or f"{command} failed")
     status = get_capture_job(mode, mission.mission_id, mission.state_dir)
@@ -319,9 +409,35 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
 
 def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
     target = _service_target(mode)
+    active_exit_code, active_out, _ = _run_remote(f"systemctl is-active {target.unit}")
+    was_inactive = _state_from_active_output(active_out, active_exit_code) == "stopped"
     exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}")
     if exit_code != 0:
         raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
     status = get_capture_job(mode, mission_id, state_dir)
+    mission_state = status.get("mission_state") or {}
+    pending = mission_state.get("state") == "upload_pending" or mission_state.get("upload_state") == "upload_pending"
+    if was_inactive and pending:
+        mission_state = _repair_mission_state(mission_id, mission_state, state_dir)
+        exit_code, out, err = _run_service_control(_remote_upload_command(mission_state))
+        if exit_code == 0:
+            mission_state["state"] = "stopped"
+            mission_state["upload_state"] = "uploaded"
+        elif mission_state.get("state") != "failed":
+            mission_state["state"] = "stopped"
+            mission_state["upload_state"] = "upload_pending"
+        _write_remote_mission_state(
+            RemoteMission(
+                mission_id=mission_state["mission_id"],
+                api_url=mission_state["api_url"],
+                scene=mission_state["scene"],
+                map_type=mission_state["map_type"],
+                noise_csv=mission_state["noise_csv"],
+                work_dir=str(PurePosixPath(mission_state["noise_csv"]).parent),
+                state_dir=(state_dir or os.environ.get("RASPI_STATE_DIR", "/var/lib/simworld/capture")),
+            ),
+            mission_state,
+        )
+        status["mission_state"] = mission_state
     status["message"] = f"{target.service_name} stopped"
     return status

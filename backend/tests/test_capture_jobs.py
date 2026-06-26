@@ -282,6 +282,9 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(state.usrp.mission_id, state.mission_id)
         self.assertEqual(state.uav.service, "running")
         self.assertEqual(state.usrp.service, "running")
+        remote = self.backend.start_capture_job.call_args.args[1]
+        self.assertEqual(remote["work_dir"], "/home/user/rx_sampling")
+        self.assertEqual(remote["noise_csv"], "/home/user/rx_sampling/noise.csv")
 
     def test_bind_child_failure_preserves_other_child(self):
         self.backend.start_capture_job.side_effect = RuntimeError("systemctl failed")
@@ -350,6 +353,18 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.uav.mission_id, state.mission_id)
         self.assertEqual(dashboard.uav.service, "failed")
         self.assertIn("process", dashboard.uav.error.lower())
+
+    def test_status_surfaces_upload_pending_without_marking_completed(self):
+        state = self.coordinator.start_usrp("usrp")
+        state.usrp.service = "stopped"
+        state.usrp.file = "upload_pending"
+        self.coordinator.store.save(state)
+
+        dashboard = self.coordinator.status("usrp")
+
+        self.assertEqual(dashboard.usrp.file, "upload_pending")
+        self.assertEqual(dashboard.overall_state, "finalizing")
+        self.assertNotEqual(dashboard.overall_state, "completed")
 
 
 class CaptureApiTests(unittest.TestCase):

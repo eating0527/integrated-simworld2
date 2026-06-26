@@ -309,11 +309,11 @@ class CaptureCoordinator:
             map_type=map_type,
             work_dir=os.environ.get(
                 "USRP_REMOTE_WORK_DIR",
-                "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect",
+                "/home/user/rx_sampling",
             ),
             noise_csv=os.environ.get(
                 "USRP_REMOTE_NOISE_CSV",
-                "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv",
+                "/home/user/rx_sampling/noise.csv",
             ),
             run_user=os.environ.get("RASPI_USER", "user"),
         )
