@@ -312,13 +312,25 @@ Install the updated Raspberry Pi files:
 ```bash
 sudo cp tools/pi_radio_stack.sh /home/user/pi_radio_stack.sh
 sudo cp tools/pi_radio_stack.service.example /etc/systemd/system/drone.service
+sudo cp tools/pi_radio_stack.test.service.example /etc/systemd/system/drone_test.service
 sudo systemctl daemon-reload
 ```
 
-Create a corresponding `drone_test.service` using the same mission contract but
-the test capture command. Do not enable either capture unit at boot; the frontend
-starts one unit per mission. The backend writes `/run/simworld/usrp.env` before
-starting the selected unit.
+Mission-aware systemd contract:
+
+- Copy `tools/pi_radio_stack.sh` to `/home/user/pi_radio_stack.sh`.
+- Install `tools/pi_radio_stack.service.example` as `/etc/systemd/system/drone.service`.
+- Install `tools/pi_radio_stack.test.service.example` as `/etc/systemd/system/drone_test.service`.
+- Run `sudo systemctl daemon-reload` after updating either unit.
+- Do **not** enable either unit at boot. The backend starts one unit per mission.
+- Frontend `TEST` maps to `drone_test.service`; `USRP` maps to `drone.service`.
+- TX and jammer stay off by default. Only set `START_TX=1` and/or `START_JAMMER=1`
+  when that mission should launch them.
+- Before each mission the backend writes `/run/simworld/usrp.env` for the selected unit.
+- The Raspberry Pi stores the mission noise file at
+  `/var/lib/simworld/capture/<mission_id>/noise.csv`.
+- If upload fails, mission state stays `upload_pending`, the CSV is not deleted,
+  and the same file can be retried later.
 
 `start.ps1` no longer starts `gps.csv` recording automatically. Use `-GpsCsv`
 only for the legacy startup-owned writer:
@@ -544,102 +556,3 @@ incoming/flight_001/noise.csv
 ```
 
 Only then will it replay the mission automatically.
-
-### Raspberry Pi auto-watch and upload
-
-If the Raspberry Pi should start after boot, keep watching `noise.csv`, and upload automatically when the file stops changing, use `tools/watch_and_upload_noise.py`:
-
-```bash
-python watch_and_upload_noise.py \
-  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv \
-  --uploader-script /home/user/upload_noise_csv.py \
-  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
-  --scene NTPU \
-  --mission-id flight_001 \
-  --auto-simulate-last
-```
-
-Behavior:
-
-- it polls `noise.csv`
-- when the file changes, it waits until the file is stable for a few seconds
-- then it calls `upload_noise_csv.py`
-- if the same file is rewritten again for the next mission, it uploads again automatically
-
-To keep it running continuously on the Raspberry Pi right now:
-
-```bash
-python /home/user/watch_and_upload_noise.py \
-  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv \
-  --uploader-script /home/user/upload_noise_csv.py \
-  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
-  --scene NTPU \
-  --mission-id flight_001 \
-  --auto-simulate-last
-```
-
-To make it start automatically after boot, copy `tools/watch_and_upload_noise.service.example` to `/etc/systemd/system/watch-and-upload-noise.service`, update the laptop IP and mission id, then:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable watch-and-upload-noise.service
-sudo systemctl start watch-and-upload-noise.service
-sudo systemctl status watch-and-upload-noise.service
-```
-
-### Raspberry Pi run capture and upload
-
-If your current GNU Radio / `noise.py` workflow only writes a complete `noise.csv` after the capture process exits, use `tools/run_capture_and_upload_noise.py` instead:
-
-```bash
-python run_capture_and_upload_noise.py \
-  --capture-cmd "python noise.py" \
-  --capture-workdir /home/user/digitaltwin-modulation/USRP_transmit/noise_detect \
-  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv \
-  --uploader-script /home/user/upload_noise_csv.py \
-  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
-  --scene NTPU \
-  --mission-id flight_001 \
-  --auto-simulate-last
-```
-
-Behavior:
-
-- it starts your capture command
-- waits until the command exits
-- waits for `noise.csv` to stop changing
-- uploads the finished CSV automatically
-
-## Raspberry Pi boot noise logging
-
-Your current `noise.py` publishes complex samples to GNU Radio ZMQ:
-
-- `tcp://127.0.0.1:49301`
-
-It does not write `noise.csv` by itself. To keep appending:
-
-```csv
-time_stamp,noise_floor_db
-```
-
-use `tools/zmq_to_noise_csv.py` on the Raspberry Pi:
-
-```bash
-python /home/user/zmq_to_noise_csv.py \
-  --noise-csv /home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv
-```
-
-If you want both `noise.py` and the CSV logger to start automatically after boot, use `tools/noise_stack.service.example` as a systemd service template.
-
-If the Raspberry Pi should boot and start all three GNU Radio programs together:
-
-- `chan_est_rx.py`
-- `chan_est_tx.py`
-- `noise.py`
-
-use these files:
-
-- `tools/pi_radio_stack.sh`
-- `tools/pi_radio_stack.service.example`
-
-The stack script starts RX, then TX, then jammer, and can also start the `noise.csv` logger automatically.
