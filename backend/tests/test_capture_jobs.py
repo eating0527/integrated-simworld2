@@ -470,7 +470,7 @@ class CaptureApiTests(unittest.TestCase):
             )
 
         self.assertEqual(status_code, 503)
-        self.assertEqual(payload["detail"], "runtime dir missing")
+        self.assertEqual(payload, {"detail": "runtime dir missing"})
 
     def test_independent_and_stop_all_routes_delegate_to_coordinator(self):
         coordinator = Mock()

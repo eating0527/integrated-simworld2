@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PiRadioStackContractTests(unittest.TestCase):
+    def test_rx_only_defaults_do_not_start_tx_or_jammer(self):
+        stack = (ROOT / "tools" / "pi_radio_stack.sh").read_text(encoding="utf-8")
+        usrp_unit = (ROOT / "tools" / "pi_radio_stack.service.example").read_text(
+            encoding="utf-8"
+        )
+        test_unit = (
+            ROOT / "tools" / "pi_radio_stack.test.service.example"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            self._started_roles(stack, usrp_unit),
+            ["rx"],
+        )
+        self.assertEqual(
+            self._started_roles(stack, test_unit),
+            ["rx"],
+        )
+
     def test_stack_tracks_rx_only_mission_contract(self):
         stack = (ROOT / "tools" / "pi_radio_stack.sh").read_text(encoding="utf-8")
 
@@ -60,8 +79,12 @@ class PiRadioStackContractTests(unittest.TestCase):
         bash = self._find_bash()
         if not bash:
             self.skipTest("bash is required for shell contract execution")
-        if not self._bash_works(bash):
-            self.skipTest(f"bash is not usable in this environment: {bash}")
+        bash_probe = self._probe_bash(bash)
+        if bash_probe.returncode != 0:
+            self.skipTest(
+                f"bash is not usable in this environment: {bash} :: "
+                f"{bash_probe.stderr.strip() or bash_probe.stdout.strip()}"
+            )
 
         tmpdir = ROOT / "tmp_pi_stack_test"
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -128,6 +151,21 @@ class PiRadioStackContractTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    def test_bash_probe_captures_windows_root_cause_when_unusable(self):
+        bash = self._find_bash()
+        if not bash:
+            self.skipTest("no bash candidate found on this machine")
+
+        bash_probe = self._probe_bash(bash)
+        if bash_probe.returncode == 0:
+            self.skipTest(f"bash is usable in this environment: {bash}")
+
+        probe_text = f"{bash_probe.stdout}\n{bash_probe.stderr}"
+        self.assertRegex(
+            probe_text,
+            r"(Win32 error 5|couldn't create signal pipe|CreateFileMapping)",
+        )
+
     @staticmethod
     def _bash_path(path: Path) -> str:
         raw = str(path)
@@ -156,8 +194,8 @@ class PiRadioStackContractTests(unittest.TestCase):
         return None
 
     @staticmethod
-    def _bash_works(bash: str) -> bool:
-        probe = subprocess.run(
+    def _probe_bash(bash: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             [bash, "-lc", "true"],
             capture_output=True,
             text=True,
@@ -165,7 +203,39 @@ class PiRadioStackContractTests(unittest.TestCase):
             errors="replace",
             timeout=10,
         )
-        return probe.returncode == 0
+
+    @staticmethod
+    def _started_roles(stack: str, unit: str) -> list[str]:
+        env = {}
+        for line in unit.splitlines():
+            if not line.startswith("Environment="):
+                continue
+            payload = line.removeprefix("Environment=")
+            if "=" not in payload:
+                continue
+            key, value = payload.split("=", 1)
+            env[key] = value
+
+        started = ["rx"]
+        if PiRadioStackContractTests._role_enabled(stack, "TX", env):
+            started.append("tx")
+        if PiRadioStackContractTests._role_enabled(stack, "JAMMER", env):
+            started.append("jammer")
+        return started
+
+    @staticmethod
+    def _role_enabled(stack: str, role: str, env: dict[str, str]) -> bool:
+        match = re.search(
+            rf'{role}_SCRIPT="\$\{{{role}_SCRIPT:-[^}}]+\}}".*?'
+            rf'START_{role}="\$\{{START_{role}:-([^}}]+)\}}".*?'
+            rf'if \[\[ "\$\{{START_{role}\}}" == "1" \]\]; then\s+'
+            rf'start_bg "{role.lower()}" "\$\{{PYTHON_BIN\}}" "\$\{{{role}_SCRIPT\}}"',
+            stack,
+            re.DOTALL,
+        )
+        if not match:
+            raise AssertionError(f"missing {role} gate in wrapper")
+        return env.get(f"START_{role}", match.group(1)) == "1"
 
 
 if __name__ == "__main__":
