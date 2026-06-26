@@ -378,7 +378,14 @@ class CaptureCoordinator:
             target="bind" if bind else "usrp",
             mission_id=mission_id,
         )
-        return self._launch_usrp(state, scene=scene, map_type=map_type)
+        try:
+            return self._launch_usrp(state, scene=scene, map_type=map_type)
+        except Exception as exc:
+            state.usrp.service = "failed"
+            state.usrp.file = "failed"
+            state.usrp.error = str(exc)
+            self.store.save(state)
+            raise CaptureUnavailableError(str(exc)) from exc
 
     def start_bind(
         self,

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import importlib.util
 import sys
@@ -290,6 +291,19 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(state.uav.service, "running")
         self.assertEqual(state.usrp.service, "failed")
 
+    def test_independent_usrp_launch_failure_marks_state_failed(self):
+        from app.capture_jobs import CaptureUnavailableError
+
+        self.backend.start_capture_job.side_effect = RuntimeError("systemctl failed")
+
+        with self.assertRaises(CaptureUnavailableError):
+            self.coordinator.start_usrp("usrp")
+
+        failed = self.coordinator.store.list()[-1]
+        self.assertEqual(failed.usrp.service, "failed")
+        self.assertEqual(failed.usrp.file, "failed")
+        self.assertIn("systemctl failed", failed.usrp.error)
+
     def test_stop_all_waits_for_both_finalizers(self):
         state = self.coordinator.start_bind("test")
 
@@ -339,11 +353,9 @@ class BindCoordinatorTests(unittest.TestCase):
 
 class CaptureApiTests(unittest.TestCase):
     def setUp(self):
-        from fastapi.testclient import TestClient
         from app import main
 
         self.main = main
-        self.client = TestClient(main.app)
 
     def _state(self, target="bind"):
         from app.capture_jobs import CaptureState
@@ -361,13 +373,17 @@ class CaptureApiTests(unittest.TestCase):
         coordinator.start_bind.return_value = self._state()
 
         with patch.object(self.main, "capture_coordinator", coordinator):
-            response = self.client.post(
-                "/api/capture/bind/start",
-                json={"usrp_mode": "usrp", "scene": "NTPU", "map_type": "iss"},
+            response = asyncio.run(
+                self.main.capture_bind_start_post(
+                    self.main.CaptureStartRequest(
+                        usrp_mode="usrp",
+                        scene="NTPU",
+                        map_type="iss",
+                    )
+                )
             )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["mission_id"], "flight_api")
+        self.assertEqual(response.mission_id, "flight_api")
         coordinator.start_bind.assert_called_once_with(
             "usrp",
             scene="NTPU",
@@ -376,18 +392,41 @@ class CaptureApiTests(unittest.TestCase):
 
     def test_bind_start_maps_unavailable_dependency_to_503(self):
         from app.capture_jobs import CaptureUnavailableError
+        from fastapi import HTTPException
 
         coordinator = Mock()
         coordinator.start_bind.side_effect = CaptureUnavailableError("SSH timeout")
 
         with patch.object(self.main, "capture_coordinator", coordinator):
-            response = self.client.post(
-                "/api/capture/bind/start",
-                json={"usrp_mode": "test"},
-            )
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(
+                    self.main.capture_bind_start_post(
+                        self.main.CaptureStartRequest(usrp_mode="test")
+                    )
+                )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["detail"], "SSH timeout")
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail, "SSH timeout")
+
+    def test_usrp_start_maps_launch_failure_to_503(self):
+        from app.capture_jobs import CaptureUnavailableError
+        from fastapi import HTTPException
+
+        coordinator = Mock()
+        coordinator.start_usrp.side_effect = CaptureUnavailableError(
+            "runtime dir missing"
+        )
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(
+                    self.main.capture_usrp_start_post(
+                        self.main.CaptureStartRequest(usrp_mode="usrp")
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail, "runtime dir missing")
 
     def test_independent_and_stop_all_routes_delegate_to_coordinator(self):
         coordinator = Mock()
@@ -399,36 +438,28 @@ class CaptureApiTests(unittest.TestCase):
 
         with patch.object(self.main, "capture_coordinator", coordinator):
             self.assertEqual(
-                self.client.post("/api/capture/uav/start").status_code,
-                200,
+                asyncio.run(self.main.capture_uav_start_post()).mission_id,
+                "flight_api",
             )
             self.assertEqual(
-                self.client.post(
-                    "/api/capture/usrp/start",
-                    json={"usrp_mode": "test"},
-                ).status_code,
-                200,
+                asyncio.run(
+                    self.main.capture_usrp_start_post(
+                        self.main.CaptureStartRequest(usrp_mode="test")
+                    )
+                ).mission_id,
+                "flight_api",
             )
             self.assertEqual(
-                self.client.post(
-                    "/api/capture/uav/stop",
-                    params={"mission_id": "flight_api"},
-                ).status_code,
-                200,
+                asyncio.run(self.main.capture_uav_stop_post("flight_api")).mission_id,
+                "flight_api",
             )
             self.assertEqual(
-                self.client.post(
-                    "/api/capture/usrp/stop",
-                    params={"mission_id": "flight_api"},
-                ).status_code,
-                200,
+                asyncio.run(self.main.capture_usrp_stop_post("flight_api")).mission_id,
+                "flight_api",
             )
             self.assertEqual(
-                self.client.post(
-                    "/api/capture/bind/stop",
-                    params={"mission_id": "flight_api"},
-                ).status_code,
-                200,
+                asyncio.run(self.main.capture_bind_stop_post("flight_api")).mission_id,
+                "flight_api",
             )
 
         coordinator.start_uav.assert_called_once()
