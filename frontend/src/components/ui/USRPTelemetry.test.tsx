@@ -47,6 +47,15 @@ function jsonResponse(payload: unknown, ok = true) {
   return Promise.resolve({
     ok,
     json: () => Promise.resolve(payload),
+    text: () => Promise.resolve(JSON.stringify(payload)),
+  } as Response);
+}
+
+function textResponse(payload: string, ok = false) {
+  return Promise.resolve({
+    ok,
+    json: () => Promise.reject(new SyntaxError(`Unexpected token 'I', "${payload.slice(0, 10)}"... is not valid JSON`)),
+    text: () => Promise.resolve(payload),
   } as Response);
 }
 
@@ -63,8 +72,8 @@ describe('USRPTelemetry capture controls', () => {
   it('defaults Bind off and exposes independent UAV and USRP controls', async () => {
     render(<USRPTelemetry event={null} />);
 
-    expect(await screen.findByText('UAV / AP3 GPS')).toBeInTheDocument();
-    expect(screen.getByText('RasPi / USRP Noise')).toBeInTheDocument();
+    expect(await screen.findByText('無人機 GPS 採樣')).toBeInTheDocument();
+    expect(screen.getByText('USRP 干擾採樣')).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Bind services' }))
       .toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('button', { name: 'Start UAV' })).toBeEnabled();
@@ -190,5 +199,21 @@ describe('USRPTelemetry capture controls', () => {
       '/api/capture/usrp/stop?mission_id=noise_job',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('shows plain text start failures without a JSON parse error', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/usrp/start')) {
+        return textResponse('Internal Server Error');
+      }
+      return jsonResponse(captureStatus());
+    });
+    const user = userEvent.setup();
+    render(<USRPTelemetry event={null} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Start USRP' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Internal Server Error');
+    expect(screen.queryByText(/Unexpected token/)).not.toBeInTheDocument();
   });
 });

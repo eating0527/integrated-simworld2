@@ -193,6 +193,30 @@ function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
   };
 }
 
+function responseMessage(value: unknown, fallback: string): string {
+  if (value && typeof value === 'object') {
+    const body = value as { detail?: unknown; error?: unknown };
+    if (typeof body.detail === 'string') return body.detail;
+    if (typeof body.error === 'string') return body.error;
+  }
+  return fallback;
+}
+
+async function readCaptureResponse(response: Response, fallback: string): Promise<Partial<CaptureStatus>> {
+  const raw = await response.text();
+  let data: unknown = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (parseError) {
+      if (!response.ok) throw new Error(raw);
+      throw parseError;
+    }
+  }
+  if (!response.ok) throw new Error(responseMessage(data, raw || fallback));
+  return data as Partial<CaptureStatus>;
+}
+
 function ageSeconds(event?: USRPSpectrumEvent | null): number | null {
   if (!event?.timestamp) return null;
   return Math.max(0, Math.round(Date.now() / 1000 - event.timestamp));
@@ -220,8 +244,7 @@ export function USRPTelemetry({ event }: Props) {
   const loadStatus = useCallback(async () => {
     try {
       const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || data.error || 'Status request failed');
+      const data = await readCaptureResponse(response, 'Status request failed');
       applyStatus(data);
       setError('');
     } catch (requestError) {
@@ -258,8 +281,7 @@ export function USRPTelemetry({ event }: Props) {
           ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
           : {}),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || data.error || 'Capture request failed');
+      const data = await readCaptureResponse(response, 'Capture request failed');
       applyStatus(data);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Capture request failed');
@@ -303,7 +325,7 @@ export function USRPTelemetry({ event }: Props) {
 
   return (
     <MinPanel
-      title="Capture Control"
+      title="採樣控制面板"
       className="panel-ui"
       draggable
       style={{ ...PANEL_POS.usrp, width: 380 }}
@@ -311,7 +333,7 @@ export function USRPTelemetry({ event }: Props) {
     >
       <div style={S.control}>
         <div style={S.topRow}>
-          <strong>Bind services</strong>
+          <strong>裝置綁定</strong>
           <button
             type="button"
             role="switch"
@@ -321,12 +343,12 @@ export function USRPTelemetry({ event }: Props) {
             style={{ ...S.button, ...(bind ? S.active : null), ...disabledStyle(busy || anyActive) }}
             onClick={() => setBind(value => !value)}
           >
-            {bind ? 'ON' : 'OFF'}
+            {bind ? '啟用' : '關閉'}
           </button>
         </div>
 
         {childSection(
-          'UAV / AP3 GPS',
+          '無人機 GPS 採樣',
           uav,
           <div style={S.actions}>
             <button
@@ -349,7 +371,7 @@ export function USRPTelemetry({ event }: Props) {
         )}
 
         {childSection(
-          'RasPi / USRP Noise',
+          'USRP 干擾採樣',
           usrp,
           <>
             <div style={S.modes} aria-label="USRP capture mode">
@@ -418,7 +440,7 @@ export function USRPTelemetry({ event }: Props) {
       </div>
 
       {!event ? (
-        <PanelEmpty>Waiting for `usrp-spectrum` events.</PanelEmpty>
+        <PanelEmpty>...Waiting for usrp events...</PanelEmpty>
       ) : (
         <>
           <div style={S.name}>{event.deviceName || 'USRP B210 Sensor'}</div>

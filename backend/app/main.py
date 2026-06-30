@@ -2109,9 +2109,10 @@ async def usrp_upload_gps_csv_post(
         "received_gps_at": datetime.now().isoformat(),
         "gps_filename": gps_file.filename,
     }
-    if devices_json.strip():
+    devices_payload = devices_json if isinstance(devices_json, str) else ""
+    if devices_payload.strip():
         try:
-            updates["devices"] = json.loads(devices_json)
+            updates["devices"] = json.loads(devices_payload)
         except json.JSONDecodeError as exc:
             return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
 
@@ -2140,10 +2141,24 @@ async def usrp_upload_noise_csv_post(
     noise_sha256: str = Form(...),
     noise_file: UploadFile = File(...),
 ):
+    scene_value = scene if isinstance(scene, str) else "NTPU"
+    mission_id_value = mission_id if isinstance(mission_id, str) else ""
+    map_type_value = map_type if isinstance(map_type, str) else "iss"
+    auto_simulate_last_value = (
+        auto_simulate_last if isinstance(auto_simulate_last, bool) else True
+    )
+    device_id_value = device_id if isinstance(device_id, str) else "usrp-b210-sensor"
+    device_name_value = (
+        device_name if isinstance(device_name, str) else "USRP B210 Sensor"
+    )
+    device_type_value = device_type if isinstance(device_type, str) else "uav"
+    role_value = role if isinstance(role, str) else "rx"
+    devices_payload = devices_json if isinstance(devices_json, str) else ""
+
     if not noise_file.filename:
         return JSONResponse({"success": False, "error": "noise_file filename is required"}, status_code=422)
 
-    bundle_id = mission_id.strip()
+    bundle_id = mission_id_value.strip()
     if not bundle_id:
         return JSONResponse({"success": False, "error": "mission_id is required"}, status_code=422)
     noise_bytes = await noise_file.read()
@@ -2166,20 +2181,20 @@ async def usrp_upload_noise_csv_post(
     temp_path.replace(noise_path)
 
     updates: dict[str, Any] = {
-        "scene": scene,
+        "scene": scene_value,
         "mission_id": bundle_id,
-        "map_type": map_type,
-        "auto_simulate_last": auto_simulate_last,
-        "device_id": device_id,
-        "device_name": device_name,
-        "device_type": device_type,
-        "role": role,
+        "map_type": map_type_value,
+        "auto_simulate_last": auto_simulate_last_value,
+        "device_id": device_id_value,
+        "device_name": device_name_value,
+        "device_type": device_type_value,
+        "role": role_value,
         "received_noise_at": datetime.now().isoformat(),
         "noise_filename": noise_file.filename,
     }
-    if devices_json.strip():
+    if devices_payload.strip():
         try:
-            updates["devices"] = json.loads(devices_json)
+            updates["devices"] = json.loads(devices_payload)
         except json.JSONDecodeError as exc:
             return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
 
@@ -2200,7 +2215,7 @@ async def usrp_upload_noise_csv_post(
         "bundle_dir": str(bundle_dir),
         "watch_dir": str(INCOMING_CSV_DIR),
         "metadata": metadata,
-        "capture": capture,
+        "capture": capture.model_dump() if capture is not None else None,
     }
 
 

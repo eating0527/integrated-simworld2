@@ -30,6 +30,36 @@ class PiRadioStackContractTests(unittest.TestCase):
             ["rx"],
         )
 
+    def test_shell_contract_covers_rx_only_and_finalize_without_bash(self):
+        stack = (ROOT / "tools" / "pi_radio_stack.sh").read_text(encoding="utf-8")
+
+        contract = self._shell_contract(stack)
+
+        self.assertEqual(contract["default_started_roles"], ["rx"])
+        self.assertEqual(
+            contract["finalize_missing_noise"],
+            ('write_state "failed" "failed" "noise.csv is missing or empty"', 1),
+        )
+        self.assertEqual(
+            contract["finalize_copy_failure"],
+            ('write_state "failed" "failed" "failed to copy noise.csv"', 1),
+        )
+        self.assertEqual(
+            contract["finalize_upload_states"],
+            [
+                'write_state "${final_state}" "uploaded" "${JOB_ERROR}"',
+                'write_state "${final_state}" "upload_pending" "${JOB_ERROR}"',
+            ],
+        )
+
+    def test_shell_startup_plan_defaults_to_rx_only_without_bash(self):
+        stack = (ROOT / "tools" / "pi_radio_stack.sh").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            self._startup_commands(stack, {}),
+            [("rx", "${PYTHON_BIN}", "${RX_SCRIPT}")],
+        )
+
     def test_stack_tracks_rx_only_mission_contract(self):
         stack = (ROOT / "tools" / "pi_radio_stack.sh").read_text(encoding="utf-8")
 
@@ -203,6 +233,35 @@ class PiRadioStackContractTests(unittest.TestCase):
             errors="replace",
             timeout=10,
         )
+
+    @staticmethod
+    def _shell_contract(stack: str) -> dict[str, object]:
+        return {
+            "default_started_roles": PiRadioStackContractTests._started_roles(stack, ""),
+            "default_startup_commands": PiRadioStackContractTests._startup_commands(
+                stack, {}
+            ),
+            "finalize_missing_noise": (
+                'write_state "failed" "failed" "noise.csv is missing or empty"',
+                stack.count('write_state "failed" "failed" "noise.csv is missing or empty"'),
+            ),
+            "finalize_copy_failure": (
+                'write_state "failed" "failed" "failed to copy noise.csv"',
+                stack.count('write_state "failed" "failed" "failed to copy noise.csv"'),
+            ),
+            "finalize_upload_states": re.findall(
+                r'write_state "\$\{final_state\}" "(?:uploaded|upload_pending)" "\$\{JOB_ERROR\}"',
+                stack,
+            ),
+        }
+
+    @staticmethod
+    def _startup_commands(stack: str, env: dict[str, str]) -> list[tuple[str, str, str]]:
+        commands = [("rx", "${PYTHON_BIN}", "${RX_SCRIPT}")]
+        for role in ("TX", "JAMMER"):
+            if PiRadioStackContractTests._role_enabled(stack, role, env):
+                commands.append((role.lower(), "${PYTHON_BIN}", f"${{{role}_SCRIPT}}"))
+        return commands
 
     @staticmethod
     def _started_roles(stack: str, unit: str) -> list[str]:

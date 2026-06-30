@@ -1,18 +1,70 @@
+import asyncio
+import json
 import unittest
 from unittest.mock import patch
 
 from app import main
 
 
-class UsrpSamplingControlApiTests(unittest.TestCase):
-    def setUp(self):
-        from fastapi.testclient import TestClient
+class _AsgiJsonResponse:
+    def __init__(self, status_code: int, payload):
+        self.status_code = status_code
+        self._payload = payload
 
-        self.client = TestClient(main.app)
+    def json(self):
+        return self._payload
+
+
+class UsrpSamplingControlApiTests(unittest.TestCase):
+    def _request_json(self, method: str, path: str) -> _AsgiJsonResponse:
+        path_only, _, query = path.partition("?")
+        messages: list[dict] = []
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": method,
+            "scheme": "http",
+            "path": path_only,
+            "raw_path": path_only.encode("ascii"),
+            "query_string": query.encode("ascii"),
+            "root_path": "",
+            "headers": [
+                (b"host", b"testserver"),
+                (b"content-length", b"0"),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "app": main.app,
+        }
+        asyncio.run(main.app(scope, receive, send))
+
+        start = next(
+            message for message in messages if message["type"] == "http.response.start"
+        )
+        chunks = [
+            message.get("body", b"")
+            for message in messages
+            if message["type"] == "http.response.body"
+        ]
+        payload = json.loads(b"".join(chunks).decode("utf-8"))
+        return _AsgiJsonResponse(start["status"], payload)
 
     def test_status_reports_missing_raspi_configuration(self):
         with patch("app.usrp_ctl.get_drone_status", side_effect=RuntimeError("RASPI_HOST is required")):
-            response = self.client.get("/api/usrp/sampling/status")
+            response = self._request_json("GET", "/api/usrp/sampling/status")
 
         self.assertEqual(response.status_code, 503)
         body = response.json()
@@ -33,7 +85,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             "service_messages": ["active"],
         }
         with patch("app.usrp_ctl.get_drone_status", return_value=payload):
-            response = self.client.get("/api/usrp/sampling/status?mode=test")
+            response = self._request_json("GET", "/api/usrp/sampling/status?mode=test")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), payload)
@@ -50,7 +102,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             "service_messages": ["inactive"],
         }
         with patch("app.usrp_ctl.get_drone_status", return_value=payload) as status:
-            response = self.client.get("/api/usrp/sampling/status")
+            response = self._request_json("GET", "/api/usrp/sampling/status")
 
         self.assertEqual(response.status_code, 200)
         status.assert_called_once_with("test")
@@ -58,7 +110,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
 
     def test_status_rejects_invalid_mode_before_ssh(self):
         with patch("app.usrp_ctl.get_drone_status") as status:
-            response = self.client.get("/api/usrp/sampling/status?mode=bad")
+            response = self._request_json("GET", "/api/usrp/sampling/status?mode=bad")
 
         self.assertEqual(response.status_code, 422)
         status.assert_not_called()
@@ -75,7 +127,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             "service_messages": ["inactive"],
         }
         with patch("app.usrp_ctl.connect_raspi", return_value=payload):
-            response = self.client.post("/api/usrp/sampling/connect?mode=usrp")
+            response = self._request_json("POST", "/api/usrp/sampling/connect?mode=usrp")
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["deprecated"])
@@ -92,7 +144,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             "service_messages": [],
         }
         with patch("app.usrp_ctl.disconnect_raspi", return_value=payload):
-            response = self.client.post("/api/usrp/sampling/disconnect")
+            response = self._request_json("POST", "/api/usrp/sampling/disconnect")
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["deprecated"])
@@ -113,7 +165,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             ],
         }
         with patch("app.usrp_ctl.get_drone_messages", return_value=payload):
-            response = self.client.get("/api/usrp/sampling/messages?mode=test")
+            response = self._request_json("GET", "/api/usrp/sampling/messages?mode=test")
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["deprecated"])
@@ -130,7 +182,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             "service_messages": ["drone.service started"],
         }
         with patch("app.usrp_ctl.start_drone_service", return_value=payload):
-            response = self.client.post("/api/usrp/sampling/start?mode=usrp")
+            response = self._request_json("POST", "/api/usrp/sampling/start?mode=usrp")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), payload)
@@ -147,7 +199,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
             "service_messages": ["drone_test.service stopped"],
         }
         with patch("app.usrp_ctl.stop_drone_service", return_value=payload):
-            response = self.client.post("/api/usrp/sampling/stop?mode=test")
+            response = self._request_json("POST", "/api/usrp/sampling/stop?mode=test")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), payload)
@@ -156,7 +208,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
         secret = "super-secret-password"
         with patch.dict("os.environ", {"RASPI_PSW": secret}):
             with patch("app.usrp_ctl.start_drone_service", side_effect=RuntimeError(f"SSH failed for {secret}")):
-                response = self.client.post("/api/usrp/sampling/start")
+                response = self._request_json("POST", "/api/usrp/sampling/start")
 
         self.assertEqual(response.status_code, 503)
         body = response.json()
@@ -167,7 +219,7 @@ class UsrpSamplingControlApiTests(unittest.TestCase):
 
     def test_usrp_mode_failure_response_reports_selected_mode(self):
         with patch("app.usrp_ctl.start_drone_service", side_effect=RuntimeError("SSH timeout")):
-            response = self.client.post("/api/usrp/sampling/start?mode=usrp")
+            response = self._request_json("POST", "/api/usrp/sampling/start?mode=usrp")
 
         self.assertEqual(response.status_code, 503)
         body = response.json()

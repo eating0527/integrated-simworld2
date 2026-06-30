@@ -1,8 +1,10 @@
 import asyncio
 import hashlib
 import importlib.util
+from io import BytesIO
 import json
 import sys
+import threading
 import types
 import unittest
 import uuid
@@ -77,6 +79,52 @@ class FakeProcess:
         self.killed = True
 
 
+class OverlapDetectingStore:
+    def __init__(self, inner):
+        self._inner = inner
+        self._guard = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._first_save_entered = threading.Event()
+        self._release_first_save = threading.Event()
+        self._second_save_attempted = threading.Event()
+        self._armed = False
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def arm(self):
+        with self._guard:
+            self._armed = True
+            self._first_save_entered.clear()
+            self._release_first_save.clear()
+            self._second_save_attempted.clear()
+
+    def wait_for_first_save(self, timeout):
+        return self._first_save_entered.wait(timeout)
+
+    def wait_for_second_attempt(self, timeout):
+        return self._second_save_attempted.wait(timeout)
+
+    def release_first_save(self):
+        self._release_first_save.set()
+
+    def save(self, state):
+        with self._guard:
+            armed = self._armed
+        if not armed:
+            return self._inner.save(state)
+        if not self._write_lock.acquire(blocking=False):
+            self._second_save_attempted.set()
+            raise AssertionError("concurrent save detected")
+        try:
+            if not self._first_save_entered.is_set():
+                self._first_save_entered.set()
+                self._release_first_save.wait()
+            return self._inner.save(state)
+        finally:
+            self._write_lock.release()
+
+
 class IndependentUavTests(unittest.TestCase):
     def setUp(self):
         repo_root = Path(__file__).resolve().parents[2]
@@ -125,6 +173,34 @@ class IndependentUavTests(unittest.TestCase):
 
         with self.assertRaises(CaptureConflictError):
             coordinator.start_uav()
+
+    def test_status_marks_stale_stopping_uav_failed_after_backend_restart(self):
+        from app.capture_jobs import CaptureCoordinator
+
+        coordinator = self._coordinator()
+        state = coordinator.start_uav()
+        current = coordinator.store.load(state.mission_id)
+        current.uav.service = "stopping"
+        current.uav.file = "finalizing"
+        coordinator.store.save(current)
+
+        restarted = CaptureCoordinator(
+            coordinator.store,
+            repo_root=Path(__file__).resolve().parents[2],
+            run_command=self.run_command,
+            popen_factory=self.popen,
+        )
+
+        dashboard = restarted.status("test")
+
+        self.assertEqual(restarted._uav_processes, {})
+        self.assertEqual(dashboard.uav.mission_id, state.mission_id)
+        self.assertNotEqual(dashboard.uav.service, "stopping")
+        self.assertNotEqual(dashboard.uav.file, "finalizing")
+        self.assertEqual(dashboard.uav.service, "failed")
+        self.assertEqual(dashboard.uav.file, "failed")
+        self.assertIn("owned", dashboard.uav.error.lower())
+        self.assertIn("backend", dashboard.uav.error.lower())
 
 
 class Ap3CliTests(unittest.TestCase):
@@ -354,6 +430,28 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.uav.service, "failed")
         self.assertIn("process", dashboard.uav.error.lower())
 
+    def test_status_does_not_mark_stopping_uav_as_lost_process(self):
+        state = self.coordinator.start_bind("test")
+        self.backend.get_capture_job.return_value = {
+            "success": True,
+            "service_state": "running",
+            "mission_state": {
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+        current = self.coordinator.store.load(state.mission_id)
+        current.uav.service = "stopping"
+        current.uav.file = "finalizing"
+        self.coordinator.store.save(current)
+        self.process.terminate()
+
+        dashboard = self.coordinator.status("test")
+
+        self.assertEqual(dashboard.uav.service, "stopping")
+        self.assertEqual(dashboard.uav.file, "finalizing")
+        self.assertEqual(dashboard.uav.error, "")
+
     def test_status_surfaces_upload_pending_without_marking_completed(self):
         state = self.coordinator.start_usrp("usrp")
         self.backend.get_capture_job.return_value = {
@@ -407,6 +505,104 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(after_second.usrp.file, "uploaded")
         self.assertEqual(after_second.overall_state, "completed")
         self.assertEqual(self.backend.stop_capture_job.call_count, 2)
+
+    def test_stop_bind_does_not_block_noise_upload_ack_callback(self):
+        state = self.coordinator.start_bind("usrp")
+        callback_done = threading.Event()
+        callback_errors = []
+        callback_threads = []
+        noise_path = self.coordinator.store.root / state.mission_id / "noise.csv"
+
+        def ack_callback():
+            try:
+                self.coordinator.ack_noise_upload(
+                    state.mission_id,
+                    path=noise_path,
+                    size=12,
+                    sha256="deadbeef",
+                )
+            except Exception as exc:
+                callback_errors.append(exc)
+            finally:
+                callback_done.set()
+
+        def stop_side_effect(mode, mission_id):
+            callback_thread = threading.Thread(target=ack_callback, daemon=True)
+            callback_threads.append(callback_thread)
+            callback_thread.start()
+            if not callback_done.wait(timeout=0.2):
+                callback_errors.append(
+                    AssertionError("ack callback blocked by capture lock")
+                )
+            return {
+                "success": True,
+                "service_state": "stopped",
+                "mission_state": {
+                    "state": "stopped",
+                    "upload_state": "uploaded",
+                },
+            }
+
+        self.backend.stop_capture_job.side_effect = stop_side_effect
+
+        stopped = self.coordinator.stop_bind(state.mission_id)
+
+        for callback_thread in callback_threads:
+            callback_thread.join(timeout=1)
+
+        self.assertEqual(callback_errors, [])
+        self.assertTrue(callback_done.is_set())
+        self.assertEqual(stopped.usrp.file, "uploaded")
+        self.assertEqual(stopped.overall_state, "completed")
+
+    def test_stop_bind_and_status_do_not_write_capture_state_concurrently(self):
+        store = OverlapDetectingStore(self.coordinator.store)
+        self.coordinator.store = store
+        state = self.coordinator.start_bind("test")
+        self.backend.get_capture_job.return_value = {
+            "success": True,
+            "service_state": "running",
+            "mission_state": {
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+        store.arm()
+        errors = []
+        status_started = threading.Event()
+
+        def run_stop():
+            try:
+                self.coordinator.stop_bind(state.mission_id)
+            except Exception as exc:
+                errors.append(exc)
+
+        def run_status():
+            try:
+                status_started.set()
+                self.coordinator.status("test")
+            except Exception as exc:
+                errors.append(exc)
+
+        stop_thread = threading.Thread(target=run_stop)
+        stop_thread.start()
+        self.assertTrue(store.wait_for_first_save(timeout=1))
+
+        status_thread = threading.Thread(target=run_status)
+        status_thread.start()
+        try:
+            self.assertTrue(status_started.wait(timeout=1))
+            second_attempt_observed = store.wait_for_second_attempt(timeout=1)
+            self.assertTrue(second_attempt_observed or status_thread.is_alive())
+        finally:
+            store.release_first_save()
+            stop_thread.join(timeout=1)
+            status_thread.join(timeout=1)
+
+        self.assertFalse(stop_thread.is_alive())
+        self.assertFalse(status_thread.is_alive())
+
+        self.assertEqual(errors, [])
 
 
 class CaptureApiTests(unittest.TestCase):
@@ -570,12 +766,10 @@ class CaptureApiTests(unittest.TestCase):
 
 class NoiseUploadTests(unittest.TestCase):
     def setUp(self):
-        from fastapi.testclient import TestClient
         from app import main
         from app.capture_jobs import CaptureCoordinator, CaptureStore
 
         self.main = main
-        self.client = TestClient(main.app)
         self.repo_root = Path(__file__).resolve().parents[2]
         self.root = self.repo_root / ".test_tmp" / uuid.uuid4().hex
         self.root.mkdir(parents=True)
@@ -595,22 +789,38 @@ class NoiseUploadTests(unittest.TestCase):
         self.state.usrp.file = "upload_pending"
         self.coordinator.store.save(self.state)
 
+    def _upload_noise(
+        self,
+        payload: bytes,
+        noise_size: int,
+        noise_sha256: str,
+    ) -> tuple[int, dict]:
+        from fastapi import UploadFile
+
+        response = asyncio.run(
+            self.main.usrp_upload_noise_csv_post(
+                mission_id="noise_upload",
+                noise_size=noise_size,
+                noise_sha256=noise_sha256,
+                noise_file=UploadFile(BytesIO(payload), filename="noise.csv"),
+            )
+        )
+        if isinstance(response, dict):
+            return 200, response
+        return response.status_code, json.loads(response.body.decode("utf-8"))
+
     def test_noise_upload_rejects_mismatched_size_and_hash(self):
         payload = b"time_stamp,noise_floor_db\n"
 
         with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
             with patch.object(self.main, "capture_coordinator", self.coordinator):
-                response = self.client.post(
-                    "/api/usrp/upload-noise-csv",
-                    data={
-                        "mission_id": "noise_upload",
-                        "noise_size": "1",
-                        "noise_sha256": "bad",
-                    },
-                    files={"noise_file": ("noise.csv", payload, "text/csv")},
+                status_code, response = self._upload_noise(
+                    payload,
+                    noise_size=1,
+                    noise_sha256="bad",
                 )
 
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(status_code, 422)
         self.assertEqual(
             self.coordinator.store.load("noise_upload").usrp.file,
             "upload_pending",
@@ -621,18 +831,14 @@ class NoiseUploadTests(unittest.TestCase):
 
         with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
             with patch.object(self.main, "capture_coordinator", self.coordinator):
-                response = self.client.post(
-                    "/api/usrp/upload-noise-csv",
-                    data={
-                        "mission_id": "noise_upload",
-                        "noise_size": str(len(payload)),
-                        "noise_sha256": hashlib.sha256(payload).hexdigest(),
-                    },
-                    files={"noise_file": ("noise.csv", payload, "text/csv")},
+                status_code, response = self._upload_noise(
+                    payload,
+                    noise_size=len(payload),
+                    noise_sha256=hashlib.sha256(payload).hexdigest(),
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["capture"]["usrp"]["file"], "uploaded")
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response["capture"]["usrp"]["file"], "uploaded")
         self.assertEqual(
             (self.root / "noise_upload" / "noise.csv").read_bytes(),
             payload,
