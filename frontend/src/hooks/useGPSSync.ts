@@ -41,29 +41,6 @@ export interface PhotoDeleteEvent {
   timestamp: string;
 }
 
-export interface USRPSpectrumEvent {
-  type: 'usrp-spectrum';
-  deviceId: string;
-  deviceName: string;
-  deviceType: 'mobile' | 'desktop' | 'uav' | 'unknown' | string;
-  timestamp: number;
-  lat?: number | null;
-  lon?: number | null;
-  alt?: number | null;
-  accuracy?: number | null;
-  center_freq_hz: number;
-  sample_rate_hz: number;
-  gain_db: number;
-  bandwidth_hz?: number;
-  channel: number;
-  sample_count: number;
-  capture_seconds: number;
-  mean_power_dbfs: number;
-  peak_power_dbfs: number;
-  rms_dbfs: number;
-  max_iq_abs: number;
-}
-
 export interface GPSSyncResult {
   myDeviceId: string;
   deviceName: string;
@@ -73,7 +50,6 @@ export interface GPSSyncResult {
   sendClearPath: () => void;
   photoEvent: PhotoEvent | null;
   photoDeleteEvent: PhotoDeleteEvent | null;
-  usrpSpectrumByDevice: Map<string, USRPSpectrumEvent>;
   connectionStatus: 'connecting' | 'connected' | 'disconnected' | 'failed';
 }
 
@@ -122,7 +98,6 @@ export function useGPSSync(
   const [clearPathTrigger, setClearPathTrigger] = useState(0);
   const [photoEvent, setPhotoEvent] = useState<PhotoEvent | null>(null);
   const [photoDeleteEvent, setPhotoDeleteEvent] = useState<PhotoDeleteEvent | null>(null);
-  const [usrpSpectrumByDevice, setUsrpSpectrumByDevice] = useState<Map<string, USRPSpectrumEvent>>(new Map());
 
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   const registeredRef = useRef(false);
@@ -160,11 +135,6 @@ export function useGPSSync(
           next.delete(msg.deviceId);
           return next;
         });
-        setUsrpSpectrumByDevice(prev => {
-          const next = new Map(prev);
-          next.delete(msg.deviceId);
-          return next;
-        });
         return;
       }
 
@@ -186,15 +156,6 @@ export function useGPSSync(
         return;
       }
 
-      if (type === 'usrp-spectrum') {
-        const eventPayload = msg as USRPSpectrumEvent;
-        setUsrpSpectrumByDevice(prev => {
-          const next = new Map(prev);
-          next.set(eventPayload.deviceId, eventPayload);
-          return next;
-        });
-        return;
-      }
     } catch (_) {
       // ignore parse errors
     }
@@ -300,7 +261,6 @@ export function useGPSSync(
     sendClearPath,
     photoEvent,
     photoDeleteEvent,
-    usrpSpectrumByDevice,
     connectionStatus,
   };
 }

@@ -70,7 +70,7 @@ describe('USRPTelemetry capture controls', () => {
   });
 
   it('defaults Bind off and exposes independent UAV and USRP controls', async () => {
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     expect(await screen.findByText('無人機 GPS 採樣')).toBeInTheDocument();
     expect(screen.getByText('USRP 干擾採樣')).toBeInTheDocument();
@@ -97,7 +97,7 @@ describe('USRPTelemetry capture controls', () => {
       }));
     });
     const user = userEvent.setup();
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     await user.click(await screen.findByRole('button', { name: 'USRP mode' }));
     await user.click(screen.getByRole('button', { name: 'Start USRP' }));
@@ -113,7 +113,7 @@ describe('USRPTelemetry capture controls', () => {
 
   it('uses a shared Bind start only when both services are ready', async () => {
     const user = userEvent.setup();
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
     await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
@@ -133,7 +133,7 @@ describe('USRPTelemetry capture controls', () => {
       usrp: { service: 'running', file: 'recording' },
     })));
 
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
@@ -151,7 +151,7 @@ describe('USRPTelemetry capture controls', () => {
       },
     })));
 
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     expect(await screen.findByText('Presumed running')).toBeInTheDocument();
     expect(screen.getByText('Pending upload')).toBeInTheDocument();
@@ -167,7 +167,7 @@ describe('USRPTelemetry capture controls', () => {
       usrp: { service: 'running', file: 'recording' },
     })));
 
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     expect(await screen.findByRole('switch', { name: 'Bind services' }))
       .toHaveAttribute('aria-checked', 'true');
@@ -186,7 +186,7 @@ describe('USRPTelemetry capture controls', () => {
     status.usrp.mission_id = 'noise_job';
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
     const user = userEvent.setup();
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     await user.click(await screen.findByRole('button', { name: 'Stop UAV' }));
     await user.click(screen.getByRole('button', { name: 'Stop USRP' }));
@@ -209,7 +209,7 @@ describe('USRPTelemetry capture controls', () => {
       return jsonResponse(captureStatus());
     });
     const user = userEvent.setup();
-    render(<USRPTelemetry event={null} />);
+    render(<USRPTelemetry />);
 
     await user.click(await screen.findByRole('button', { name: 'Start USRP' }));
 

@@ -281,23 +281,23 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | Con
 
 ## Raspberry Pi USRP 採樣控制
 
-### Frontend capture jobs
+### 前端採樣流程
 
-The Capture Control panel now owns GPS/Noise recording:
+現在由 Capture Control 面板統一管理 GPS / Noise 採樣：
 
-- **Bind OFF (default):** UAV/AP3 GPS and Raspberry Pi USRP can start and stop independently.
-- **Bind ON:** both connections must be ready before one shared mission starts.
-- Test/USRP mode only changes the Raspberry Pi unit (`drone_test.service` or `drone.service`).
-- UAV and USRP show separate connection, service, and file states.
-- An SSH outage reports USRP as `Offline / Presumed running`; it does not stop the remote unit.
-- USRP Stop is complete only after `noise.csv` is finalized, uploaded, and verified.
-- Failed uploads remain `Pending upload`; the Raspberry Pi keeps the CSV for retry.
+- **Bind OFF（預設）**：UAV/AP3 GPS 與 Raspberry Pi USRP 可各自獨立開始、停止。
+- **Bind ON**：兩邊連線都必須 ready，才會用同一個 mission 一起啟動。
+- Test / USRP mode 只會切換 Raspberry Pi 上要啟動的 unit（`drone_test.service` 或 `drone.service`）。
+- UAV 與 USRP 會各自顯示 connection、service、file 狀態。
+- 如果 SSH 中斷，USRP 會顯示 `Offline / Presumed running`，不會直接把遠端 unit 視為已停止。
+- USRP 的停止流程必須等 `noise.csv` finalize、upload、verify 完成才算真正結束。
+- 如果 upload 失敗，狀態會停在 `Pending upload`，樹莓派上的 CSV 會保留，之後可重試。
 
-Bind missions share one `mission_id`, while independent runs create separate missions.
-`gps.csv` is written locally from the AP3 USB connection and `noise.csv` is uploaded
-from the Raspberry Pi into `incoming/<mission_id>/`.
+Bind 任務會共用同一個 `mission_id`；獨立執行時則各自建立 mission。
+`gps.csv` 由 AP3 USB 連線在本機寫入，`noise.csv` 由 Raspberry Pi 上傳到
+`incoming/<mission_id>/`。
 
-Required backend environment:
+後端必要環境變數：
 
 ```dotenv
 RASPI_HOST=<raspi-ip>
@@ -307,7 +307,7 @@ RASPI_PORT=22
 USRP_UPLOAD_API_URL=http://<laptop-ip>:8888/api/usrp/upload-noise-csv
 ```
 
-Install the updated Raspberry Pi files:
+更新樹莓派上的檔案：
 
 ```bash
 sudo cp tools/pi_radio_stack.sh /home/user/pi_radio_stack.sh
@@ -316,24 +316,19 @@ sudo cp tools/pi_radio_stack.test.service.example /etc/systemd/system/drone_test
 sudo systemctl daemon-reload
 ```
 
-Mission-aware systemd contract:
+Mission-aware 的 systemd 合約如下：
 
-- Copy `tools/pi_radio_stack.sh` to `/home/user/pi_radio_stack.sh`.
-- Install `tools/pi_radio_stack.service.example` as `/etc/systemd/system/drone.service`.
-- Install `tools/pi_radio_stack.test.service.example` as `/etc/systemd/system/drone_test.service`.
-- Run `sudo systemctl daemon-reload` after updating either unit.
-- Do **not** enable either unit at boot. The backend starts one unit per mission.
-- Frontend `TEST` maps to `drone_test.service`; `USRP` maps to `drone.service`.
-- TX and jammer stay off by default. Only set `START_TX=1` and/or `START_JAMMER=1`
-  when that mission should launch them.
-- Before each mission the backend writes `/run/simworld/usrp.env` for the selected unit.
-- The Raspberry Pi stores the mission noise file at
-  `/var/lib/simworld/capture/<mission_id>/noise.csv`.
-- If upload fails, mission state stays `upload_pending`, the CSV is not deleted,
-  and the same file can be retried later.
+- 將 `tools/pi_radio_stack.sh` 複製到 `/home/user/pi_radio_stack.sh`。
+- 將 `tools/pi_radio_stack.service.example` 安裝成 `/etc/systemd/system/drone.service`。
+- 將 `tools/pi_radio_stack.test.service.example` 安裝成 `/etc/systemd/system/drone_test.service`。
+- 任一 unit 更新後都要執行 `sudo systemctl daemon-reload`。
+- **不要** 把這兩個 unit 設成開機自動啟動；由 backend 在每次 mission 啟動時控制。
+- 前端 `TEST` 對應 `drone_test.service`；`USRP` 對應 `drone.service`。
+- TX 與 jammer 預設關閉，只有在該 mission 明確設定 `START_TX=1` 和 / 或 `START_JAMMER=1` 時才會啟動。
+- backend 會在每次 mission 開始前，為被選到的 unit 寫入 `/run/simworld/usrp.env`。
+- 樹莓派會將 mission 的 `noise.csv` 保存在 `/var/lib/simworld/capture/<mission_id>/noise.csv`。
+- 如果 upload 失敗，mission state 會維持 `upload_pending`，CSV 不會被刪除，後續可以重試同一份檔案。
 
-`start.ps1` no longer starts `gps.csv` recording automatically. Use `-GpsCsv`
-only for the legacy startup-owned writer:
 
 ```powershell
 .\start.ps1 -GpsCsv
@@ -378,181 +373,3 @@ incoming/<mission-id>/noise.csv
 ```
 
 5. 將 mission id、service 訊息、CSV 路徑與 replay / simulation 結果一起保存為該次採樣紀錄。
-
-## USRP B210 bridge
-
-Use `tools/usrp_to_simulator.py` to capture short B210 snapshots and forward summary RF metrics into the existing simulator WebSocket.
-
-Install the Python dependency once:
-
-```powershell
-cd backend
-.\.venv\Scripts\python -m pip install -r requirements.txt
-cd ..
-```
-
-Run a local test against the backend WebSocket:
-
-```powershell
-backend\.venv\Scripts\python.exe .\tools\usrp_to_simulator.py `
-  --websocket-url ws://127.0.0.1:8888/ws/gps `
-  --device-id align-m4p-top-aircraft `
-  --device-name "M4P TOP + B210" `
-  --center-freq 2450000000 `
-  --sample-rate 1000000 `
-  --gain 20 `
-  --lat 24.784727 `
-  --lon 121.000433 `
-  --alt 120
-```
-
-The bridge sends two messages per capture cycle:
-
-- a normal GPS update so the simulator can place the sensor in the scene
-- a `usrp-spectrum` event with `mean_power_dbfs`, `peak_power_dbfs`, frequency, rate, and sample count
-
-## GNU Radio auto-upload
-
-Use `tools/gnuradio_to_simulator.py` when your GNU Radio flowgraph finishes a capture and you want to push the result into the backend automatically.
-
-Direct CLI example:
-
-```powershell
-backend\.venv\Scripts\python.exe .\tools\gnuradio_to_simulator.py `
-  --scene NTPU `
-  --device-id usrp-b210-1 `
-  --device-name "USRP B210 Sensor" `
-  --lat 24.9438 `
-  --lon 121.3687 `
-  --alt 30 `
-  --center-freq-hz 2450000000 `
-  --sample-rate-hz 1000000 `
-  --sample-count 200000 `
-  --mean-power-dbfs -42.1 `
-  --peak-power-dbfs -18.3
-```
-
-If you also want the backend to generate a map immediately after upload:
-
-```powershell
-backend\.venv\Scripts\python.exe .\tools\gnuradio_to_simulator.py `
-  --scene NTPU `
-  --lat 24.9438 `
-  --lon 121.3687 `
-  --alt 30 `
-  --mean-power-dbfs -42.1 `
-  --peak-power-dbfs -18.3 `
-  --auto-simulate `
-  --map-type iss `
-  --devices-file .\tools\simulator_devices.example.json
-```
-
-The measurement API endpoint is:
-
-```text
-POST /api/usrp/measurement
-```
-
-It accepts either:
-
-- `lat/lon/alt` plus `scene`, and the backend converts to simulator coordinates
-- direct `x/y/z` if your GNU Radio side already knows simulator coordinates
-
-For GNU Radio Python blocks, you can import the helper in `tools/gnuradio_callback_example.py` and call `upload_measurement(...)` after a capture completes.
-
-If your flowgraph already writes a JSON payload, you can upload it directly:
-
-```powershell
-Get-Content .\measurement.json | backend\.venv\Scripts\python.exe .\tools\gnuradio_to_simulator.py --stdin-json
-```
-
-If your returned files are CSV like `backend/app/sample/gps.csv` and `backend/app/sample/noise.csv`, you can replay them into the simulator:
-
-```powershell
-backend\.venv\Scripts\python.exe .\tools\replay_csv_to_simulator.py `
-  --scene NTPU `
-  --gps-csv .\backend\app\sample\gps.csv `
-  --noise-csv .\backend\app\sample\noise.csv `
-  --replay-delay 0.2
-```
-
-To generate a map automatically after the last CSV point is uploaded:
-
-```powershell
-backend\.venv\Scripts\python.exe .\tools\replay_csv_to_simulator.py `
-  --scene NTPU `
-  --gps-csv .\backend\app\sample\gps.csv `
-  --noise-csv .\backend\app\sample\noise.csv `
-  --devices-file .\tools\simulator_devices.example.json `
-  --auto-simulate-last `
-  --map-type iss
-```
-
-## Network CSV upload from Raspberry Pi
-
-If the Raspberry Pi should send completed CSV bundles to the laptop over the network, start the laptop with CSV watch enabled:
-
-```powershell
-.\start.ps1 -NoTunnel -NoAP3 -CsvWatch `
-  -CsvDevicesFile .\tools\simulator_devices.example.json `
-  -CsvMapType iss
-```
-
-The laptop backend also exposes:
-
-```text
-POST /api/usrp/upload-csv-bundle
-```
-
-Use `tools/upload_csv_bundle.py` on the Raspberry Pi to send `gps.csv` and `noise.csv` directly to the laptop:
-
-```bash
-python tools/upload_csv_bundle.py \
-  --api-url http://<laptop-ip>:8888/api/usrp/upload-csv-bundle \
-  --scene NTPU \
-  --mission-id flight_001 \
-  --gps-csv /path/to/gps.csv \
-  --noise-csv /path/to/noise.csv \
-  --auto-simulate-last
-```
-
-The backend stores the uploaded bundle under `incoming/<mission-id>/`, writes `bundle.json`, and the CSV watch worker automatically replays it into `/api/usrp/measurement`.
-
-## Split GPS / Noise workflow
-
-If the laptop is connected to AP3 and should write `gps.csv`, while the Raspberry Pi only uploads `noise.csv`, use the split mission flow:
-
-1. Laptop starts CSV watch:
-
-```powershell
-.\start.ps1 -NoTunnel -NoAP3 -CsvWatch `
-  -CsvDevicesFile .\tools\simulator_devices.example.json `
-  -CsvMapType iss
-```
-
-2. Laptop writes AP3 GPS into `incoming/<mission-id>/gps.csv`:
-
-```powershell
-backend\.venv\Scripts\python.exe .\tools\ap3_to_gps_csv.py `
-  --mission-id flight_001
-```
-
-3. Raspberry Pi uploads only `noise.csv` with the same `mission-id`:
-
-```bash
-python upload_noise_csv.py \
-  --api-url http://<laptop-ip>:8888/api/usrp/upload-noise-csv \
-  --scene NTPU \
-  --mission-id flight_001 \
-  --noise-csv /path/to/noise.csv \
-  --auto-simulate-last
-```
-
-The watcher waits until both of these files exist:
-
-```text
-incoming/flight_001/gps.csv
-incoming/flight_001/noise.csv
-```
-
-Only then will it replay the mission automatically.

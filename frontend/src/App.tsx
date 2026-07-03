@@ -212,7 +212,6 @@ export function App() {
     sendClearPath,
     photoEvent,
     photoDeleteEvent,
-    usrpSpectrumByDevice,
     connectionStatus,
   } = useGPSSync(localGPS);
 
@@ -225,16 +224,6 @@ export function App() {
       null
     );
   }, [allDevices]);
-  const selectedUsrpSpectrum = useMemo(() => {
-    if (selectedDeviceId) {
-      return usrpSpectrumByDevice.get(selectedDeviceId) ?? null;
-    }
-    if (aircraftEntry?.[0]) {
-      return usrpSpectrumByDevice.get(aircraftEntry[0]) ?? null;
-    }
-    return usrpSpectrumByDevice.values().next().value ?? null;
-  }, [aircraftEntry, selectedDeviceId, usrpSpectrumByDevice]);
-
   // 當第一個裝置上線時自動選取
   useEffect(() => {
     if (selectedDeviceId && allDevices.has(selectedDeviceId)) return;
@@ -461,7 +450,7 @@ export function App() {
         }}
       />
       {!isMobile && (
-        <USRPTelemetry event={selectedUsrpSpectrum} />
+        <USRPTelemetry />
       )}
 
       <GPSStatus

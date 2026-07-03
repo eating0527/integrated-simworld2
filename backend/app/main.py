@@ -83,9 +83,6 @@ OVERPASS_ENDPOINTS = [
     "https://z.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
-SCENE_SCALE = float(os.environ.get("VITE_SCENE_SCALE", "1") or "1")
-SIMULATION_ALT_GAIN = float(os.environ.get("SIMULATION_ALT_GAIN", "2.14") or "2.14")
-
 # ──────────────────────────────────────────────
 # FastAPI App
 # ──────────────────────────────────────────────
@@ -1462,42 +1459,6 @@ class SINRMapRequest(BaseSionnaRequest):
     samples_per_tx: int = Field(default=100000000)
 
 
-class USRPMeasurementRequest(BaseModel):
-    scene: Optional[str] = Field(default=None)
-    device_id: str = Field(default="usrp-b210-sensor")
-    device_name: str = Field(default="USRP B210 Sensor")
-    device_type: str = Field(default="uav")
-    role: Literal["rx", "tx", "jammer"] = Field(default="rx")
-    lat: Optional[float] = Field(default=None)
-    lon: Optional[float] = Field(default=None)
-    alt: float = Field(default=0.0)
-    accuracy: float = Field(default=1.0)
-    x: Optional[float] = Field(default=None)
-    y: Optional[float] = Field(default=None)
-    z: Optional[float] = Field(default=None)
-    timestamp: Optional[float] = Field(default=None)
-    center_freq_hz: Optional[float] = Field(default=None)
-    sample_rate_hz: Optional[float] = Field(default=None)
-    gain_db: Optional[float] = Field(default=None)
-    bandwidth_hz: Optional[float] = Field(default=None)
-    channel: Optional[int] = Field(default=None)
-    sample_count: Optional[int] = Field(default=None)
-    capture_seconds: Optional[float] = Field(default=None)
-    mean_power_dbfs: Optional[float] = Field(default=None)
-    peak_power_dbfs: Optional[float] = Field(default=None)
-    rms_dbfs: Optional[float] = Field(default=None)
-    max_iq_abs: Optional[float] = Field(default=None)
-    derived_power_dbm: Optional[float] = Field(default=None)
-    auto_simulate: bool = Field(default=False)
-    map_type: Literal["sinr", "iss", "tss", "cfar"] = Field(default="iss")
-    cell_size: float = Field(default=4.0, gt=0)
-    samples_per_tx: int = Field(default=100000000, ge=10000)
-    sinr_vmin: float = Field(default=-20.0)
-    sinr_vmax: float = Field(default=40.0)
-    overlay_scene: bool = Field(default=False)
-    devices: List[DeviceIn] = Field(default_factory=list)
-
-
 class CaptureStartRequest(BaseModel):
     usrp_mode: Literal["test", "usrp"] = "test"
     scene: str = "NTPU"
@@ -1518,28 +1479,6 @@ def _device_power_dbm(device: DeviceIn) -> Optional[float]:
     if device.power_dbm is not None:
         return device.power_dbm
     return DEFAULT_POWER_DBM_BY_ROLE.get(device.role)
-
-
-def _read_scene_origin_from_env(scene_name: str, fallback: dict[str, float]) -> dict[str, float]:
-    prefix = scene_name.upper()
-    lat = os.environ.get(f"VITE_{prefix}_ORIGIN_LAT") or os.environ.get("VITE_ORIGIN_LAT")
-    lon = os.environ.get(f"VITE_{prefix}_ORIGIN_LON") or os.environ.get("VITE_ORIGIN_LON")
-    alt = os.environ.get(f"VITE_{prefix}_ORIGIN_ALT") or os.environ.get("VITE_ORIGIN_ALT")
-
-    def _coerce(raw: Optional[str], default: float) -> float:
-        if raw in (None, ""):
-            return default
-        try:
-            value = float(raw)
-        except ValueError:
-            return default
-        return value if math.isfinite(value) else default
-
-    return {
-        "lat": _coerce(lat, fallback["lat"]),
-        "lon": _coerce(lon, fallback["lon"]),
-        "alt": _coerce(alt, fallback["alt"]),
-    }
 
 
 @app.get("/api/iss-unet/status")
@@ -1918,67 +1857,6 @@ async def capture_bind_stop_post(mission_id: str = Query(...)):
         _capture_error(exc)
 
 
-@app.post("/api/usrp/upload-csv-bundle")
-async def usrp_upload_csv_bundle_post(
-    scene: str = Form("NTPU"),
-    mission_id: str = Form(""),
-    map_type: Literal["sinr", "iss", "tss", "cfar"] = Form("iss"),
-    auto_simulate_last: bool = Form(True),
-    device_id: str = Form("usrp-b210-sensor"),
-    device_name: str = Form("USRP B210 Sensor"),
-    device_type: str = Form("uav"),
-    role: Literal["rx", "tx", "jammer"] = Form("rx"),
-    devices_json: str = Form(""),
-    gps_file: UploadFile = File(...),
-    noise_file: UploadFile | None = File(None),
-):
-    if not gps_file.filename:
-        return JSONResponse({"success": False, "error": "gps_file filename is required"}, status_code=422)
-
-    bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    bundle_dir = INCOMING_CSV_DIR / bundle_id
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-
-    gps_bytes = await gps_file.read()
-    noise_bytes = await noise_file.read() if noise_file is not None else None
-    (bundle_dir / "gps.csv").write_bytes(gps_bytes)
-    if noise_bytes is not None:
-        (bundle_dir / "noise.csv").write_bytes(noise_bytes)
-
-    metadata: dict[str, Any] = {
-        "scene": scene,
-        "mission_id": bundle_id,
-        "map_type": map_type,
-        "auto_simulate_last": auto_simulate_last,
-        "device_id": device_id,
-        "device_name": device_name,
-        "device_type": device_type,
-        "role": role,
-        "received_at": datetime.now().isoformat(),
-        "gps_filename": gps_file.filename,
-        "noise_filename": noise_file.filename if noise_file is not None else None,
-    }
-    if devices_json.strip():
-        try:
-            metadata["devices"] = json.loads(devices_json)
-        except json.JSONDecodeError as exc:
-            return JSONResponse({"success": False, "error": f"devices_json is invalid JSON: {exc}"}, status_code=422)
-
-    (bundle_dir / "bundle.json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    logger.info("Stored uploaded CSV bundle: mission_id=%s scene=%s dir=%s", bundle_id, scene, bundle_dir)
-    return {
-        "success": True,
-        "mission_id": bundle_id,
-        "bundle_dir": str(bundle_dir),
-        "watch_dir": str(INCOMING_CSV_DIR),
-        "metadata": metadata,
-    }
-
-
 def _usrp_sampling_error_response(exc: Exception, mode: Literal["test", "usrp"] = "test") -> JSONResponse:
     message = str(exc)
     password = os.environ.get("RASPI_PSW", "")
@@ -2320,109 +2198,6 @@ def _resolve_sionna_scene_xml(scene: str) -> Path:
     return scene_xml
 
 
-def _resolve_scene_origin(scene: str) -> dict[str, float]:
-    scene_name = _resolve_scene_name(scene)
-    builtins = {
-        "NTPU": {"lat": 24.943476, "lon": 121.370054, "alt": 0.0},
-        "NYCU": {"lat": 24.967052, "lon": 121.536335, "alt": 0.0},
-    }
-    if scene_name in builtins:
-        return _read_scene_origin_from_env(scene_name, builtins[scene_name])
-
-    metadata_path = BASE_DIR / "static" / "scenes" / scene_name / "scene_metadata.json"
-    if metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            lat = metadata.get("lat")
-            lon = metadata.get("lon")
-            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-                alt = metadata.get("alt", 0.0)
-                return {
-                    "lat": float(lat),
-                    "lon": float(lon),
-                    "alt": float(alt) if isinstance(alt, (int, float)) else 0.0,
-                }
-        except Exception:
-            logger.exception("Failed to read scene origin from metadata: %s", metadata_path)
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Scene origin metadata not found for scene: {scene_name}",
-    )
-
-
-def _latlon_to_enu(
-    lat: float,
-    lon: float,
-    alt: float,
-    origin: dict[str, float],
-) -> tuple[float, float, float]:
-    radius = 6_378_137.0
-    d_lat = (lat - origin["lat"]) * (math.pi / 180.0)
-    d_lon = (lon - origin["lon"]) * (math.pi / 180.0)
-    x = d_lon * radius * math.cos(origin["lat"] * (math.pi / 180.0))
-    y = -d_lat * radius
-    z = alt - origin["alt"]
-    return x, y, z
-
-
-def _resolve_measurement_position(
-    req: USRPMeasurementRequest,
-) -> tuple[float, float, float, Optional[dict[str, float]]]:
-    if req.x is not None and req.y is not None and req.z is not None:
-        return req.x, req.y, req.z, None
-
-    if req.lat is None or req.lon is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Provide either x/y/z or lat/lon with scene",
-        )
-    if not req.scene:
-        raise HTTPException(
-            status_code=422,
-            detail="scene is required when converting lat/lon to simulator coordinates",
-        )
-
-    origin = _resolve_scene_origin(req.scene)
-    east, north, up = _latlon_to_enu(req.lat, req.lon, req.alt, origin)
-    x = east * SCENE_SCALE
-    z = north * SCENE_SCALE
-    y = max(up * SIMULATION_ALT_GAIN, 10.0)
-    return x, y, z, origin
-
-
-def _upsert_measurement_device(
-    devices: List[DeviceIn],
-    req: USRPMeasurementRequest,
-    x: float,
-    y: float,
-    z: float,
-) -> List[DeviceIn]:
-    next_devices = [DeviceIn.model_validate(device.model_dump()) for device in devices]
-    measurement_device = DeviceIn(
-        name=req.device_name,
-        role=req.role,
-        x=x,
-        y=y,
-        z=z,
-        power_dbm=req.derived_power_dbm,
-    )
-
-    replace_index = next(
-        (
-            index
-            for index, device in enumerate(next_devices)
-            if device.name == req.device_name or (req.role == "rx" and device.role == "rx")
-        ),
-        None,
-    )
-    if replace_index is None:
-        next_devices.append(measurement_device)
-    else:
-        next_devices[replace_index] = measurement_device
-    return next_devices
-
-
 def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
     rx_devices = [d for d in devices if d.role == "rx"]
     tx_devices = [d for d in devices if d.role == "tx"]
@@ -2591,148 +2366,6 @@ class SimulateRequest(BaseModel):
     overlay_scene: bool = Field(default=False)
     devices: List[DeviceIn]
 
-
-async def _run_auto_simulation(
-    req: USRPMeasurementRequest,
-    devices: List[DeviceIn],
-) -> dict[str, Any]:
-    if not req.scene:
-        raise HTTPException(status_code=422, detail="scene is required for auto_simulate")
-
-    if req.map_type == "sinr":
-        from app.sionna_service import generate_sinr_map
-
-        scene_xml = _resolve_sionna_scene_xml(req.scene)
-        tx_list, rx_config = _sionna_device_config(devices)
-        await generate_sinr_map(
-            tx_list=tx_list,
-            rx_config=rx_config,
-            scene_xml=str(scene_xml),
-            scene_name=str(scene_xml.parent.name),
-            sinr_vmin=req.sinr_vmin,
-            sinr_vmax=req.sinr_vmax,
-            cell_size=req.cell_size,
-            samples_per_tx=req.samples_per_tx,
-        )
-        return {
-            "scene": req.scene,
-            "map_type": req.map_type,
-            "device_count": len(devices),
-        }
-
-    scene_xml = _resolve_sionna_scene_xml(req.scene)
-    output_dir = str(BASE_DIR / "static" / "maps" / req.scene.lower())
-    os.makedirs(output_dir, exist_ok=True)
-    devices_dicts = []
-    for device in devices:
-        power_dbm = _device_power_dbm(device)
-        payload = {
-            "name": device.name,
-            "role": device.role,
-            "x": device.x,
-            "y": device.y,
-            "z": device.z,
-        }
-        if power_dbm is not None:
-            payload["power_dbm"] = power_dbm
-        devices_dicts.append(payload)
-
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
-        None,
-        _run_generate_maps,
-        str(scene_xml),
-        devices_dicts,
-        output_dir,
-        req.scene,
-        req.map_type,
-        req.cell_size,
-        req.samples_per_tx,
-        req.sinr_vmin,
-        req.sinr_vmax,
-        req.overlay_scene,
-    )
-    return {
-        "scene": req.scene,
-        "map_type": req.map_type,
-        "device_count": len(devices),
-        "output_dir": output_dir,
-    }
-
-
-@app.post("/api/usrp/measurement")
-async def usrp_measurement_post(req: USRPMeasurementRequest):
-    x, y, z, origin = _resolve_measurement_position(req)
-    timestamp = req.timestamp if req.timestamp is not None else time.time()
-    gps_broadcast = False
-
-    gps_manager.names[req.device_id] = req.device_name
-    if req.lat is not None and req.lon is not None:
-        gps_payload = {
-            "lat": req.lat,
-            "lon": req.lon,
-            "alt": req.alt,
-            "accuracy": req.accuracy,
-            "deviceId": req.device_id,
-            "deviceName": req.device_name,
-            "deviceType": req.device_type,
-            "timestamp": timestamp,
-        }
-        gps_manager.update_gps(req.device_id, gps_payload)
-        await gps_manager.broadcast(json.dumps(gps_payload))
-        gps_broadcast = True
-
-    spectrum_payload = {
-        "type": "usrp-spectrum",
-        "deviceId": req.device_id,
-        "deviceName": req.device_name,
-        "deviceType": req.device_type,
-        "role": req.role,
-        "timestamp": timestamp,
-        "scene": req.scene,
-        "lat": req.lat,
-        "lon": req.lon,
-        "alt": req.alt,
-        "accuracy": req.accuracy,
-        "x": x,
-        "y": y,
-        "z": z,
-        "center_freq_hz": req.center_freq_hz,
-        "sample_rate_hz": req.sample_rate_hz,
-        "gain_db": req.gain_db,
-        "bandwidth_hz": req.bandwidth_hz,
-        "channel": req.channel,
-        "sample_count": req.sample_count,
-        "capture_seconds": req.capture_seconds,
-        "mean_power_dbfs": req.mean_power_dbfs,
-        "peak_power_dbfs": req.peak_power_dbfs,
-        "rms_dbfs": req.rms_dbfs,
-        "max_iq_abs": req.max_iq_abs,
-        "derived_power_dbm": req.derived_power_dbm,
-    }
-    await gps_manager.broadcast(json.dumps(spectrum_payload))
-
-    simulation = None
-    if req.auto_simulate:
-        devices = _upsert_measurement_device(req.devices, req, x, y, z)
-        simulation = await _run_auto_simulation(req, devices)
-
-    return {
-        "success": True,
-        "device": {
-            "device_id": req.device_id,
-            "device_name": req.device_name,
-            "device_type": req.device_type,
-            "role": req.role,
-            "x": x,
-            "y": y,
-            "z": z,
-        },
-        "gps_broadcast": gps_broadcast,
-        "origin": origin,
-        "auto_simulated": simulation is not None,
-        "simulation": simulation,
-    }
 
 @app.post("/api/simulate")
 async def simulate(req: SimulateRequest):

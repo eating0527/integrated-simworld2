@@ -1,0 +1,28 @@
+{
+  "mission_id": "mission_20260703_145913_ecc7fe",
+  "target": "usrp",
+  "bind": false,
+  "selected_usrp_mode": "test",
+  "overall_state": "finalizing",
+  "created_at": "2026-07-03T06:59:13.103558+00:00",
+  "started_at": "2026-07-03T06:59:13.106554+00:00",
+  "finished_at": null,
+  "uav": {
+    "mission_id": "",
+    "connection": "unknown",
+    "service": "idle",
+    "file": "none",
+    "error": "",
+    "path": "",
+    "pid": null
+  },
+  "usrp": {
+    "mission_id": "mission_20260703_145913_ecc7fe",
+    "connection": "ready",
+    "service": "stopped",
+    "file": "upload_pending",
+    "error": "",
+    "path": "",
+    "pid": null
+  }
+}

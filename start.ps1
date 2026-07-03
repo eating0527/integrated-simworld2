@@ -10,29 +10,10 @@ param(
     [switch]$NoAP3,
     [switch]$NoGpsCsv,
     [switch]$Reload,
-    [switch]$CsvWatch,
     [switch]$GpsCsv,
-    [string]$CsvWatchPath = "",
-    [string]$CsvWatchScene = "NTPU",
-    [string]$CsvDevicesFile = "",
-    [string]$CsvMapType = "iss",
     [string]$GpsMissionId = "",
     [string]$GpsAltitude = "relative",
-    [string]$GpsMavlinkUrl = "",
-    [switch]$UsrpAutoStart,
-    [string]$UsrpPiHost = "",
-    [string]$UsrpPiUser = "user",
-    [int]$UsrpPiPort = 22,
-    [string]$UsrpSshKey = "",
-    [string]$UsrpUploadApiUrl = "",
-    [string]$UsrpScene = "",
-    [string]$UsrpRemoteWorkDir = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect",
-    [string]$UsrpRemoteStackScript = "/home/user/pi_radio_stack.sh",
-    [string]$UsrpRemoteNoiseCsv = "/home/user/digitaltwin-modulation/USRP_transmit/noise_detect/noise.csv",
-    [string]$UsrpRemoteUploaderScript = "/home/user/watch_and_upload_noise.py",
-    [string]$UsrpRemoteUploadHelper = "/home/user/upload_noise_csv.py",
-    [string]$UsrpRemotePython = "/usr/bin/python3",
-    [string]$UsrpDevicesFile = ""
+    [string]$GpsMavlinkUrl = ""
 )
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -41,7 +22,7 @@ $FrontendDir = Join-Path $ScriptDir "frontend"
 $LogDir      = Join-Path $ScriptDir ".logs"
 $EnvFile     = Join-Path $ScriptDir ".env"
 $ToolsDir    = Join-Path $ScriptDir "tools"
-$IncomingDir = if ($CsvWatchPath) { $CsvWatchPath } else { Join-Path $ScriptDir "incoming" }
+$IncomingDir = Join-Path $ScriptDir "incoming"
 $MissionStateDir = Join-Path $ScriptDir ".logs"
 $CurrentMissionFile = Join-Path $MissionStateDir "current_mission_id.txt"
 
@@ -87,86 +68,6 @@ function Initialize-GpsCsvTarget {
         Set-Content -Path $gpsCsvPath -Value "time_stamp,lat,lon,alt" -Encoding ASCII
     }
     return $gpsCsvPath
-}
-
-function Resolve-LaptopIPv4 {
-    $candidates = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.IPAddress -notlike "127.*" -and
-            $_.IPAddress -notlike "169.254.*" -and
-            $_.PrefixOrigin -ne "WellKnown"
-        } |
-        Sort-Object -Property InterfaceMetric
-    return ($candidates | Select-Object -First 1 -ExpandProperty IPAddress)
-}
-
-function ConvertTo-BashDoubleQuoted {
-    param([string]$Value)
-    $escaped = $Value.Replace('\', '\\').Replace('"', '\"').Replace('$', '\$').Replace('`', '\`')
-    return [string][char]34 + $escaped + [char]34
-}
-
-function Start-UsrpRemoteMission {
-    param(
-        [string]$SshExe,
-        [string]$Host,
-        [string]$User,
-        [int]$Port,
-        [string]$SshKeyPath,
-        [string]$MissionId,
-        [string]$Scene,
-        [string]$MapType,
-        [string]$ApiUrl,
-        [string]$RemoteWorkDir,
-        [string]$RemoteStackScript,
-        [string]$RemoteNoiseCsv,
-        [string]$RemoteUploaderScript,
-        [string]$RemoteUploadHelper,
-        [string]$RemotePython,
-        [string]$DevicesFile,
-        [string]$LogPath
-    )
-
-    $watcherArgs = @(
-        "--noise-csv", $RemoteNoiseCsv,
-        "--uploader-script", $RemoteUploadHelper,
-        "--api-url", $ApiUrl,
-        "--scene", $Scene,
-        "--mission-id", $MissionId,
-        "--map-type", $MapType,
-        "--auto-simulate-last"
-    )
-    if ($DevicesFile) {
-        $watcherArgs += @("--devices-file", $DevicesFile)
-    }
-
-    $watcherArgString = ($watcherArgs | ForEach-Object { ConvertTo-BashDoubleQuoted $_ }) -join " "
-    $remoteEnv = @(
-        "WORKDIR=" + (ConvertTo-BashDoubleQuoted $RemoteWorkDir),
-        "NOISE_CSV=" + (ConvertTo-BashDoubleQuoted $RemoteNoiseCsv),
-        "START_NOISE_LOGGER=1",
-        "START_NOISE_UPLOADER=1",
-        "NOISE_UPLOADER_SCRIPT=" + (ConvertTo-BashDoubleQuoted $RemoteUploaderScript),
-        "NOISE_UPLOADER_ARGS=" + (ConvertTo-BashDoubleQuoted $watcherArgString),
-        "PYTHON_BIN=" + (ConvertTo-BashDoubleQuoted $RemotePython)
-    ) -join " "
-
-    $remoteCommand = "nohup env $remoteEnv /bin/bash " + (ConvertTo-BashDoubleQuoted $RemoteStackScript) + " >/tmp/pi_radio_stack_${MissionId}.log 2>&1 &"
-    $sshArgs = @("-p", "$Port")
-    if ($SshKeyPath) {
-        $sshArgs += @("-i", $SshKeyPath)
-    }
-    $sshArgs += @(
-        "-o", "StrictHostKeyChecking=accept-new",
-        "$User@$Host",
-        $remoteCommand
-    )
-
-    return Start-Process -FilePath $SshExe `
-        -ArgumentList $sshArgs `
-        -RedirectStandardOutput $LogPath `
-        -RedirectStandardError ($LogPath + ".err") `
-        -NoNewWindow -PassThru
 }
 
 function Stop-PortListeners {
@@ -243,16 +144,11 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $jobs = @()
 $ap3BridgeJob = $null
-$csvWatchJob = $null
 $gpsCsvJob = $null
 $ap3BridgeScript = Join-Path $ToolsDir "ap3_to_simulator.py"
 $ap3BridgeLog = Join-Path $LogDir "ap3_bridge.log"
-$csvWatchScript = Join-Path $ToolsDir "watch_csv_incoming.py"
-$csvWatchLog = Join-Path $LogDir "csv_watch.log"
 $gpsCsvScript = Join-Path $ToolsDir "ap3_to_gps_csv.py"
 $gpsCsvLog = Join-Path $LogDir "ap3_gps_csv.log"
-$usrpRemoteJob = $null
-$usrpRemoteLog = Join-Path $LogDir "usrp_remote_start.log"
 $enableGpsCsv = $GpsCsv -and -not $NoGpsCsv
 
 if (-not $GpsMissionId) {
@@ -467,95 +363,6 @@ if ($enableGpsCsv) {
     }
 }
 
-# --- CSV watch / replay worker ---
-if ($CsvWatch) {
-    if (Test-Path $csvWatchScript) {
-        New-Item -ItemType Directory -Force -Path $IncomingDir | Out-Null
-        Info "Starting CSV watch worker..."
-        $csvWatchArgs = @(
-            "-u",
-            $csvWatchScript,
-            "--watch-dir",
-            $IncomingDir,
-            "--python-exe",
-            $pythonExe,
-            "--replay-script",
-            (Join-Path $ToolsDir "replay_csv_to_simulator.py"),
-            "--scene",
-            $CsvWatchScene,
-            "--map-type",
-            $CsvMapType,
-            "--api-url",
-            "http://127.0.0.1:8888/api/usrp/measurement",
-            "--auto-simulate-last"
-        )
-        if ($CsvDevicesFile) {
-            $csvWatchArgs += @("--devices-file", $CsvDevicesFile)
-        }
-        $csvWatchJob = Start-Process -FilePath $pythonExe `
-            -ArgumentList $csvWatchArgs `
-            -WorkingDirectory $ScriptDir `
-            -RedirectStandardOutput $csvWatchLog `
-            -RedirectStandardError ($csvWatchLog + ".err") `
-            -NoNewWindow -PassThru
-        $jobs += $csvWatchJob
-        Info "   CSV watch PID: $($csvWatchJob.Id)  log: .logs\csv_watch.log"
-        Info "   CSV watch dir: $IncomingDir"
-    } else {
-        Warn "CSV watch script not found, skipping CSV watch"
-    }
-}
-
-# --- Remote USRP auto-start / upload mission ---
-if ($UsrpAutoStart) {
-    if (-not $UsrpPiHost) {
-        Warn "UsrpAutoStart requested but UsrpPiHost is empty, skipping remote USRP startup"
-    } else {
-        $sshExe = (Get-Command ssh -ErrorAction SilentlyContinue).Source
-        if (-not $sshExe) {
-            Warn "OpenSSH client not found on PATH, skipping remote USRP startup"
-        } else {
-            $resolvedApiUrl = $UsrpUploadApiUrl
-            if (-not $resolvedApiUrl) {
-                $laptopIp = Resolve-LaptopIPv4
-                if ($laptopIp) {
-                    $resolvedApiUrl = "http://${laptopIp}:8888/api/usrp/upload-noise-csv"
-                }
-            }
-
-            $resolvedScene = if ($UsrpScene) { $UsrpScene } else { $CsvWatchScene }
-            if (-not $resolvedApiUrl) {
-                Warn "Could not resolve laptop upload API URL for remote USRP startup, skipping"
-            } else {
-                Info "Starting remote USRP mission over SSH..."
-                Info "   USRP host : $UsrpPiUser@$UsrpPiHost`:$UsrpPiPort"
-                Info "   Mission   : $GpsMissionId"
-                Info "   Upload API: $resolvedApiUrl"
-                $usrpRemoteJob = Start-UsrpRemoteMission `
-                    -SshExe $sshExe `
-                    -Host $UsrpPiHost `
-                    -User $UsrpPiUser `
-                    -Port $UsrpPiPort `
-                    -SshKeyPath $UsrpSshKey `
-                    -MissionId $GpsMissionId `
-                    -Scene $resolvedScene `
-                    -MapType $CsvMapType `
-                    -ApiUrl $resolvedApiUrl `
-                    -RemoteWorkDir $UsrpRemoteWorkDir `
-                    -RemoteStackScript $UsrpRemoteStackScript `
-                    -RemoteNoiseCsv $UsrpRemoteNoiseCsv `
-                    -RemoteUploaderScript $UsrpRemoteUploaderScript `
-                    -RemoteUploadHelper $UsrpRemoteUploadHelper `
-                    -RemotePython $UsrpRemotePython `
-                    -DevicesFile $UsrpDevicesFile `
-                    -LogPath $usrpRemoteLog
-                $jobs += $usrpRemoteJob
-                Info "   Remote start PID: $($usrpRemoteJob.Id)  log: .logs\usrp_remote_start.log"
-            }
-        }
-    }
-}
-
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Frontend : http://localhost:5173"
@@ -567,12 +374,6 @@ if (-not $NoAP3) {
 }
 if ($enableGpsCsv) {
     Write-Host "  GPS CSV  : enabled (mission: $GpsMissionId)"
-}
-if ($CsvWatch) {
-    Write-Host "  CSV Watch: enabled ($IncomingDir)"
-}
-if ($UsrpAutoStart) {
-    Write-Host "  USRP SSH : requested"
 }
 Write-Host "  Mission  : $GpsMissionId"
 Write-Host "  Press Ctrl+C to stop all services"
@@ -627,45 +428,6 @@ try {
                     -MavlinkUrl $GpsMavlinkUrl
                 $jobs += $gpsCsvJob
                 Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
-            }
-        }
-        if ($CsvWatch -and $csvWatchJob) {
-            if ($csvWatchJob.HasExited) {
-                Warn "CSV watch worker exited, restarting..."
-                try {
-                    $jobs = @($jobs | Where-Object { $_.Id -ne $csvWatchJob.Id })
-                } catch {
-                    $jobs = @($jobs)
-                }
-                Start-Sleep -Seconds 2
-                $csvWatchArgs = @(
-                    "-u",
-                    $csvWatchScript,
-                    "--watch-dir",
-                    $IncomingDir,
-                    "--python-exe",
-                    $pythonExe,
-                    "--replay-script",
-                    (Join-Path $ToolsDir "replay_csv_to_simulator.py"),
-                    "--scene",
-                    $CsvWatchScene,
-                    "--map-type",
-                    $CsvMapType,
-                    "--api-url",
-                    "http://127.0.0.1:8888/api/usrp/measurement",
-                    "--auto-simulate-last"
-                )
-                if ($CsvDevicesFile) {
-                    $csvWatchArgs += @("--devices-file", $CsvDevicesFile)
-                }
-                $csvWatchJob = Start-Process -FilePath $pythonExe `
-                    -ArgumentList $csvWatchArgs `
-                    -WorkingDirectory $ScriptDir `
-                    -RedirectStandardOutput $csvWatchLog `
-                    -RedirectStandardError ($csvWatchLog + ".err") `
-                    -NoNewWindow -PassThru
-                $jobs += $csvWatchJob
-                Info "   CSV watch PID: $($csvWatchJob.Id)  log: .logs\csv_watch.log"
             }
         }
     }

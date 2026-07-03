@@ -1,14 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
-import type { USRPSpectrumEvent } from '@/hooks/useGPSSync';
 import { MinPanel } from './MinPanel';
-import { PANEL_POS, PanelEmpty, PanelField, PanelFooter, PanelGrid, PanelStatus } from './PanelUi';
+import { PANEL_POS, PanelStatus } from './PanelUi';
 
 const API = import.meta.env.VITE_API_URL || '';
-
-interface Props {
-  event?: USRPSpectrumEvent | null;
-}
 
 type SamplingMode = 'test' | 'usrp';
 type ConnectionState = 'ready' | 'offline' | 'unknown';
@@ -217,18 +212,12 @@ async function readCaptureResponse(response: Response, fallback: string): Promis
   return data as Partial<CaptureStatus>;
 }
 
-function ageSeconds(event?: USRPSpectrumEvent | null): number | null {
-  if (!event?.timestamp) return null;
-  return Math.max(0, Math.round(Date.now() / 1000 - event.timestamp));
-}
-
-export function USRPTelemetry({ event }: Props) {
+export function USRPTelemetry() {
   const [mode, setMode] = useState<SamplingMode>('test');
   const [bind, setBind] = useState(false);
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const age = ageSeconds(event);
 
   const applyStatus = useCallback((data: Partial<CaptureStatus>) => {
     const next = normalizeStatus(data);
@@ -439,25 +428,6 @@ export function USRPTelemetry({ event }: Props) {
         {error ? <div role="alert" style={S.error}>{error}</div> : null}
       </div>
 
-      {!event ? (
-        <PanelEmpty>...Waiting for usrp events...</PanelEmpty>
-      ) : (
-        <>
-          <div style={S.name}>{event.deviceName || 'USRP B210 Sensor'}</div>
-          <PanelGrid>
-            <PanelField label="Center Freq" value={`${(event.center_freq_hz / 1e6).toFixed(3)} MHz`} />
-            <PanelField label="Sample Rate" value={`${(event.sample_rate_hz / 1e6).toFixed(3)} Msps`} />
-            <PanelField label="Mean Power" value={`${event.mean_power_dbfs.toFixed(2)} dBFS`} />
-            <PanelField label="Peak Power" value={`${event.peak_power_dbfs.toFixed(2)} dBFS`} />
-            <PanelField label="Gain" value={`${event.gain_db.toFixed(1)} dB`} />
-            <PanelField label="Samples" value={event.sample_count} />
-          </PanelGrid>
-          <PanelFooter>
-            {event.deviceId}
-            {age !== null ? ` - ${age}s ago` : ''}
-          </PanelFooter>
-        </>
-      )}
     </MinPanel>
   );
 }
