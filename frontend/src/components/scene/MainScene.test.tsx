@@ -45,7 +45,7 @@ describe('MainScene heatmap overlay', () => {
     render(
       <MainScene
         heatmapOverlay={{
-          url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+          url: '/api/iss-unet/maps/ntpu/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
           rows: 128,
           cols: 128,
           areaM: 512,
@@ -56,7 +56,7 @@ describe('MainScene heatmap overlay', () => {
       />,
     );
 
-    expect(screen.getByTestId('heatmap-overlay')).toHaveTextContent('/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy');
+    expect(screen.getByTestId('heatmap-overlay')).toHaveTextContent('/api/iss-unet/maps/ntpu/grids/iss_unet_ntpu_ratio_20_reconstructed.npy');
   });
 
   it('does not render ISS heatmap overlay when absent', () => {

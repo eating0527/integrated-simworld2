@@ -265,7 +265,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(
             result_image_url("iss_unet_ntpu_comparison.png"),
-            "/api/iss-unet/images/iss_unet_ntpu_comparison.png",
+            "/api/iss-unet/maps/ntpu/iss_unet_ntpu_comparison.png",
         )
 
     def test_result_image_urls_support_ratio_bearing_names(self):
@@ -273,7 +273,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(
             result_image_url("iss_unet_ntpu_ratio_50_comparison.png"),
-            "/api/iss-unet/images/iss_unet_ntpu_ratio_50_comparison.png",
+            "/api/iss-unet/maps/ntpu/iss_unet_ntpu_ratio_50_comparison.png",
         )
 
     def test_sparse_ratio_label_formats_common_ratios(self):
@@ -796,7 +796,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertAlmostEqual(cluster["lon"], 121.0 + (2.0 / (111320.0 * np.cos(np.radians(24.0)))))
         overlay = result["overlay"]
         self.assertEqual(overlay["kind"], "reconstructed_iss")
-        self.assertEqual(overlay["url"], f"/api/iss-unet/grids/{Path(result['files']['reconstructed_npy']).name}")
+        self.assertEqual(overlay["url"], f"/api/iss-unet/maps/ntpu/grids/{Path(result['files']['reconstructed_npy']).name}")
         self.assertEqual(overlay["rows"], 128)
         self.assertEqual(overlay["cols"], 128)
         self.assertEqual(overlay["area_m"], 512.0)
@@ -874,10 +874,12 @@ class ISSUNetServiceTests(unittest.TestCase):
             dtype=np.float32,
         )
         filename = "iss_unet_ntpu_ratio_20_reconstructed.npy"
-        np.save(self.output_dir / filename, values)
+        scene_output_dir = self.output_dir / "ntpu"
+        scene_output_dir.mkdir(parents=True, exist_ok=True)
+        np.save(scene_output_dir / filename, values)
 
         with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
-            response = asyncio.run(main.iss_unet_grid_get(filename))
+            response = asyncio.run(main.iss_unet_grid_get(filename, scene="ntpu"))
 
         self.assertEqual(response["success"], True)
         self.assertEqual(response["rows"], 2)
@@ -1084,12 +1086,13 @@ class ISSUNetServiceTests(unittest.TestCase):
             return b"\x89PNG\r\n\x1a\n"
 
         rows = [{"variable": "metric", "value": "1", "meaning": "meaning"}]
-        with patch.object(iss_unet_stats_service, "OUTPUT_DIR", self.output_dir):
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
             with patch.object(iss_unet_stats_service, "render_statistics_table_png", side_effect=fake_render):
                 path = iss_unet_stats_service.save_statistics_table_png("nycu", rows)
 
         self.assertEqual(captured["title"], "NYCU 統計資料")
         self.assertEqual(path.name, "iss_unet_nycu_gps_n_statistics.png")
+        self.assertEqual(path.parent, self.output_dir / "nycu")
 
     def test_render_gpsn_statistics_table_png_uses_paper_table_style(self):
         from app.iss_unet_stats_service import render_statistics_table_png
@@ -1145,8 +1148,8 @@ class ISSUNetServiceTests(unittest.TestCase):
                 "statistics": {
                     "rows": [{"variable": "採樣點地圖覆蓋率", "value": "0.01%", "meaning": "採樣點覆蓋整張室外地圖的比例"}],
                 },
-                "images": {"statistics": "/api/iss-unet/images/iss_unet_ntpu_gps_n_statistics.png"},
-                "files": {"statistics_png": str(self.output_dir / "iss_unet_ntpu_gps_n_statistics.png")},
+                "images": {"statistics": "/api/iss-unet/maps/ntpu/iss_unet_ntpu_gps_n_statistics.png"},
+                "files": {"statistics_png": str(self.output_dir / "ntpu" / "iss_unet_ntpu_gps_n_statistics.png")},
             }
 
         self._write_ntpu_dataset()
@@ -1816,10 +1819,11 @@ class ISSUNetServiceTests(unittest.TestCase):
                                     )
 
         self.assertEqual(captured["sparse_ratio"], 0.5)
-        self.assertEqual(result["images"]["comparison"], "/api/iss-unet/images/iss_unet_ntpu_ratio_50_comparison.png")
-        self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.png").exists())
-        self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_comparison.png").exists())
-        self.assertTrue((self.output_dir / "iss_unet_ntpu_ratio_50_reconstructed.npy").exists())
+        scene_output_dir = self.output_dir / "ntpu"
+        self.assertEqual(result["images"]["comparison"], "/api/iss-unet/maps/ntpu/iss_unet_ntpu_ratio_50_comparison.png")
+        self.assertTrue((scene_output_dir / "iss_unet_ntpu_ratio_50_reconstructed.png").exists())
+        self.assertTrue((scene_output_dir / "iss_unet_ntpu_ratio_50_comparison.png").exists())
+        self.assertTrue((scene_output_dir / "iss_unet_ntpu_ratio_50_reconstructed.npy").exists())
 
     def test_gps_noise_reconstruct_does_not_apply_focus_sampling_confidence(self):
         data_dir = self._write_ntpu_dataset()
@@ -1924,7 +1928,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                                                 noise_csv=noise_path,
                                             )
 
-        saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
+        saved = np.load(self.output_dir / "ntpu" / "iss_unet_ntpu_gps_n_reconstructed.npy")
         self.assertAlmostEqual(float(saved[64, 64]), -15.0, places=4)
         self.assertAlmostEqual(float(saved[0, 0]), -15.0, places=4)
         self.assertEqual(float(saved[0, 0]), float(captured["render_reconstructed"][0, 0]))
@@ -2009,21 +2013,23 @@ class ISSUNetServiceTests(unittest.TestCase):
                                         noise_csv=noise_path,
                                     )
 
-        saved = np.load(self.output_dir / "iss_unet_ntpu_gps_n_reconstructed.npy")
+        saved = np.load(self.output_dir / "ntpu" / "iss_unet_ntpu_gps_n_reconstructed.npy")
         self.assertAlmostEqual(float(saved[0, 0]), -15.0, places=4)
         self.assertEqual(result["metrics"]["confidence_applied"], False)
 
     def test_image_endpoint_serves_generated_png_from_api_route(self):
-        image_path = self.output_dir / "iss_unet_ntpu_comparison.png"
+        image_path = self.output_dir / "ntpu" / "iss_unet_ntpu_comparison.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
         image_path.write_bytes(b"png-bytes")
 
         with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
-            response = asyncio.run(main.iss_unet_image_get("iss_unet_ntpu_comparison.png"))
+            response = asyncio.run(main.iss_unet_image_get("iss_unet_ntpu_comparison.png", scene="ntpu"))
 
         self.assertEqual(Path(response.path), image_path)
 
     def test_image_endpoint_serves_ratio_bearing_png_from_api_route(self):
-        image_path = self.output_dir / "iss_unet_ntpu_ratio_50_comparison.png"
+        image_path = self.output_dir / "ntpu" / "iss_unet_ntpu_ratio_50_comparison.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
         image_path.write_bytes(b"png-bytes")
 
         with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):

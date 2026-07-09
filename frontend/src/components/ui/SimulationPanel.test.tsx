@@ -18,9 +18,9 @@ function successfulIssUnetResponse() {
       sparse_ratio: 0.2,
       mode: 'sim',
       images: {
-        reconstructed: '/api/iss-unet/images/reconstructed.png',
-        comparison: '/api/iss-unet/images/comparison.png',
-        cfar: '/api/iss-unet/images/cfar.png',
+        reconstructed: '/api/iss-unet/maps/ntpu/reconstructed.png',
+        comparison: '/api/iss-unet/maps/ntpu/comparison.png',
+        cfar: '/api/iss-unet/maps/ntpu/cfar.png',
       },
       metrics: {
         aligned_noise: 0,
@@ -41,7 +41,7 @@ function successfulIssUnetResponse() {
       },
       overlay: {
         kind: 'reconstructed_iss',
-        url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+        url: '/api/iss-unet/maps/ntpu/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
         rows: 128,
         cols: 128,
         area_m: 512,
@@ -106,7 +106,7 @@ function successfulStatisticsResponse() {
     ok: true,
     json: () => Promise.resolve({
       images: {
-        statistics: '/api/iss-unet/images/iss_unet_ntpu_gps_n_statistics.png',
+        statistics: '/api/iss-unet/maps/ntpu/iss_unet_ntpu_gps_n_statistics.png',
       },
       statistics: {
         rows: [
@@ -344,7 +344,7 @@ describe('SimulationPanel UI', () => {
     await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' });
     expect(onHeatmapOverlayChange).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        url: expect.stringContaining('/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy'),
+        url: expect.stringContaining('/api/iss-unet/maps/ntpu/grids/iss_unet_ntpu_ratio_20_reconstructed.npy'),
       }),
     );
   });
@@ -363,7 +363,7 @@ describe('SimulationPanel UI', () => {
 
     await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+        url: '/api/iss-unet/maps/ntpu/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
         opacity: 0.55,
         rows: 128,
         cols: 128,
@@ -456,7 +456,7 @@ describe('SimulationPanel UI', () => {
 
     await waitFor(() => expect(onHeatmapOverlayChange).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: '/api/iss-unet/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
+        url: '/api/iss-unet/maps/ntpu/grids/iss_unet_ntpu_ratio_20_reconstructed.npy',
       }),
     ));
 
@@ -529,7 +529,7 @@ describe('SimulationPanel UI', () => {
       }),
     ));
     const image = await screen.findByRole('img', { name: 'ISS_UNET GPS_N 統計資料' });
-    expect(image).toHaveAttribute('src', expect.stringContaining('/api/iss-unet/images/iss_unet_ntpu_gps_n_statistics.png'));
+    expect(image).toHaveAttribute('src', expect.stringContaining('/api/iss-unet/maps/ntpu/iss_unet_ntpu_gps_n_statistics.png'));
     expect(screen.queryByRole('link', { name: '下載統計表格' })).not.toBeInTheDocument();
 
     await user.click(image);

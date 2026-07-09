@@ -101,7 +101,7 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # 靜態檔案：Sionna 模擬產生的圖片
-SIMULATION_OUT_DIR = BASE_DIR / "static" / "images"
+SIMULATION_OUT_DIR = BASE_DIR / "static" / "maps"
 SIMULATION_OUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/simulations", StaticFiles(directory=str(SIMULATION_OUT_DIR)), name="simulations")
 
@@ -2097,9 +2097,10 @@ async def usrp_upload_noise_csv_post(
     }
 
 
+@app.get("/api/iss-unet/maps/{scene}/{filename}")
 @app.get("/api/iss-unet/images/{filename}")
-async def iss_unet_image_get(filename: str):
-    from app.iss_unet_service import OUTPUT_DIR
+async def iss_unet_image_get(filename: str, scene: str | None = None):
+    from app.iss_unet_service import output_dir_for_scene, scene_id_from_result_filename
 
     valid_iss_unet_image = re.fullmatch(
         r"iss_unet_[A-Za-z0-9_-]+(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar|statistics)\.png",
@@ -2108,16 +2109,17 @@ async def iss_unet_image_get(filename: str):
     if "/" in filename or "\\" in filename or not valid_iss_unet_image:
         return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
 
-    image_path = OUTPUT_DIR / filename
+    image_path = output_dir_for_scene(scene or scene_id_from_result_filename(filename)) / filename
     if not image_path.exists():
         return JSONResponse({"success": False, "error": "Image not found"}, status_code=404)
 
     return FileResponse(image_path, media_type="image/png", filename=filename)
 
 
+@app.get("/api/iss-unet/maps/{scene}/grids/{filename}")
 @app.get("/api/iss-unet/grids/{filename}")
-async def iss_unet_grid_get(filename: str):
-    from app.iss_unet_service import OUTPUT_DIR, DEFAULT_SCENE_AREA_M
+async def iss_unet_grid_get(filename: str, scene: str | None = None):
+    from app.iss_unet_service import DEFAULT_SCENE_AREA_M, output_dir_for_scene, scene_id_from_result_filename
 
     valid_grid = re.fullmatch(
         r"iss_unet_[A-Za-z0-9_-]+(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy",
@@ -2126,7 +2128,8 @@ async def iss_unet_grid_get(filename: str):
     if "/" in filename or "\\" in filename or not valid_grid:
         return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
 
-    grid_path = OUTPUT_DIR / filename
+    scene_name = (scene or scene_id_from_result_filename(filename)).lower()
+    grid_path = output_dir_for_scene(scene_name) / filename
     if not grid_path.exists():
         return JSONResponse({"success": False, "error": "Grid not found"}, status_code=404)
 
@@ -2142,7 +2145,7 @@ async def iss_unet_grid_get(filename: str):
         r"iss_unet_([A-Za-z0-9_-]+?)(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_reconstructed\.npy",
         filename,
     )
-    scene_name = scene_match.group(1).upper() if scene_match else ""
+    scene_name = scene.upper() if scene else (scene_match.group(1).upper() if scene_match else "")
     scene_meta_path = SCENE_DIR / scene_name / "iss_unet_data" / "scene_meta.json"
     area_m = DEFAULT_SCENE_AREA_M
     if scene_meta_path.exists():
@@ -2236,15 +2239,18 @@ def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
 async def sionna_cfr_plot_post(req: CFRPlotRequest):
     """Generate CFR plot using current scene/devices and modulation."""
     try:
-        from app.sionna_service import generate_cfr_plot, CFR_PLOT_PATH
+        from app.sionna_service import generate_cfr_plot, output_path_for_scene
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
         scene_xml_path = Path(scene_xml)
+        scene_name = scene_xml_path.parent.name
+        output_path = output_path_for_scene(scene_name, "cfr_plot.png")
         tx_list, rx_config = _sionna_device_config(req.devices)
         advanced = req.advanced
         await generate_cfr_plot(
             scene_xml=str(scene_xml_path),
-            scene_name=str(scene_xml_path.parent.name),
+            scene_name=scene_name,
+            output_path=output_path,
             tx_list=tx_list,
             rx_config=rx_config,
             modulation=req.modulation,
@@ -2254,9 +2260,9 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
             ebn0_db=advanced.ebn0_db,
             ray_tracing_max_depth=advanced.ray_tracing_max_depth,
         )
-        if not os.path.isfile(CFR_PLOT_PATH):
+        if not os.path.isfile(output_path):
             return JSONResponse({"error": "CFR plot generation failed; see server logs"}, status_code=500)
-        return FileResponse(CFR_PLOT_PATH, media_type="image/png", filename="cfr_plot.png")
+        return FileResponse(output_path, media_type="image/png", filename="cfr_plot.png")
     except HTTPException:
         raise
     except SionnaLLVMError as e:
@@ -2271,24 +2277,27 @@ async def sionna_cfr_plot_post(req: CFRPlotRequest):
 @app.post("/api/sionna/sinr-map")
 async def sionna_sinr_map_post(req: SINRMapRequest):
     try:
-        from app.sionna_service import generate_sinr_map, SINR_MAP_PATH
+        from app.sionna_service import generate_sinr_map, output_path_for_scene
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
+        scene_name = scene_xml.parent.name
+        output_path = output_path_for_scene(scene_name, "sinr_map.png")
         tx_list, rx_config = _sionna_device_config(req.devices)
 
         await generate_sinr_map(
             tx_list=tx_list,
             rx_config=rx_config,
             scene_xml=str(scene_xml),
-            scene_name=str(scene_xml.parent.name),
+            scene_name=scene_name,
+            output_path=output_path,
             sinr_vmin=req.sinr_vmin,
             sinr_vmax=req.sinr_vmax,
             cell_size=req.cell_size,
             samples_per_tx=req.samples_per_tx,
         )
-        if not os.path.isfile(SINR_MAP_PATH):
+        if not os.path.isfile(output_path):
             return JSONResponse({"error": "SINR map generation failed; see server logs"}, status_code=500)
-        return FileResponse(SINR_MAP_PATH, media_type="image/png", filename="sinr_map.png")
+        return FileResponse(output_path, media_type="image/png", filename="sinr_map.png")
     except HTTPException:
         raise
     except SionnaLLVMError as e:
@@ -2303,20 +2312,23 @@ async def sionna_sinr_map_post(req: SINRMapRequest):
 @app.post("/api/sionna/doppler")
 async def sionna_doppler_post(req: BaseSionnaRequest):
     try:
-        from app.sionna_service import generate_doppler_plot, DOPPLER_PLOT_PATH
+        from app.sionna_service import generate_doppler_plot, output_path_for_scene
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
+        scene_name = scene_xml.parent.name
+        output_path = output_path_for_scene(scene_name, "doppler_plot.png")
         tx_list, rx_config = _sionna_device_config(req.devices)
 
         await generate_doppler_plot(
             tx_list=tx_list,
             rx_config=rx_config,
             scene_xml=str(scene_xml),
-            scene_name=str(scene_xml.parent.name),
+            scene_name=scene_name,
+            output_path=output_path,
         )
-        if not os.path.isfile(DOPPLER_PLOT_PATH):
+        if not os.path.isfile(output_path):
             return JSONResponse({"error": "Doppler plot generation failed; see server logs"}, status_code=500)
-        return FileResponse(DOPPLER_PLOT_PATH, media_type="image/png", filename="doppler_plot.png")
+        return FileResponse(output_path, media_type="image/png", filename="doppler_plot.png")
     except HTTPException:
         raise
     except SionnaLLVMError as e:
@@ -2331,20 +2343,23 @@ async def sionna_doppler_post(req: BaseSionnaRequest):
 @app.post("/api/sionna/channel-response")
 async def sionna_channel_response_post(req: BaseSionnaRequest):
     try:
-        from app.sionna_service import generate_channel_response, CHANNEL_RESP_PATH
+        from app.sionna_service import generate_channel_response, output_path_for_scene
 
         scene_xml = _resolve_sionna_scene_xml(req.scene)
+        scene_name = scene_xml.parent.name
+        output_path = output_path_for_scene(scene_name, "channel_response.png")
         tx_list, rx_config = _sionna_device_config(req.devices)
 
         await generate_channel_response(
             tx_list=tx_list,
             rx_config=rx_config,
             scene_xml=str(scene_xml),
-            scene_name=str(scene_xml.parent.name),
+            scene_name=scene_name,
+            output_path=output_path,
         )
-        if not os.path.isfile(CHANNEL_RESP_PATH):
+        if not os.path.isfile(output_path):
             return JSONResponse({"error": "Channel response generation failed; see server logs"}, status_code=500)
-        return FileResponse(CHANNEL_RESP_PATH, media_type="image/png", filename="channel_response.png")
+        return FileResponse(output_path, media_type="image/png", filename="channel_response.png")
     except HTTPException:
         raise
     except SionnaLLVMError as e:

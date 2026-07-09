@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from pydantic import ValidationError
@@ -93,7 +94,7 @@ class CFRAdvancedParamsTests(unittest.TestCase):
         with patch("app.sionna_service.generate_cfr_plot", new_callable=AsyncMock) as mock_generate:
             with patch("app.main.os.path.isfile", return_value=True):
                 with patch("app.main.FileResponse", return_value=object()):
-                    with patch("app.main._resolve_sionna_scene_xml", return_value="scene.xml"):
+                    with patch("app.main._resolve_sionna_scene_xml", return_value=Path("static/scenes/NTPU/NTPU.xml")):
                         asyncio.run(sionna_cfr_plot_post(req))
 
         mock_generate.assert_awaited_once()
@@ -103,6 +104,7 @@ class CFRAdvancedParamsTests(unittest.TestCase):
         self.assertEqual(kwargs["subcarrier_spacing_hz"], 45000)
         self.assertEqual(kwargs["ebn0_db"], 18)
         self.assertEqual(kwargs["ray_tracing_max_depth"], 3)
+        self.assertTrue(kwargs["output_path"].replace("\\", "/").endswith("/static/maps/ntpu/cfr_plot.png"))
 
 
 if __name__ == "__main__":

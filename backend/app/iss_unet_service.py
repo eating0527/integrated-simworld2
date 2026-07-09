@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
 SCENE_DIR = BASE_DIR / "static" / "scenes"
-OUTPUT_DIR = BASE_DIR / "static" / "images"
+OUTPUT_DIR = BASE_DIR / "static" / "maps"
 MODEL_ARTIFACT_PATH = BASE_DIR / "model_artifacts" / "best_iss_reconstruction_model.pth"
 GPSN_MODEL_ARTIFACT_PATH = BASE_DIR / "model_artifacts" / "unet_single" / "best_model.pt"
 
@@ -52,12 +53,26 @@ ISS_UNET_MODE_LABELS = {
 }
 
 
-def result_image_url(filename: str) -> str:
-    return f"/api/iss-unet/images/{filename}"
+def scene_id_from_result_filename(filename: str) -> str:
+    match = re.match(
+        r"iss_unet_([A-Za-z0-9_-]+?)(?:_res(?:128|256|512))?(?:(?:_ratio_[0-9]+(?:p[0-9]+)?)|(?:_gps(?:_n)?))?_(?:reconstructed|comparison|cfar|statistics)\.(?:png|npy)$",
+        filename,
+    )
+    return (match.group(1) if match else "unknown").lower()
 
 
-def result_grid_url(filename: str) -> str:
-    return f"/api/iss-unet/grids/{filename}"
+def output_dir_for_scene(scene: str) -> Path:
+    return OUTPUT_DIR / _canonical_scene(scene).lower()
+
+
+def result_image_url(filename: str, scene: str | None = None) -> str:
+    scene_id = (_canonical_scene(scene).lower() if scene else scene_id_from_result_filename(filename))
+    return f"/api/iss-unet/maps/{scene_id}/{filename}"
+
+
+def result_grid_url(filename: str, scene: str | None = None) -> str:
+    scene_id = (_canonical_scene(scene).lower() if scene else scene_id_from_result_filename(filename))
+    return f"/api/iss-unet/maps/{scene_id}/grids/{filename}"
 
 
 @dataclass(frozen=True)
@@ -387,7 +402,7 @@ def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, in
     grid = _cfar_grid_metadata(dataset, shape)
     return {
         "kind": "reconstructed_iss",
-        "url": result_grid_url(filename),
+        "url": result_grid_url(filename, dataset.scene),
         "rows": grid["rows"],
         "cols": grid["cols"],
         "area_m": grid["area_m"],
@@ -1074,16 +1089,17 @@ def reconstruct_iss_unet(
     cfar = artifacts.cfar_params
     cfar_result = artifacts.cfar_result
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = output_dir_for_scene(dataset.scene)
+    output_dir.mkdir(parents=True, exist_ok=True)
     resolution_label = "" if dataset.grid_res == 128 else f"_res{dataset.grid_res}"
     if mode == "sim":
         stem = f"iss_unet_{dataset.scene.lower()}{resolution_label}_{sparse_ratio_label(sparse_ratio)}"
     else:
         stem = f"iss_unet_{dataset.scene.lower()}{resolution_label}_{mode}"
-    reconstructed_path = OUTPUT_DIR / f"{stem}_reconstructed.png"
-    comparison_path = OUTPUT_DIR / f"{stem}_comparison.png"
-    cfar_path = OUTPUT_DIR / f"{stem}_cfar.png"
-    npy_path = OUTPUT_DIR / f"{stem}_reconstructed.npy"
+    reconstructed_path = output_dir / f"{stem}_reconstructed.png"
+    comparison_path = output_dir / f"{stem}_comparison.png"
+    cfar_path = output_dir / f"{stem}_cfar.png"
+    npy_path = output_dir / f"{stem}_reconstructed.npy"
 
     reconstructed_png = _render_reconstructed_png(reconstructed_iss, mode_label=mode_label)
     if sparse_values_dbm is None and mode_label == "Sim":
@@ -1134,9 +1150,9 @@ def reconstruct_iss_unet(
             "grid_res": dataset.grid_res,
         },
         "images": {
-            "reconstructed": result_image_url(reconstructed_path.name),
-            "comparison": result_image_url(comparison_path.name),
-            "cfar": result_image_url(cfar_path.name) if cfar.enabled else None,
+            "reconstructed": result_image_url(reconstructed_path.name, dataset.scene),
+            "comparison": result_image_url(comparison_path.name, dataset.scene),
+            "cfar": result_image_url(cfar_path.name, dataset.scene) if cfar.enabled else None,
         },
         "overlay": _overlay_metadata(dataset, npy_path.name, reconstructed_iss.shape),
         "route": {

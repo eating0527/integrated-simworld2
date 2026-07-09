@@ -51,15 +51,22 @@ def _format_llvm_error(exc: BaseException) -> str:
 # ── 路徑設定 ────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).parent
 SCENE_DIR   = _HERE / "static" / "scenes"
-OUTPUT_DIR  = _HERE / "static" / "images"
+OUTPUT_DIR  = _HERE / "static" / "maps"
 NYCU_XML    = SCENE_DIR / "NYCU" / "NYCU.xml"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SINR_MAP_PATH     = str(OUTPUT_DIR / "sinr_map.png")
-CFR_PLOT_PATH     = str(OUTPUT_DIR / "cfr_plot.png")
-DOPPLER_PLOT_PATH = str(OUTPUT_DIR / "doppler_plot.png")
-CHANNEL_RESP_PATH = str(OUTPUT_DIR / "channel_response.png")
+def output_path_for_scene(scene: str, filename: str) -> str:
+    scene_id = (scene or "unknown").strip().lower()
+    if any(part in scene_id for part in ("/", "\\", "..")):
+        scene_id = "unknown"
+    return str(OUTPUT_DIR / scene_id / filename)
+
+
+SINR_MAP_PATH     = output_path_for_scene("NYCU", "sinr_map.png")
+CFR_PLOT_PATH     = output_path_for_scene("NYCU", "cfr_plot.png")
+DOPPLER_PLOT_PATH = output_path_for_scene("NYCU", "doppler_plot.png")
+CHANNEL_RESP_PATH = output_path_for_scene("NYCU", "channel_response.png")
 
 # ── 預設 TX / RX 位置（NYCU 場景座標系）──────────────────────────────────────
 DEFAULT_TX_LIST = [

@@ -18,6 +18,7 @@ from app.iss_unet_service import (
     ISSUNetCFARParams,
     OUTPUT_DIR,
     _build_iss_unet_artifacts,
+    output_dir_for_scene,
     result_image_url,
 )
 
@@ -245,9 +246,10 @@ def render_statistics_table_png(rows: list[dict[str, str]], title: str = "統計
 
 
 def save_statistics_table_png(scene: str, rows: list[dict[str, str]], grid_res: int = 128) -> Path:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = output_dir_for_scene(scene)
+    output_dir.mkdir(parents=True, exist_ok=True)
     resolution_label = "" if grid_res == 128 else f"_res{grid_res}"
-    path = OUTPUT_DIR / f"iss_unet_{scene.lower()}{resolution_label}_gps_n_statistics.png"
+    path = output_dir / f"iss_unet_{scene.lower()}{resolution_label}_gps_n_statistics.png"
     path.write_bytes(render_statistics_table_png(rows, title=_statistics_table_title(scene)))
     return path
 
@@ -290,6 +292,6 @@ def generate_gpsn_statistics(
         "scene": artifacts.dataset.scene,
         "mode": "gps_n",
         "statistics": {"rows": rows},
-        "images": {"statistics": result_image_url(image_path.name)},
+        "images": {"statistics": result_image_url(image_path.name, artifacts.dataset.scene)},
         "files": {"statistics_png": str(image_path)},
     }
