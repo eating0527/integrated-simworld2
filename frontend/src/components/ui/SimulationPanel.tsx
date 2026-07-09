@@ -7,7 +7,13 @@ import {
   buildIssUnetUploadFormData,
 } from '../../utils/issUnetRequest';
 import type { CFARCluster } from '../../types/cfar';
-import type { HeatmapGridBounds, HeatmapOverlayConfig } from '../../types/heatmap';
+import type {
+  HeatmapGridBounds,
+  HeatmapOverlayConfig,
+  ISSRouteOverlayConfig,
+  ISSRoutePoint,
+  ISSSamplePoint,
+} from '../../types/heatmap';
 import { MinPanel } from './MinPanel';
 
 const API = import.meta.env.VITE_API_URL || '';
@@ -111,6 +117,7 @@ interface SimulationPanelProps {
   generatedScene?: boolean;
   onCfarClustersChange?: (clusters: CFARCluster[]) => void;
   onHeatmapOverlayChange?: (overlay: HeatmapOverlayConfig | null) => void;
+  onRouteOverlayChange?: (overlay: ISSRouteOverlayConfig | null) => void;
 }
 
 export function SimulationPanel({
@@ -118,6 +125,7 @@ export function SimulationPanel({
   generatedScene = false,
   onCfarClustersChange,
   onHeatmapOverlayChange,
+  onRouteOverlayChange,
 }: SimulationPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
@@ -160,6 +168,9 @@ export function SimulationPanel({
     rows: [],
   });
   const [issUnetOverlay, setIssUnetOverlay] = useState<ISSUNetOverlayResponse | null>(null);
+  const [issRouteOverlay, setIssRouteOverlay] = useState<Omit<ISSRouteOverlayConfig, 'routeMode'> | null>(null);
+  const [issRouteMode, setIssRouteMode] = useState<'all' | 'aligned'>('all');
+  const [issRouteClearVersion, setIssRouteClearVersion] = useState(0);
   const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(false);
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.55);
 
@@ -170,6 +181,13 @@ export function SimulationPanel({
     onHeatmapOverlayChange?.(null);
   }, [onHeatmapOverlayChange]);
 
+  const clearIssOverlays = useCallback(() => {
+    clearHeatmapOverlay();
+    setIssRouteOverlay(null);
+    setIssRouteMode('all');
+    setIssRouteClearVersion(version => version + 1);
+  }, [clearHeatmapOverlay]);
+
   useEffect(() => {
     if (generatedScene && !GENERATED_SCENE_TABS.includes(tab)) {
       setTab('iss');
@@ -177,8 +195,8 @@ export function SimulationPanel({
   }, [generatedScene, tab]);
 
   useEffect(() => {
-    clearHeatmapOverlay();
-  }, [sceneId, clearHeatmapOverlay]);
+    clearIssOverlays();
+  }, [sceneId, clearIssOverlays]);
 
   useEffect(() => {
     if (!showHeatmapOverlay || !issUnetOverlay) {
@@ -197,6 +215,17 @@ export function SimulationPanel({
     });
   }, [heatmapOpacity, issUnetOverlay, onHeatmapOverlayChange, showHeatmapOverlay]);
 
+  useEffect(() => {
+    if (!issRouteOverlay) {
+      onRouteOverlayChange?.(null);
+      return;
+    }
+    onRouteOverlayChange?.({
+      ...issRouteOverlay,
+      routeMode: issRouteMode,
+    });
+  }, [issRouteClearVersion, issRouteMode, issRouteOverlay, onRouteOverlayChange]);
+
   const updateCfrAdvanced = <K extends keyof CFRAdvancedParams>(
     key: K,
     value: CFRAdvancedParams[K],
@@ -208,7 +237,7 @@ export function SimulationPanel({
     if (generatedScene && !sceneId) {
       if (key === 'iss_unet') {
         onCfarClustersChange?.([]);
-        clearHeatmapOverlay();
+        clearIssOverlays();
       }
       setStatus(prev => ({
         ...prev,
@@ -224,7 +253,7 @@ export function SimulationPanel({
       setStatus(prev => ({ ...prev, [key]: { loading: true, imageUrl: null, error: null, metrics: null, options: null } }));
       if (key === 'iss_unet') {
         onCfarClustersChange?.([]);
-        clearHeatmapOverlay();
+        clearIssOverlays();
       }
 
     try {
@@ -371,6 +400,17 @@ export function SimulationPanel({
         } else {
           clearHeatmapOverlay();
         }
+        const route = json.route;
+        if (route) {
+          const routePoints = Array.isArray(route.all_points) ? route.all_points as ISSRoutePoint[] : [];
+          const alignedPoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSRoutePoint[] : [];
+          const samplePoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSSamplePoint[] : [];
+          setIssRouteOverlay(routePoints.length > 0 || alignedPoints.length > 0
+            ? { routePoints, alignedPoints, samplePoints }
+            : null);
+        } else {
+          setIssRouteOverlay(null);
+        }
         const cfarClusters: CFARCluster[] = Array.isArray(json.cfar?.clusters)
           ? json.cfar.clusters
           : [];
@@ -396,12 +436,12 @@ export function SimulationPanel({
     } catch (err) {
       if (key === 'iss_unet') {
         onCfarClustersChange?.([]);
-        clearHeatmapOverlay();
+        clearIssOverlays();
       }
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
-  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay]);
+  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay, clearIssOverlays]);
 
   const generateStatistics = useCallback(async () => {
     if (generatedScene && !sceneId) {
@@ -706,6 +746,27 @@ export function SimulationPanel({
                         step={0.05}
                         value={heatmapOpacity}
                         onChange={event => setHeatmapOpacity(Number(event.target.value))}
+                      />
+                    </div>
+                  </div>
+                )}
+                {issRouteOverlay && (
+                  <div style={{
+                    marginTop: 10,
+                    background: 'rgba(0,0,0,.18)',
+                    border: '1px solid rgba(0,255,255,.12)',
+                    borderRadius: 10,
+                    padding: 10,
+                  }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, auto) 1fr', gap: '8px 12px', alignItems: 'center' }}>
+                      <Label>3D Route</Label>
+                      <SegmentedControl
+                        value={issRouteMode}
+                        options={[
+                          { value: 'all', label: 'All GPS' },
+                          { value: 'aligned', label: 'Aligned only' },
+                        ]}
+                        onChange={setIssRouteMode}
                       />
                     </div>
                   </div>

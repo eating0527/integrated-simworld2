@@ -27,7 +27,17 @@ function successfulIssUnetResponse() {
         skipped_noise: 0,
         used_samples: 10,
         sparse_samples: 2,
-        route_points: 0,
+        route_points: 2,
+      },
+      route: {
+        all_points: [
+          { lat: 24, lon: 121, alt: 1, row: 64, col: 64, world_x: 2, world_z: -2 },
+          { lat: 24.00003, lon: 121.00003, alt: 2, row: 63, col: 65, world_x: 6, world_z: -6 },
+        ],
+        aligned_points: [
+          { lat: 24, lon: 121, alt: 1, row: 64, col: 64, world_x: 2, world_z: -2, noise_floor_db: -80 },
+        ],
+        sparse_points: [],
       },
       overlay: {
         kind: 'reconstructed_iss',
@@ -63,6 +73,32 @@ function successfulIssUnetResponse() {
       },
     }),
   } as Response);
+}
+
+function successfulIssUnetResponseWithoutRoute() {
+  return successfulIssUnetResponse().then(async response => ({
+    ...response,
+    json: async () => {
+      const json = await response.json();
+      delete json.route;
+      return json;
+    },
+  } as Response));
+}
+
+function successfulIssUnetResponseWithEmptyRoute() {
+  return successfulIssUnetResponse().then(async response => ({
+    ...response,
+    json: async () => {
+      const json = await response.json();
+      json.route = {
+        all_points: [],
+        aligned_points: [],
+        sparse_points: [],
+      };
+      return json;
+    },
+  } as Response));
 }
 
 function successfulStatisticsResponse() {
@@ -342,6 +378,69 @@ describe('SimulationPanel UI', () => {
         opacity: 0.8,
       }),
     ));
+  });
+
+  it('publishes ISS route overlay and switches route display mode', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponse());
+    const onRouteOverlayChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
+    await runCurrentTab(user);
+
+    await waitFor(() => expect(onRouteOverlayChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routeMode: 'all',
+        routePoints: expect.arrayContaining([expect.objectContaining({ world_x: 2 })]),
+        samplePoints: expect.arrayContaining([expect.objectContaining({ noise_floor_db: -80 })]),
+      }),
+    ));
+
+    await user.click(screen.getByRole('button', { name: 'Aligned only' }));
+
+    await waitFor(() => expect(onRouteOverlayChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        routeMode: 'aligned',
+        alignedPoints: expect.arrayContaining([expect.objectContaining({ world_x: 2 })]),
+      }),
+    ));
+  });
+
+  it('does not publish a non-null ISS_UNET route overlay without route data', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponseWithoutRoute());
+    const onRouteOverlayChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await runCurrentTab(user);
+
+    await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' });
+    expect(screen.queryByText('3D Route')).not.toBeInTheDocument();
+    expect(onRouteOverlayChange).not.toHaveBeenCalledWith(expect.objectContaining({
+      routeMode: expect.any(String),
+    }));
+  });
+
+  it('does not publish a non-null ISS_UNET route overlay when route arrays are empty', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => successfulIssUnetResponseWithEmptyRoute());
+    const onRouteOverlayChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    await runCurrentTab(user);
+
+    await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' });
+    expect(screen.queryByText('3D Route')).not.toBeInTheDocument();
+    expect(onRouteOverlayChange).not.toHaveBeenCalledWith(expect.objectContaining({
+      routeMode: expect.any(String),
+    }));
   });
 
   it('clears a previously enabled heatmap overlay on rerun and scene change', async () => {

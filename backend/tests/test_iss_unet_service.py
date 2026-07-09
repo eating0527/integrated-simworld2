@@ -596,6 +596,116 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(result.metrics["duplicate_points"], 1)
         self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-90.0, -80.0, -70.0])
 
+    def test_gps_noise_route_points_include_masked_and_sparse_sets(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            encoding="utf-8",
+        )
+        building = np.zeros((128, 128), dtype=np.float32)
+        building[64, 64] = 9.0
+        np.save(data_dir / "building_height_128.npy", building)
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,lat,lon,alt",
+                    "2026-05-27T12:00:00Z,24.0,121.0,1",
+                    "2026-05-27T12:00:01Z,24.0000359324461,121.000039446262,2",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        noise_path = self.root / "noise.csv"
+        noise_path.write_text(
+            "\n".join(
+                [
+                    "time_stamp,noise_floor_db",
+                    "2026-05-27T12:00:00.100Z,-80.0",
+                    "2026-05-27T12:00:01.100Z,-70.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        arrays = {
+            "building": building,
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": np.full((128, 128), -100.0, dtype=np.float32),
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps_n",
+            gps_points=parse_gps_csv(gps_path),
+            noise_points=parse_noise_csv(noise_path),
+            apply_building_mask=True,
+        )
+
+        self.assertEqual(len(result.route_points), 2)
+        self.assertEqual(len(result.aligned_points), 2)
+        self.assertEqual(len(result.sparse_points), 1)
+        self.assertEqual(result.aligned_points[0]["used_in_sparse"], False)
+        self.assertEqual(result.aligned_points[1]["used_in_sparse"], True)
+        self.assertEqual(result.sparse_points[0]["noise_floor_db"], -70.0)
+
+    def test_gps_noise_route_points_use_grid_bounds_world_coordinates(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        grid_bounds = {
+            "min_x": -300.0,
+            "max_x": 293.0,
+            "min_y": -260.0,
+            "max_y": 270.0,
+        }
+        (data_dir / "scene_meta.json").write_text(
+            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128, "grid_bounds": grid_bounds}),
+            encoding="utf-8",
+        )
+        row = 10
+        col = 20
+        pixel_size_m = 512.0 / 128.0
+        east_m = -256.0 + (col + 0.5) * pixel_size_m
+        north_m = 256.0 - (row + 0.5) * pixel_size_m
+        lon = 121.0 + east_m / (111320.0 * np.cos(np.radians(24.0)))
+        lat = 24.0 + north_m / 111320.0
+        gps_path = self.root / "gps.csv"
+        gps_path.write_text(
+            "\n".join(["time_stamp,lat,lon,alt", f"2026-05-27T12:00:00Z,{lat},{lon},1"]),
+            encoding="utf-8",
+        )
+        noise_path = self.root / "noise.csv"
+        noise_path.write_text("time_stamp,noise_floor_db\n2026-05-27T12:00:00.100Z,-80.0", encoding="utf-8")
+        arrays = {
+            "building": np.zeros((128, 128), dtype=np.float32),
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": np.full((128, 128), -100.0, dtype=np.float32),
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps_n",
+            gps_points=parse_gps_csv(gps_path),
+            noise_points=parse_noise_csv(noise_path),
+        )
+
+        expected_x = -300.0 + (col + 0.5) * (593.0 / 128.0)
+        expected_z = -(270.0 - (row + 0.5) * (530.0 / 128.0))
+        self.assertEqual(result.route_points[0]["row"], row)
+        self.assertEqual(result.route_points[0]["col"], col)
+        self.assertAlmostEqual(result.route_points[0]["world_x"], expected_x)
+        self.assertAlmostEqual(result.route_points[0]["world_z"], expected_z)
+        self.assertAlmostEqual(result.aligned_points[0]["world_x"], expected_x)
+        self.assertAlmostEqual(result.aligned_points[0]["world_z"], expected_z)
+
     def test_gpsn_artifacts_include_reconstructed_sparse_and_cfar_inputs(self):
         from app.iss_unet_service import ISSUNetCFARParams, _build_iss_unet_artifacts, resolve_scene_dataset
 
@@ -848,6 +958,33 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(captured[4]["vmin"], -90.0)
         self.assertEqual(captured[4]["vmax"], -15.0)
 
+    def test_comparison_renderer_skips_invalid_route_points(self):
+        from app.iss_unet_service import _render_comparison_png
+
+        arrays = {
+            "building": np.zeros((4, 4), dtype=np.float32),
+            "iss": np.full((4, 4), -45.0, dtype=np.float32),
+        }
+        route_points = [
+            {"row": 0, "col": 0},
+            {"row": None, "col": 1},
+            {"row": "bad", "col": 2},
+            {"row": object(), "col": 3},
+            {"row": np.nan, "col": 1},
+            {"row": 3, "col": 3},
+        ]
+
+        png = _render_comparison_png(
+            arrays,
+            np.full((4, 4), -50.0, dtype=np.float32),
+            np.ones((4, 4), dtype=np.float32),
+            np.ones((4, 4), dtype=np.float32),
+            0.2,
+            route_points=route_points,
+        )
+
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
     def test_gpsn_statistics_rows_include_ten_chinese_metrics(self):
         from app.iss_unet_service import ISSUNetArtifacts, ISSUNetCFARParams, SceneDataset
         from app.iss_unet_stats_service import build_gpsn_statistics_rows
@@ -904,6 +1041,9 @@ class ISSUNetServiceTests(unittest.TestCase):
                 "detection_map": np.zeros((4, 4), dtype=np.float32),
                 "threshold_map": np.zeros((4, 4), dtype=np.float32),
             },
+            route_points=[],
+            aligned_points=[],
+            sparse_points=[],
         )
 
         rows = build_gpsn_statistics_rows(artifacts)
@@ -1509,6 +1649,106 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "gps_n")
         self.assertTrue(result["metrics"]["model_inference"])
+
+    def test_gps_noise_reconstruct_returns_route_overlay_points(self):
+        from app.iss_real import RouteSparseResult
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        self._write_ntpu_dataset()
+        route_sample = RouteSparseResult(
+            sparse_mask=np.zeros((128, 128), dtype=np.float32),
+            outdoor_mask=np.ones((128, 128), dtype=np.float32),
+            iss_sparse_dbm=np.full((128, 128), -140.0, dtype=np.float32),
+            inputs=np.zeros((5, 128, 128), dtype=np.float32),
+            metrics={"mode": "gps_n", "route_points": 1, "used_samples": 0, "aligned_noise": 1, "skipped_noise": 0},
+            route_points=[
+                {
+                    "time_stamp": "2026-05-27T12:00:00+00:00",
+                    "lat": 24.0,
+                    "lon": 121.0,
+                    "alt": 1.0,
+                    "row": 64,
+                    "col": 64,
+                    "world_x": 2.0,
+                    "world_z": -2.0,
+                    "in_bounds": True,
+                }
+            ],
+            aligned_points=[
+                {
+                    "time_stamp": "2026-05-27T12:00:00.100000+00:00",
+                    "lat": 24.0,
+                    "lon": 121.0,
+                    "alt": 1.0,
+                    "noise_floor_db": -80.0,
+                    "row": 64,
+                    "col": 64,
+                    "world_x": 2.0,
+                    "world_z": -2.0,
+                    "in_bounds": True,
+                    "used_in_sparse": False,
+                }
+            ],
+            sparse_points=[],
+        )
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            with patch("app.iss_real.create_route_sparse_sample", return_value=route_sample):
+                with patch("app.iss_unet_service._run_gpsn_unet", return_value=np.full((128, 128), -70.0, dtype=np.float32)):
+                    with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                        with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                            result = reconstruct_iss_unet(
+                                "ntpu",
+                                mode="gps_n",
+                                gps_csv="time_stamp,lat,lon,alt\n2026-05-27T12:00:00Z,24.0,121.0,1",
+                                noise_csv="time_stamp,noise_floor_db\n2026-05-27T12:00:00.100Z,-80",
+                                cfar=ISSUNetCFARParams(enabled=False),
+                                scene_dir=self.scene_dir,
+                            )
+
+        self.assertEqual(result["route"]["all_points"][0]["world_x"], 2.0)
+        self.assertEqual(result["route"]["aligned_points"][0]["noise_floor_db"], -80.0)
+        self.assertEqual(result["route"]["sparse_points"], [])
+
+    def test_gps_noise_comparison_renderer_receives_route_points(self):
+        from app.iss_real import RouteSparseResult
+        from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
+
+        self._write_ntpu_dataset()
+        route_sample = RouteSparseResult(
+            sparse_mask=np.zeros((128, 128), dtype=np.float32),
+            outdoor_mask=np.ones((128, 128), dtype=np.float32),
+            iss_sparse_dbm=np.full((128, 128), -140.0, dtype=np.float32),
+            inputs=np.zeros((5, 128, 128), dtype=np.float32),
+            metrics={"mode": "gps_n", "route_points": 2, "used_samples": 0, "aligned_noise": 1, "skipped_noise": 0},
+            route_points=[
+                {"row": 64, "col": 64, "world_x": 2.0, "world_z": -2.0},
+                {"row": 63, "col": 65, "world_x": 6.0, "world_z": -6.0},
+            ],
+            aligned_points=[],
+            sparse_points=[],
+        )
+        captured = {}
+
+        def fake_render(*args, **kwargs):
+            captured["route_points"] = kwargs.get("route_points")
+            return b"comparison"
+
+        with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
+            with patch("app.iss_real.create_route_sparse_sample", return_value=route_sample):
+                with patch("app.iss_unet_service._run_gpsn_unet", return_value=np.full((128, 128), -70.0, dtype=np.float32)):
+                    with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                        with patch("app.iss_unet_service._render_comparison_png", side_effect=fake_render):
+                            reconstruct_iss_unet(
+                                "ntpu",
+                                mode="gps_n",
+                                gps_csv="time_stamp,lat,lon,alt\n2026-05-27T12:00:00Z,24.0,121.0,1",
+                                noise_csv="time_stamp,noise_floor_db\n2026-05-27T12:00:00.100Z,-80",
+                                cfar=ISSUNetCFARParams(enabled=False),
+                                scene_dir=self.scene_dir,
+                            )
+
+        self.assertEqual(len(captured["route_points"]), 2)
 
     def test_reconstruct_uses_ratio_bearing_outputs_and_render_ratio(self):
         self._write_ntpu_dataset()

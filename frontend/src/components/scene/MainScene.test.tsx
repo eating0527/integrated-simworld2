@@ -30,6 +30,11 @@ vi.mock('./ISSHeatmapOverlay', () => ({
     <div data-testid="heatmap-overlay">{overlay.url}</div>
   ),
 }));
+vi.mock('./ISSRouteOverlay', () => ({
+  ISSRouteOverlay: ({ overlay }: { overlay: { routeMode: string } }) => (
+    <div data-testid="route-overlay">{overlay.routeMode}</div>
+  ),
+}));
 vi.mock('../../store/useDeviceStore', () => ({
   useDeviceStore: (selector: (state: { devices: Array<{ role: string }> }) => unknown) =>
     selector({ devices: [] }),
@@ -58,5 +63,20 @@ describe('MainScene heatmap overlay', () => {
     render(<MainScene />);
 
     expect(screen.queryByTestId('heatmap-overlay')).not.toBeInTheDocument();
+  });
+
+  it('renders ISS route overlay when provided', () => {
+    render(
+      <MainScene
+        issRouteOverlay={{
+          routeMode: 'aligned',
+          routePoints: [],
+          alignedPoints: [],
+          samplePoints: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('route-overlay')).toHaveTextContent('aligned');
   });
 });

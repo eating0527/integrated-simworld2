@@ -55,6 +55,9 @@ class RouteSparseResult:
     iss_sparse_dbm: np.ndarray
     inputs: np.ndarray
     metrics: dict[str, Any]
+    route_points: list[dict[str, Any]] = field(default_factory=list)
+    aligned_points: list[dict[str, Any]] = field(default_factory=list)
+    sparse_points: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _open_text(source: Path | str | bytes | TextIO):
@@ -199,6 +202,30 @@ def _scene_area_m(dataset: SceneDataset) -> float:
     return 512.0
 
 
+def _scene_grid_bounds(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, float] | None:
+    if not dataset.meta_path:
+        return None
+    rows, cols = shape
+    raw_bounds = _read_json(dataset.meta_path).get("grid_bounds")
+    if not isinstance(raw_bounds, dict):
+        return None
+    try:
+        min_x = float(raw_bounds["min_x"])
+        max_x = float(raw_bounds["max_x"])
+        min_y = float(raw_bounds["min_y"])
+        max_y = float(raw_bounds["max_y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (min_x, max_x, min_y, max_y)) or max_x <= min_x or max_y <= min_y:
+        return None
+    return {
+        "min_x": min_x,
+        "max_y": max_y,
+        "pixel_size_x_m": float((max_x - min_x) / float(cols)),
+        "pixel_size_y_m": float((max_y - min_y) / float(rows)),
+    }
+
+
 def _latlon_to_pixel(
     lat: float,
     lon: float,
@@ -219,6 +246,51 @@ def _latlon_to_pixel(
     if 0 <= row < rows and 0 <= col < cols:
         return row, col
     return None
+
+
+def _pixel_to_world(
+    row: int,
+    col: int,
+    area_m: float,
+    shape: tuple[int, int],
+    grid_bounds: dict[str, float] | None = None,
+) -> tuple[float, float]:
+    if grid_bounds is not None:
+        world_x = grid_bounds["min_x"] + (float(col) + 0.5) * grid_bounds["pixel_size_x_m"]
+        north_m = grid_bounds["max_y"] - (float(row) + 0.5) * grid_bounds["pixel_size_y_m"]
+        return float(world_x), float(-north_m)
+    rows, cols = shape
+    pixel_x_m = area_m / cols
+    pixel_y_m = area_m / rows
+    world_x = -area_m / 2.0 + (float(col) + 0.5) * pixel_x_m
+    north_m = area_m / 2.0 - (float(row) + 0.5) * pixel_y_m
+    return float(world_x), float(-north_m)
+
+
+def _route_point_payload(
+    point: GPSPoint | AlignedNoisePoint,
+    row: int,
+    col: int,
+    area_m: float,
+    shape: tuple[int, int],
+    grid_bounds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    world_x, world_z = _pixel_to_world(row, col, area_m, shape, grid_bounds)
+    payload: dict[str, Any] = {
+        "time_stamp": point.time_stamp.isoformat(),
+        "lat": float(point.lat),
+        "lon": float(point.lon),
+        "alt": float(point.alt),
+        "row": int(row),
+        "col": int(col),
+        "world_x": world_x,
+        "world_z": world_z,
+        "in_bounds": True,
+    }
+    if isinstance(point, AlignedNoisePoint):
+        payload["noise_floor_db"] = float(point.noise_floor_db)
+        payload["used_in_sparse"] = False
+    return payload
 
 
 def _normalize_radio_map(values: np.ndarray) -> np.ndarray:
@@ -261,12 +333,22 @@ def create_route_sparse_sample(
     outdoor_mask = (building <= 3.0).astype(np.float32)
     iss_sparse_dbm = np.full_like(building, ISS_MIN_DBM, dtype=np.float32)
     area_m = _scene_area_m(dataset)
+    grid_bounds = _scene_grid_bounds(dataset, building.shape)
     route_points, aligned_noise, skipped_noise = _route_points_for_mode(mode, gps_points, noise_points)
     out_of_bounds = 0
     indoor_filtered = 0
     valid_projected_points = 0
     duplicate_points = 0
     valid_projected_noise_dbm: list[float] = []
+    projected_route_points: list[dict[str, Any]] = []
+    projected_aligned_points: list[dict[str, Any]] = []
+    projected_sparse_points: list[dict[str, Any]] = []
+
+    for gps_point in gps_points:
+        pixel = _latlon_to_pixel(gps_point.lat, gps_point.lon, center[0], center[1], area_m, building.shape)
+        if pixel is not None:
+            row, col = pixel
+            projected_route_points.append(_route_point_payload(gps_point, row, col, area_m, building.shape, grid_bounds))
 
     for point in route_points:
         pixel = _latlon_to_pixel(point.lat, point.lon, center[0], center[1], area_m, building.shape)
@@ -274,6 +356,9 @@ def create_route_sparse_sample(
             out_of_bounds += 1
             continue
         row, col = pixel
+        payload = _route_point_payload(point, row, col, area_m, building.shape, grid_bounds)
+        if isinstance(point, AlignedNoisePoint):
+            projected_aligned_points.append(payload)
         if apply_building_mask and outdoor_mask[row, col] < 0.5:
             indoor_filtered += 1
             continue
@@ -286,6 +371,8 @@ def create_route_sparse_sample(
             clipped_noise = float(np.clip(point.noise_floor_db, ISS_MIN_DBM, ISS_MAX_DBM))
             iss_sparse_dbm[row, col] = clipped_noise
             valid_projected_noise_dbm.append(clipped_noise)
+            payload["used_in_sparse"] = True
+            projected_sparse_points.append(dict(payload))
         else:
             iss_sparse_dbm[row, col] = float(arrays["iss"][row, col])
 
@@ -321,4 +408,7 @@ def create_route_sparse_sample(
         iss_sparse_dbm=iss_sparse_dbm,
         inputs=inputs,
         metrics=metrics,
+        route_points=projected_route_points,
+        aligned_points=projected_aligned_points,
+        sparse_points=projected_sparse_points,
     )

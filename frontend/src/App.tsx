@@ -28,7 +28,7 @@ import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
-import type { HeatmapOverlayConfig } from './types/heatmap';
+import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from './types/heatmap';
 
 // ── 環境變數 ────────────────────────────────────────────────────────
 
@@ -378,6 +378,7 @@ export function App() {
   const simulationUsesGeneratedScene = Boolean(activeGeneratedScene);
   const [cfarClusters, setCfarClusters] = useState<CFARCluster[]>([]);
   const [heatmapOverlay, setHeatmapOverlay] = useState<HeatmapOverlayConfig | null>(null);
+  const [issRouteOverlay, setIssRouteOverlay] = useState<ISSRouteOverlayConfig | null>(null);
   const cfarBeacons = useMemo<CFARBeacon[]>(() => (
     cfarClusters.map((cluster) => {
       const gps = worldXZToLatLon(cluster.world_x, cluster.world_z, activeOrigin);
@@ -393,6 +394,7 @@ export function App() {
   useEffect(() => {
     setCfarClusters([]);
     setHeatmapOverlay(null);
+    setIssRouteOverlay(null);
   }, [activeOriginKey, simulationSceneId]);
 
   // ── Render ────────────────────────────────────────────────────────
@@ -411,6 +413,7 @@ export function App() {
         otherUavs={otherUavs}
         cfarBeacons={cfarBeacons}
         heatmapOverlay={heatmapOverlay}
+        issRouteOverlay={issRouteOverlay}
         generatedSceneModelPath={activeGeneratedScene?.modelPath}
         onPositionUpdate={(pos) => {
           setUavPosition(pos);
@@ -484,6 +487,7 @@ export function App() {
           generatedScene={simulationUsesGeneratedScene}
           onCfarClustersChange={setCfarClusters}
           onHeatmapOverlayChange={setHeatmapOverlay}
+          onRouteOverlayChange={setIssRouteOverlay}
         />
       )}
 

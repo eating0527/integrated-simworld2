@@ -103,6 +103,9 @@ class ISSUNetArtifacts:
     model_inference: bool
     cfar_params: ISSUNetCFARParams
     cfar_result: dict[str, Any] | None
+    route_points: list[dict[str, Any]]
+    aligned_points: list[dict[str, Any]]
+    sparse_points: list[dict[str, Any]]
 
 
 def _canonical_scene(scene: str) -> str:
@@ -687,6 +690,19 @@ def _render_reconstructed_png(reconstructed_iss: np.ndarray, mode_label: str = "
     return _figure_to_png(fig)
 
 
+def _route_polyline_points(route_points: list[dict[str, Any]]) -> list[tuple[float, float]]:
+    points = []
+    for point in route_points:
+        try:
+            row = float(point["row"])
+            col = float(point["col"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if np.isfinite(row) and np.isfinite(col):
+            points.append((col, row))
+    return points
+
+
 def _render_comparison_png(
     arrays: dict[str, np.ndarray],
     reconstructed_iss: np.ndarray,
@@ -695,6 +711,7 @@ def _render_comparison_png(
     sparse_ratio: float,
     mode_label: str = "Sim",
     sparse_values_dbm: np.ndarray | None = None,
+    route_points: list[dict[str, Any]] | None = None,
 ) -> bytes:
     error = np.abs(reconstructed_iss - arrays["iss"])
     outdoor_pixels = outdoor_mask > 0.5
@@ -714,6 +731,16 @@ def _render_comparison_png(
     ]
     for ax, (data, title, cmap, vmin, vmax, label) in zip(axes.flat, panels):
         im = ax.imshow(data, cmap=cmap, origin="upper", vmin=vmin, vmax=vmax)
+        if title == sparse_title and route_points:
+            points = _route_polyline_points(route_points)
+            if len(points) >= 2:
+                ax.plot(
+                    [point[0] for point in points],
+                    [point[1] for point in points],
+                    color="white",
+                    linewidth=1.2,
+                    alpha=0.95,
+                )
         ax.set_title(title)
         ax.axis("off")
         if label:
@@ -927,6 +954,9 @@ def _build_iss_unet_artifacts(
                 arrays[key] = _resize_radio_map(_clip_radio_map(values), arrays["building"].shape)
 
     sparse_values_dbm = None
+    route_points: list[dict[str, Any]] = []
+    aligned_points: list[dict[str, Any]] = []
+    sparse_points: list[dict[str, Any]] = []
     real_metrics: dict[str, Any] = {
         "mode": mode,
         "route_points": 0,
@@ -956,6 +986,9 @@ def _build_iss_unet_artifacts(
         outdoor_mask = route_sample.outdoor_mask
         sparse_values_dbm = route_sample.iss_sparse_dbm
         real_metrics = route_sample.metrics
+        route_points = route_sample.route_points
+        aligned_points = route_sample.aligned_points
+        sparse_points = route_sample.sparse_points
 
     model_inference = False
     if mode in {"sim", "gps"}:
@@ -993,6 +1026,9 @@ def _build_iss_unet_artifacts(
         model_inference=model_inference,
         cfar_params=cfar,
         cfar_result=cfar_result,
+        route_points=route_points,
+        aligned_points=aligned_points,
+        sparse_points=sparse_points,
     )
 
 
@@ -1061,6 +1097,7 @@ def reconstruct_iss_unet(
             sparse_ratio,
             mode_label=mode_label,
             sparse_values_dbm=sparse_values_dbm,
+            route_points=artifacts.route_points,
         )
     reconstructed_path.write_bytes(reconstructed_png)
     comparison_path.write_bytes(comparison_png)
@@ -1102,6 +1139,11 @@ def reconstruct_iss_unet(
             "cfar": result_image_url(cfar_path.name) if cfar.enabled else None,
         },
         "overlay": _overlay_metadata(dataset, npy_path.name, reconstructed_iss.shape),
+        "route": {
+            "all_points": artifacts.route_points,
+            "aligned_points": artifacts.aligned_points,
+            "sparse_points": artifacts.sparse_points,
+        },
         "files": {
             "reconstructed_png": str(reconstructed_path),
             "comparison_png": str(comparison_path),

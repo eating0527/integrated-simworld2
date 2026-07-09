@@ -19,8 +19,9 @@ import { Tower } from './Tower';
 import UAVFlight, { UAVManualDirection } from './UAVFlight';
 import { CFARBeaconMarker } from './CFARBeaconMarker';
 import type { CFARBeacon } from '../../types/cfar';
-import type { HeatmapOverlayConfig } from '../../types/heatmap';
+import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from '../../types/heatmap';
 import { ISSHeatmapOverlay } from './ISSHeatmapOverlay';
+import { ISSRouteOverlay } from './ISSRouteOverlay';
 
 function Loader({ label }: { label: string }) {
   return (
@@ -51,6 +52,7 @@ interface MainSceneProps {
   cfarBeacons?: CFARBeacon[];
   generatedSceneModelPath?: string; // Path to dynamically generated GLB model
   heatmapOverlay?: HeatmapOverlayConfig | null;
+  issRouteOverlay?: ISSRouteOverlayConfig | null;
 }
 
 export function MainScene({
@@ -66,6 +68,7 @@ export function MainScene({
   cfarBeacons = [],
   generatedSceneModelPath,
   heatmapOverlay = null,
+  issRouteOverlay = null,
 }: MainSceneProps) {
   const sceneDef = getSceneById(sceneId);
   const cfg = sceneDef.config;
@@ -138,6 +141,7 @@ export function MainScene({
 
         <Suspense fallback={null}>
           {heatmapOverlay && <ISSHeatmapOverlay overlay={heatmapOverlay} />}
+          {issRouteOverlay && <ISSRouteOverlay overlay={issRouteOverlay} />}
           <UAVFlight
             position={uavPosition}
             scale={[10, 10, 10]}
