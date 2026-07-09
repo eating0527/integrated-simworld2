@@ -36,6 +36,9 @@ docker-compose.override.yml
 *.log
 /tmp/
 
+# Capture control mission data
+incoming/mission_*/
+
 # Runtime-generated logs and temp files
 .logs/
 .test_tmp/
