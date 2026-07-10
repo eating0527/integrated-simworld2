@@ -1,7 +1,7 @@
 import type React from 'react';
 import type { GPSDevice } from '@/hooks/useGPSSync';
 import { MinPanel } from './MinPanel';
-import { PANEL_POS, PanelField, PanelFooter, PanelGrid, PanelSection, PanelStatus, type PanelStatusTone } from './PanelUi';
+import { PanelField, PanelFooter, PanelGrid, PanelSection, PanelStatus, type PanelStatusTone } from './PanelUi';
 
 interface Props {
   myDeviceId: string;
@@ -114,8 +114,7 @@ export function GPSStatus({
     <MinPanel
       className="panel-ui"
       title="連線狀態"
-      draggable
-      style={{ ...PANEL_POS.gps, ...style }}
+      style={style}
       actions={<PanelStatus tone={st.tone} label={st.label} />}
     >
       <div style={S.row}>

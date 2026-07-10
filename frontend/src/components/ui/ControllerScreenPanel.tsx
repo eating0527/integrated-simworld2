@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { MinPanel } from './MinPanel';
-import { PANEL_POS, PanelStatus } from './PanelUi';
+import { PanelStatus } from './PanelUi';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -13,8 +13,6 @@ export function ControllerScreenPanel() {
     <MinPanel
       className="panel-ui controller-screen-panel"
       title="無人機畫面"
-      draggable
-      style={PANEL_POS.controller}
       actions={(
         <PanelStatus tone={connected ? 'live' : 'waiting'} label={connected ? 'Live' : 'Waiting'} />
       )}

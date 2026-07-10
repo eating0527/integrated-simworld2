@@ -53,10 +53,6 @@ canvas {
 }
 
 .scene-switcher {
-  position: fixed;
-  top: 16px;
-  left: 50%;
-  z-index: 1000;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -70,7 +66,6 @@ canvas {
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  transform: translateX(-50%);
 }
 
 .scene-switcher__eyebrow {
@@ -251,13 +246,9 @@ canvas {
 
 @media (max-width: 680px) {
   .scene-switcher {
-    top: 8px;
-    right: 8px;
-    left: 8px;
     width: auto;
     max-width: none;
     gap: 4px;
-    transform: none;
   }
 
   .scene-switcher__eyebrow {
@@ -1165,5 +1156,233 @@ canvas {
 .panel-ui.controller-screen-panel .controller-screen-panel__frame {
   margin: 0;
   border-radius: 6px;
+}
+
+// Workspace owns desktop panel placement; component-level positions only apply outside it.
+.workspace {
+  --rail-width: clamp(292px, 23vw, 360px);
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: #0b1015;
+}
+
+.workspace__stage {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace__top {
+  position: absolute;
+  z-index: 30;
+  top: 12px;
+  left: 50%;
+  max-width: calc(100vw - 48px);
+  transform: translateX(-50%);
+}
+
+.workspace__top .scene-switcher {
+  width: min(100%, 920px);
+  overflow: visible;
+}
+
+.workspace__rail {
+  position: absolute;
+  z-index: 25;
+  top: 76px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: var(--rail-width);
+  padding: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  pointer-events: none;
+  scrollbar-color: rgba(47, 211, 184, 0.38) transparent;
+  scrollbar-width: thin;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+.workspace__rail--left {
+  left: 12px;
+  transform: translateX(calc(-100% - 18px));
+}
+
+.workspace__rail--right {
+  right: 12px;
+  transform: translateX(calc(100% + 18px));
+}
+
+.workspace__rail.is-open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.workspace__rail > * {
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  flex: 0 0 auto;
+}
+
+.workspace__rail .device-panel,
+.workspace__rail .controller-screen-panel,
+.workspace__rail .photo-viewer,
+.workspace__rail .panel-ui {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.workspace__rail .device-panel {
+  bottom: auto !important;
+  height: auto;
+  max-height: none;
+}
+
+.workspace__rail .photo-viewer {
+  max-height: 62vh;
+  animation: none;
+}
+
+.workspace__rail .min-panel {
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  resize: vertical;
+}
+
+.workspace__rail .min-panel:not(.is-min) .min-panel__body-inner {
+  overflow: auto;
+}
+
+.workspace__rail .simulation-panel:not(.is-min) {
+  max-height: min(78vh, 820px);
+}
+
+.workspace__rail .min-panel.is-min,
+.workspace__rail .min-panel.is-min .min-panel__bar {
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace__rail .min-panel.is-min .min-panel__title-btn {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.workspace__rail-controls,
+.workspace__drawer-controls {
+  position: absolute;
+  z-index: 35;
+  display: flex;
+  gap: 8px;
+}
+
+.workspace__rail-controls {
+  top: 16px;
+  right: 16px;
+}
+
+.workspace__drawer-controls {
+  display: none;
+  right: 12px;
+  bottom: 12px;
+}
+
+.workspace__rail-controls button,
+.workspace__drawer-controls button {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 7px 10px;
+  color: #d8fffa;
+  background: rgba(10, 23, 28, 0.9);
+  border: 1px solid rgba(47, 211, 184, 0.42);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+
+.workspace__backdrop {
+  display: none;
+}
+
+.min-panel__chevron {
+  display: inline-block;
+  margin-left: 8px;
+  transition: transform 0.18s ease;
+}
+
+.min-panel.is-min .min-panel__chevron {
+  transform: rotate(-90deg);
+}
+
+@media (max-width: 1099px) {
+  .workspace__rail {
+    z-index: 45;
+    top: 12px;
+    bottom: 12px;
+    width: min(var(--rail-width), calc(100vw - 44px));
+    padding: 6px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .workspace__rail--left,
+  .workspace__rail--right {
+    transform: translateX(calc(100% + 24px));
+  }
+
+  .workspace__rail--left {
+    left: 12px;
+  }
+
+  .workspace__rail--right {
+    right: 12px;
+  }
+
+  .workspace__rail.is-mobile-open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .workspace__rail-controls {
+    display: none;
+  }
+
+  .workspace__drawer-controls {
+    display: flex;
+  }
+
+  .workspace__backdrop {
+    position: absolute;
+    z-index: 40;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgba(2, 8, 11, 0.62);
+    backdrop-filter: blur(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace__rail,
+  .workspace__backdrop,
+  .min-panel,
+  .min-panel__body,
+  .min-panel__chevron,
+  .photo-viewer {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+  }
 }
 

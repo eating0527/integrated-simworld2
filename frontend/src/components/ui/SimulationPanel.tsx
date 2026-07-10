@@ -140,7 +140,6 @@ export function SimulationPanel({
   onGpsReplayStop,
   onGpsReplayRateChange,
 }: SimulationPanelProps) {
-  const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
   const [preview, setPreview] = useState<{ url: string; title: string; downloadName?: string } | null>(null);
   const [issUnetActiveView, setIssUnetActiveView] = useState<ISSUNetViewKey>('comparison');
@@ -507,69 +506,7 @@ export function SimulationPanel({
 
   return (
     <>
-      <button
-        aria-label="Sionna simulation panel"
-        onClick={() => setOpen(v => !v)}
-        style={{
-          position:    'fixed',
-          bottom:       14,
-          right:        14,
-          zIndex:       1000,
-          background:   open
-            ? 'linear-gradient(135deg, #0ff 0%, #09f 100%)'
-            : 'linear-gradient(135deg, rgba(0,255,255,.15) 0%, rgba(0,153,255,.2) 100%)',
-          border:       '1px solid rgba(0,255,255,.4)',
-          borderRadius: 12,
-          padding:      '8px 14px',
-          color:        open ? '#000' : '#0ff',
-          fontWeight:   700,
-          fontSize:     13,
-          cursor:       'pointer',
-          backdropFilter: 'blur(12px)',
-          boxShadow:    '0 4px 20px rgba(0,255,255,.2)',
-          transition:   'all .2s',
-          letterSpacing: '.5px',
-        }}
-      >
-        📡 無線模擬
-      </button>
-
-      {open && (
-        <MinPanel
-          title="無線通道模擬"
-          draggable
-          style={{
-          position:       'fixed',
-          bottom:          60,
-          right:           14,
-          zIndex:          999,
-          width:           440,
-          maxHeight:       '80vh',
-          display:         'flex',
-          flexDirection:   'column',
-          background:      'rgba(10,15,30,.82)',
-          backdropFilter:  'blur(20px) saturate(180%)',
-          border:          '1px solid rgba(0,255,255,.18)',
-          borderRadius:    16,
-          boxShadow:       '0 8px 40px rgba(0,255,255,.12), 0 2px 8px rgba(0,0,0,.5)',
-          overflow:        'hidden',
-          animation:       'slide-in-left .25s ease',
-        }}
-        >
-
-          <div style={{ padding: '12px 16px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#0ff', fontSize: 13, fontWeight: 700, letterSpacing: 1, flex: 1 }}>
-              SIONNA 無線通道模擬
-            </span>
-            <button
-              aria-label="Close simulation panel"
-              onClick={() => setOpen(false)}
-              style={{
-                background: 'none', border: 'none', color: 'rgba(255,255,255,.45)',
-                cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2,
-              }}
-            >×</button>
-          </div>
+      <MinPanel title="無線通道模擬" className="panel-ui simulation-panel">
 
           {/* 頁籤 */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '10px 12px 0', flexShrink: 0 }}>
@@ -1028,8 +965,7 @@ export function SimulationPanel({
               </p>
             )}
           </div>
-        </MinPanel>
-      )}
+      </MinPanel>
 
       {preview && (
         <div className="sim-modal__overlay" onClick={() => setPreview(null)}>

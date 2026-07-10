@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import { MinPanel } from './MinPanel';
-import { PANEL_POS, PanelStatus } from './PanelUi';
+import { PanelStatus } from './PanelUi';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -316,8 +316,6 @@ export function USRPTelemetry() {
     <MinPanel
       title="採樣控制面板"
       className="panel-ui"
-      draggable
-      style={{ ...PANEL_POS.usrp, width: 380 }}
       actions={<PanelStatus tone={anyActive ? 'live' : 'waiting'} label={anyActive ? 'Active' : 'Ready'} />}
     >
       <div style={S.control}>

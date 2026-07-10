@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useState, useRef, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
 import { ManualDirection } from '../../hooks/useManualControl';
 import { MinPanel } from './MinPanel';
 
@@ -227,55 +227,10 @@ export function UAVControlPanel({
   onToggleAnimation,
   onManualControl,
 }: UAVControlPanelProps) {
-  const [open, setOpen] = useState(false);
   const [x, y, z] = uavPosition;
 
   return (
-    <>
-      <button
-        onClick={() => setOpen(v => !v)}
-        style={{
-          position: 'fixed',
-          bottom: 14,
-          left: 14,
-          zIndex: 1000,
-          background: open
-            ? 'linear-gradient(135deg, #4af 0%, #06f 100%)'
-            : 'linear-gradient(135deg, rgba(68,170,255,.15) 0%, rgba(0,102,255,.2) 100%)',
-          border: '1px solid rgba(68,170,255,.45)',
-          borderRadius: 12,
-          padding: '8px 14px',
-          color: open ? '#000' : '#4af',
-          fontWeight: 700,
-          fontSize: 13,
-          cursor: 'pointer',
-          backdropFilter: 'blur(12px)',
-          boxShadow: '0 4px 20px rgba(68,170,255,.2)',
-          transition: 'all .2s',
-          letterSpacing: '.5px',
-        }}
-      >
-        UAV 控制
-      </button>
-
-      {open && (
-        <MinPanel
-          title="無人機控制"
-          draggable
-          style={{
-          position: 'fixed',
-          bottom: 60,
-          left: 14,
-          zIndex: 999,
-          background: 'rgba(8,16,32,.88)',
-          backdropFilter: 'blur(20px) saturate(180%)',
-          border: '1px solid rgba(68,170,255,.22)',
-          borderRadius: 16,
-          boxShadow: '0 8px 40px rgba(68,170,255,.14), 0 2px 8px rgba(0,0,0,.5)',
-          overflow: 'hidden',
-          animation: 'slide-in-left .25s ease',
-        }}
-        >
+    <MinPanel title="無人機控制" className="panel-ui uav-control-panel">
           <div style={{ ...S.panel, borderRadius: 0, border: 'none', boxShadow: 'none' }}>
 
       {/* Mode toggles */}
@@ -343,8 +298,6 @@ export function UAVControlPanel({
         </div>
       </div>
           </div>
-        </MinPanel>
-      )}
-    </>
+    </MinPanel>
   );
 }

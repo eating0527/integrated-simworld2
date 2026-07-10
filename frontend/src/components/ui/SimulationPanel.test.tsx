@@ -142,7 +142,6 @@ function deferredPngResponse() {
 async function openPanel() {
   const user = userEvent.setup();
   render(<SimulationPanel sceneId="NTPU" />);
-  await user.click(screen.getByRole('button', { name: /sionna/i }));
   return user;
 }
 
@@ -170,14 +169,18 @@ describe('SimulationPanel UI', () => {
     vi.unstubAllGlobals();
   });
 
-  it('opens and closes the Sionna simulation panel', async () => {
+  it('starts expanded and can minimize then restore the simulation panel', async () => {
     const user = await openPanel();
 
     expect(screen.getByRole('button', { name: 'SINR Map' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /close simulation panel/i }));
+    await user.click(screen.getByRole('button', { name: 'Minimize 無線通道模擬' }));
 
     expect(screen.queryByRole('button', { name: 'SINR Map' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Restore 無線通道模擬' }));
+
+    expect(screen.getByRole('button', { name: 'SINR Map' })).toBeInTheDocument();
   });
 
   it('switches tabs and shows CFR advanced controls', async () => {
@@ -329,7 +332,6 @@ describe('SimulationPanel UI', () => {
     }
     render(<Harness />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     expect(screen.queryByRole('button', { name: 'GPS replay play' })).not.toBeInTheDocument();
 
@@ -352,7 +354,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onCfarClustersChange={onCfarClustersChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
 
@@ -373,7 +374,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
 
@@ -391,7 +391,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
 
@@ -422,7 +421,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
     await runCurrentTab(user);
@@ -451,7 +449,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
 
@@ -468,7 +465,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
 
@@ -485,7 +481,6 @@ describe('SimulationPanel UI', () => {
     const user = userEvent.setup();
     const { rerender } = render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
 
-    await user.click(screen.getByRole('button', { name: /sionna/i }));
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
     await user.click(await screen.findByRole('checkbox', { name: '3D Heatmap Overlay' }));

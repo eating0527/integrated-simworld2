@@ -1,7 +1,7 @@
 import type React from 'react';
 import type { GPSDevice } from '@/hooks/useGPSSync';
 import { MinPanel } from './MinPanel';
-import { PANEL_POS, PanelEmpty, PanelField, PanelFooter, PanelGrid, PanelStatus } from './PanelUi';
+import { PanelEmpty, PanelField, PanelFooter, PanelGrid, PanelStatus } from './PanelUi';
 
 interface Props {
   deviceId?: string | null;
@@ -52,16 +52,15 @@ export function AircraftTelemetry({ deviceId, device, isTracked, compact = false
     <MinPanel
       title="無人機遙測"
       className="panel-ui"
-      draggable
-      style={{
-        ...PANEL_POS.aircraft,
-        left: compact ? 12 : PANEL_POS.aircraft.left,
-        right: compact ? 12 : undefined,
-        top: compact ? 'auto' : PANEL_POS.aircraft.top,
-        bottom: compact ? 12 : undefined,
-        width: compact ? 'calc(100vw - 24px)' : PANEL_POS.aircraft.width,
-        maxWidth: compact ? 320 : undefined,
-      }}
+      style={compact ? {
+        position: 'fixed',
+        right: 12,
+        bottom: 12,
+        left: 12,
+        zIndex: 998,
+        width: 'calc(100vw - 24px)',
+        maxWidth: 320,
+      } : undefined}
       actions={(
         <PanelStatus tone={device ? 'live' : 'waiting'} label={device ? 'Live' : 'Waiting'} />
       )}

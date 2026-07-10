@@ -25,6 +25,7 @@ import { DevicePanel } from './components/ui/DevicePanel';
 import { UAVControlPanel } from './components/ui/UAVControlPanel';
 import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
 import { USRPTelemetry } from './components/ui/USRPTelemetry';
+import { Workspace } from './components/ui/Workspace';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
@@ -476,9 +477,85 @@ export function App() {
     setIssRouteOverlay(null);
   }, [activeOriginKey, simulationSceneId]);
 
+  const aircraftPanel = (
+    <AircraftTelemetry
+      deviceId={aircraftEntry?.[0] ?? null}
+      device={aircraftEntry?.[1] ?? null}
+      isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
+      compact={isMobile}
+      onTrack={() => {
+        if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
+      }}
+    />
+  );
+  const gpsPanel = (
+    <GPSStatus
+      myDeviceId={myDeviceId}
+      deviceName={deviceName}
+      onRenameClick={handleRename}
+      allDevices={allDevices}
+      uavPath={uavPath}
+      onClearPath={handleClearPath}
+      connectionStatus={connectionStatus}
+      localGPS={currentGPS}
+      selectedDeviceId={selectedDeviceId}
+      onSelectDevice={setSelectedDeviceId}
+    />
+  );
+
   // ── Render ────────────────────────────────────────────────────────
   return (
-    <div style={{ width: '100vw', height: '100dvh', position: 'relative' }}>
+    <Workspace
+      top={!isMobile && (
+        <SceneSwitcher
+          selectedScene={selectedScene}
+          generatedScenes={generatedScenes.scenes}
+          generatedStatus={generatedScenes.status}
+          onSelectPreset={(id) => {
+            setLastPresetSceneId(id);
+            setSelectedScene({ source: 'preset', id });
+          }}
+          onSelectGenerated={(taskId) => {
+            setSelectedScene({ source: 'generated', taskId });
+          }}
+        />
+      )}
+      left={!isMobile && (
+        <>
+          <DevicePanel onApplyRxPosition={(pos) => setUavPosition(pos)} />
+          <UAVControlPanel
+            auto={auto}
+            uavAnimation={uavAnimation}
+            uavPosition={uavPosition}
+            onToggleAuto={handleToggleAuto}
+            onToggleAnimation={() => setUavAnimation(prev => !prev)}
+            onManualControl={handleManualControl}
+          />
+          <USRPTelemetry />
+        </>
+      )}
+      right={!isMobile && (
+        <>
+          {aircraftPanel}
+          {gpsPanel}
+          <ControllerScreenPanel />
+          <SimulationPanel
+            sceneId={simulationSceneId}
+            generatedScene={simulationUsesGeneratedScene}
+            onCfarClustersChange={setCfarClusters}
+            onHeatmapOverlayChange={setHeatmapOverlay}
+            onRouteOverlayChange={setIssRouteOverlay}
+            gpsReplayRate={gpsReplayRate}
+            gpsReplayPlaying={gpsReplayPlaying}
+            onGpsReplayPlay={handleGpsReplayPlay}
+            onGpsReplayPause={handleGpsReplayPause}
+            onGpsReplayStop={handleGpsReplayStop}
+            onGpsReplayRateChange={setGpsReplayRate}
+          />
+          <PhotoViewer photos={photos} onDelete={handleDelete} />
+        </>
+      )}
+    >
 
       {/* 3D 場景 */}
       <MainScene
@@ -504,54 +581,8 @@ export function App() {
         }}
       />
 
-      {/* Device Configuration 面板 (加入 sim-world-lite 的裝置設定) */}
-      {!isMobile && (
-        <DevicePanel onApplyRxPosition={(pos) => setUavPosition(pos)} />
-      )}
-
-      {/* UAV Control 面板 (手動控制/自動移動) */}
-      {!isMobile && (
-        <UAVControlPanel
-          auto={auto}
-          uavAnimation={uavAnimation}
-          uavPosition={uavPosition}
-          onToggleAuto={handleToggleAuto}
-          onToggleAnimation={() => setUavAnimation(prev => !prev)}
-          onManualControl={handleManualControl}
-        />
-      )}
-
-      {/* GPS 狀態 HUD */}
-      <AircraftTelemetry
-        deviceId={aircraftEntry?.[0] ?? null}
-        device={aircraftEntry?.[1] ?? null}
-        isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
-        compact={isMobile}
-        onTrack={() => {
-          if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
-        }}
-      />
-      {!isMobile && (
-        <USRPTelemetry />
-      )}
-
-      <GPSStatus
-        myDeviceId={myDeviceId}
-        deviceName={deviceName}
-        onRenameClick={handleRename}
-        allDevices={allDevices}
-        uavPath={uavPath}
-        onClearPath={handleClearPath}
-        connectionStatus={connectionStatus}
-        localGPS={currentGPS}
-        selectedDeviceId={selectedDeviceId}
-        onSelectDevice={setSelectedDeviceId}
-      />
-
-      {/* 照片歷史（電腦端） */}
-      {!isMobile && (
-        <PhotoViewer photos={photos} onDelete={handleDelete} />
-      )}
+      {isMobile && aircraftPanel}
+      {isMobile && gpsPanel}
 
       {/* 拍照上傳（手機端） */}
       <CameraUpload
@@ -559,40 +590,6 @@ export function App() {
         deviceId={myDeviceId}
       />
 
-      {/* Sionna 無線模擬面板（電腦端） */}
-      {!isMobile && (
-        <SimulationPanel
-          sceneId={simulationSceneId}
-          generatedScene={simulationUsesGeneratedScene}
-          onCfarClustersChange={setCfarClusters}
-          onHeatmapOverlayChange={setHeatmapOverlay}
-          onRouteOverlayChange={setIssRouteOverlay}
-          gpsReplayRate={gpsReplayRate}
-          gpsReplayPlaying={gpsReplayPlaying}
-          onGpsReplayPlay={handleGpsReplayPlay}
-          onGpsReplayPause={handleGpsReplayPause}
-          onGpsReplayStop={handleGpsReplayStop}
-          onGpsReplayRateChange={setGpsReplayRate}
-        />
-      )}
-
-      {/* 場景切換器 */}
-      {!isMobile && <ControllerScreenPanel />}
-
-      {!isMobile && (
-        <SceneSwitcher
-          selectedScene={selectedScene}
-          generatedScenes={generatedScenes.scenes}
-          generatedStatus={generatedScenes.status}
-          onSelectPreset={(id) => {
-            setLastPresetSceneId(id);
-            setSelectedScene({ source: 'preset', id });
-          }}
-          onSelectGenerated={(taskId) => {
-            setSelectedScene({ source: 'generated', taskId });
-          }}
-        />
-      )}
-    </div>
+    </Workspace>
   );
 }

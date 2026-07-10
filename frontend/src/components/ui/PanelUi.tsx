@@ -2,13 +2,6 @@ import type React from 'react';
 
 export type PanelStatusTone = 'live' | 'waiting' | 'warning' | 'danger' | 'neutral';
 
-export const PANEL_POS = {
-  aircraft: { position: 'fixed', top: 14, left: 276, zIndex: 998, width: 300 },
-  usrp: { position: 'fixed', top: 132, left: 276, zIndex: 997, width: 340 },
-  gps: { position: 'fixed', top: 14, right: 14, zIndex: 999, width: 280 },
-  controller: { position: 'fixed', top: 240, right: 14, zIndex: 955, width: 'min(34vw, 420px)', minWidth: 320 },
-} satisfies Record<string, React.CSSProperties>;
-
 export function PanelStatus({ label, tone = 'neutral' }: { label: React.ReactNode; tone?: PanelStatusTone }) {
   return (
     <span className={`panel-ui-status panel-ui-status--${tone}`}>
