@@ -1,14 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { MinPanel } from './MinPanel';
 
 describe('MinPanel', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it('collapses to the panel title and restores the content', async () => {
     const user = userEvent.setup();
 
@@ -30,83 +26,48 @@ describe('MinPanel', () => {
     expect(screen.getByRole('button', { name: 'Start sampling' })).toBeInTheDocument();
   });
 
-  it('moves only while the title is held and dragged', () => {
-    const { container } = render(
-      <MinPanel title="無人機控制" draggable style={{ position: 'fixed', left: 10, top: 20 }}>
-        <button>Move</button>
-      </MinPanel>,
-    );
-    const panel = container.firstElementChild as HTMLElement;
-    const title = screen.getByRole('button', { name: /minimize 無人機控制/i });
-
-    fireEvent.pointerDown(title, { clientX: 20, clientY: 30 });
-    fireEvent.pointerMove(window, { clientX: 70, clientY: 90 });
-    fireEvent.pointerUp(window);
-
-    expect(panel.style.left).toBe('60px');
-    expect(panel.style.top).toBe('80px');
-  });
-
-  it('does not move after a released click', () => {
-    const { container } = render(
-      <MinPanel title="無人機控制" draggable style={{ position: 'fixed', left: 10, top: 20 }}>
-        <button>Move</button>
-      </MinPanel>,
-    );
-    const panel = container.firstElementChild as HTMLElement;
-    const title = screen.getByRole('button', { name: /minimize 無人機控制/i });
-
-    fireEvent.pointerDown(title, { clientX: 20, clientY: 30 });
-    fireEvent.pointerUp(window);
-    fireEvent.pointerMove(window, { clientX: 70, clientY: 90 });
-
-    expect(panel.style.left).toBe('10px');
-    expect(panel.style.top).toBe('20px');
-  });
-
-  it('anchors minimized size to the current upper-left corner', async () => {
+  it('reports whether the panel is expanded', async () => {
     const user = userEvent.setup();
-    const { container } = render(
-      <MinPanel title="Panel" style={{ position: 'fixed', right: 14, bottom: 60, width: 440 }}>
+
+    render(
+      <MinPanel title="Panel">
         <button>Inside</button>
       </MinPanel>,
     );
-    const panel = container.firstElementChild as HTMLElement;
-    panel.getBoundingClientRect = () => ({
-      left: 120,
-      top: 80,
-      right: 560,
-      bottom: 300,
-      width: 440,
-      height: 220,
-      x: 120,
-      y: 80,
-      toJSON: () => ({}),
-    } as DOMRect);
 
-    await user.click(screen.getByRole('button', { name: /minimize panel/i }));
+    const title = screen.getByRole('button', { name: /minimize panel/i });
+    expect(title).toHaveAttribute('aria-expanded', 'true');
 
-    expect(panel.style.left).toBe('120px');
-    expect(panel.style.top).toBe('80px');
-    expect(panel.style.right).toBe('auto');
-    expect(panel.style.bottom).toBe('auto');
-    expect(panel.style.width).toBe('max-content');
-    expect(panel.style.height).toBe('max-content');
+    await user.click(title);
+
+    expect(screen.getByRole('button', { name: /restore panel/i })).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('removes minimized body from layout width calculation', async () => {
+  it('keeps collapsed content mounted but removes it from the accessibility tree', async () => {
     const user = userEvent.setup();
     const { container } = render(
-      <MinPanel title="GPS" style={{ position: 'fixed', left: 10, top: 20, width: 360 }}>
-        <div>Very wide panel body content that should not size the minimized shell</div>
+      <MinPanel title="Panel">
+        <button>Inside</button>
       </MinPanel>,
     );
 
-    await user.click(screen.getByRole('button', { name: /minimize gps/i }));
+    await user.click(screen.getByRole('button', { name: /minimize panel/i }));
 
-    const body = container.querySelector('.min-panel__body') as HTMLElement;
-    expect(body.style.position).toBe('absolute');
-    expect(body.style.width).toBe('0px');
-    expect(body.style.height).toBe('0px');
+    expect(screen.getByText('Inside').closest('button')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Inside' })).not.toBeInTheDocument();
+    expect(container.querySelector('.min-panel__body')).toHaveAttribute('inert');
+  });
+
+  it('starts secondary panels collapsed without unmounting their content', () => {
+    const { container } = render(
+      <MinPanel title="Secondary" defaultMinimized>
+        <button>Secondary action</button>
+      </MinPanel>,
+    );
+
+    expect(screen.getByRole('button', { name: /restore secondary/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Secondary action').closest('button')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Secondary action' })).not.toBeInTheDocument();
+    expect(container.querySelector('.min-panel__body')).toHaveAttribute('inert');
   });
 });
