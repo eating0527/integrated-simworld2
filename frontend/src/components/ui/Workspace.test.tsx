@@ -56,13 +56,28 @@ describe('Workspace', () => {
 
     for (const workspace of workspaces) {
       const instanceRails = Array.from(workspace.querySelectorAll<HTMLElement>('aside.workspace__rail'));
-      const controls = within(workspace).getAllByRole('button');
+      const leftRail = instanceRails.find(rail => rail.classList.contains('workspace__rail--left'));
+      const rightRail = instanceRails.find(rail => rail.classList.contains('workspace__rail--right'));
 
       expect(instanceRails).toHaveLength(2);
-      expect(controls).toHaveLength(4);
-      for (const control of controls) {
-        expect(instanceRails.some(rail => rail.id === control.getAttribute('aria-controls'))).toBe(true);
-      }
+      expect(leftRail).toBeDefined();
+      expect(rightRail).toBeDefined();
+      expect(within(workspace).getByRole('button', { name: '切換左側工作區' })).toHaveAttribute(
+        'aria-controls',
+        leftRail!.id,
+      );
+      expect(within(workspace).getByRole('button', { name: '開啟左側工作區' })).toHaveAttribute(
+        'aria-controls',
+        leftRail!.id,
+      );
+      expect(within(workspace).getByRole('button', { name: '切換右側工作區' })).toHaveAttribute(
+        'aria-controls',
+        rightRail!.id,
+      );
+      expect(within(workspace).getByRole('button', { name: '開啟右側工作區' })).toHaveAttribute(
+        'aria-controls',
+        rightRail!.id,
+      );
     }
   });
 
