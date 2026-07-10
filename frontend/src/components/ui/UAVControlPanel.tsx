@@ -230,7 +230,7 @@ export function UAVControlPanel({
   const [x, y, z] = uavPosition;
 
   return (
-    <MinPanel title="無人機控制" className="panel-ui uav-control-panel">
+    <MinPanel title="無人機控制" className="panel-ui uav-control-panel" defaultMinimized>
           <div style={{ ...S.panel, borderRadius: 0, border: 'none', boxShadow: 'none' }}>
 
       {/* Mode toggles */}

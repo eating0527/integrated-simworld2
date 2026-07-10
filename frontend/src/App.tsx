@@ -509,7 +509,7 @@ export function App() {
   return (
     <Workspace
       top={!isMobile && (
-        <>
+        <div className="workspace__statusbar" aria-label="即時狀態列">
           <SceneSwitcher
             selectedScene={selectedScene}
             generatedScenes={generatedScenes.scenes}
@@ -522,11 +522,11 @@ export function App() {
               setSelectedScene({ source: 'generated', taskId });
             }}
           />
-          <div className="workspace__status-strip" aria-label="即時狀態">
+          <div className="workspace__statusbar-items">
             {aircraftPanel}
             {gpsPanel}
           </div>
-        </>
+        </div>
       )}
       left={!isMobile && (
         <>

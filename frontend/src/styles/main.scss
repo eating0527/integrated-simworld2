@@ -369,10 +369,10 @@ canvas {
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 
-  &::-webkit-scrollbar { width: 4px; }
-  &::-webkit-scrollbar-track { background: transparent; }
-  &::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+  &::-webkit-scrollbar { display: none; }
 }
 
 .dp-header {
@@ -1182,57 +1182,101 @@ canvas {
   top: 12px;
   right: 24px;
   left: 24px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
   pointer-events: none;
 }
 
-.workspace__top .scene-switcher {
+.workspace__statusbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 46px;
+  overflow: visible;
+  border: 1px solid rgba(120, 180, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(7, 12, 28, 0.88);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  pointer-events: auto;
+}
+
+.workspace__statusbar .scene-switcher {
   grid-column: 2;
   width: min(100%, 920px);
   overflow: visible;
-  pointer-events: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
-.workspace__status-strip {
+.workspace__statusbar-items {
   grid-column: 3;
   justify-self: end;
   display: flex;
-  align-items: flex-start;
-  gap: 6px;
+  align-items: center;
+  gap: 0;
   min-width: 0;
-  pointer-events: auto;
 }
 
-.workspace__status-strip .status-panel {
+.workspace__statusbar .status-panel {
   flex: 0 1 auto;
-  overflow: hidden;
+  position: relative;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
-.workspace__status-strip .status-panel--telemetry {
-  width: min(370px, 31vw);
+.workspace__statusbar .status-panel + .status-panel {
+  border-left: 1px solid rgba(120, 180, 255, 0.14);
 }
 
-.workspace__status-strip .status-panel--connection {
-  width: min(190px, 18vw);
+.workspace__statusbar .status-panel--telemetry {
+  width: min(370px, 30vw);
 }
 
-.workspace__status-strip .status-panel .min-panel__bar {
-  min-height: 42px;
-  padding: 6px 10px;
+.workspace__statusbar .status-panel--connection {
+  width: min(210px, 18vw);
 }
 
-.workspace__status-strip .status-panel .min-panel__title-btn {
+.workspace__statusbar .status-panel .min-panel__bar {
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+.workspace__statusbar .status-panel .min-panel__title-btn {
   gap: 10px;
   color: var(--text-primary);
   letter-spacing: 0;
   text-transform: none;
 }
 
-.workspace__status-strip .status-panel:not(.is-min) {
+.workspace__statusbar .status-panel:not(.is-min) .min-panel__body {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 2;
+  width: max-content;
+  min-width: min(360px, calc(100vw - 48px));
+  max-width: min(420px, calc(100vw - 48px));
+  overflow: hidden;
+  border: 1px solid rgba(120, 180, 255, 0.18);
+  border-radius: var(--panel-radius);
+  background: rgba(8, 12, 28, 0.96);
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.workspace__statusbar .status-panel--telemetry:not(.is-min) .min-panel__body {
+  right: auto;
+  left: 0;
 }
 
 .status-summary {
@@ -1380,10 +1424,19 @@ canvas {
   max-height: min(72vh, 760px);
   overflow: auto;
   resize: vertical;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .workspace__rail .min-panel:not(.is-min) .min-panel__body-inner {
   overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workspace__rail .min-panel::-webkit-scrollbar,
+.workspace__rail .min-panel:not(.is-min) .min-panel__body-inner::-webkit-scrollbar {
+  display: none;
 }
 
 .workspace__rail .simulation-panel:not(.is-min) {
@@ -1497,18 +1550,14 @@ canvas {
 }
 
 @media (max-width: 1320px) {
-  .workspace__top {
+  .workspace__statusbar {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
+    padding: 4px 8px;
   }
 
-  .workspace__top .scene-switcher {
-    order: 1;
-  }
-
-  .workspace__status-strip {
-    order: 2;
+  .workspace__statusbar-items {
     flex: 0 1 100%;
     justify-content: center;
   }

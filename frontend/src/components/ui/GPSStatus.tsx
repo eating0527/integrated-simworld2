@@ -127,7 +127,7 @@ export function GPSStatus({
       style={style}
       defaultMinimized={statusBar}
       headerContent={summary}
-      actions={<PanelStatus tone={st.tone} label={st.label} />}
+      actions={!statusBar && <PanelStatus tone={st.tone} label={st.label} />}
     >
       <div style={S.row}>
         <span style={S.label}>裝置名稱</span>

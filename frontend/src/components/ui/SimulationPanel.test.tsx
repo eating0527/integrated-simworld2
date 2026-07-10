@@ -139,9 +139,14 @@ function deferredPngResponse() {
   };
 }
 
+async function restorePanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: 'Restore 無線通道模擬' }));
+}
+
 async function openPanel() {
   const user = userEvent.setup();
   render(<SimulationPanel sceneId="NTPU" />);
+  await restorePanel(user);
   return user;
 }
 
@@ -169,12 +174,9 @@ describe('SimulationPanel UI', () => {
     vi.unstubAllGlobals();
   });
 
-  it('starts expanded and can minimize then restore the simulation panel', async () => {
-    const user = await openPanel();
-
-    expect(screen.getByRole('button', { name: 'SINR Map' })).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Minimize 無線通道模擬' }));
+  it('starts minimized and restores the simulation panel on demand', async () => {
+    const user = userEvent.setup();
+    render(<SimulationPanel sceneId="NTPU" />);
 
     expect(screen.queryByRole('button', { name: 'SINR Map' })).not.toBeInTheDocument();
 
@@ -331,6 +333,7 @@ describe('SimulationPanel UI', () => {
       );
     }
     render(<Harness />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     expect(screen.queryByRole('button', { name: 'GPS replay play' })).not.toBeInTheDocument();
@@ -353,6 +356,7 @@ describe('SimulationPanel UI', () => {
     const onCfarClustersChange = vi.fn();
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onCfarClustersChange={onCfarClustersChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
@@ -373,6 +377,7 @@ describe('SimulationPanel UI', () => {
     const onHeatmapOverlayChange = vi.fn();
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
@@ -390,6 +395,7 @@ describe('SimulationPanel UI', () => {
     const onHeatmapOverlayChange = vi.fn();
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
@@ -420,6 +426,7 @@ describe('SimulationPanel UI', () => {
     const onRouteOverlayChange = vi.fn();
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
@@ -448,6 +455,7 @@ describe('SimulationPanel UI', () => {
     const onRouteOverlayChange = vi.fn();
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
@@ -464,6 +472,7 @@ describe('SimulationPanel UI', () => {
     const onRouteOverlayChange = vi.fn();
     const user = userEvent.setup();
     render(<SimulationPanel sceneId="NTPU" onRouteOverlayChange={onRouteOverlayChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);
@@ -480,6 +489,7 @@ describe('SimulationPanel UI', () => {
     const onHeatmapOverlayChange = vi.fn();
     const user = userEvent.setup();
     const { rerender } = render(<SimulationPanel sceneId="NTPU" onHeatmapOverlayChange={onHeatmapOverlayChange} />);
+    await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
     await runCurrentTab(user);

@@ -76,7 +76,7 @@ export function AircraftTelemetry({ deviceId, device, isTracked, compact = false
         width: 'calc(100vw - 24px)',
         maxWidth: 320,
       } : undefined}
-      actions={(
+      actions={!statusBar && (
         <PanelStatus tone={device ? 'live' : 'waiting'} label={device ? 'Live' : 'Waiting'} />
       )}
     >

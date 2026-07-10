@@ -506,7 +506,7 @@ export function SimulationPanel({
 
   return (
     <>
-      <MinPanel title="無線通道模擬" className="panel-ui simulation-panel">
+      <MinPanel title="無線通道模擬" className="panel-ui simulation-panel" defaultMinimized>
 
           {/* 頁籤 */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '10px 12px 0', flexShrink: 0 }}>

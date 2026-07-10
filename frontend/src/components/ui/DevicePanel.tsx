@@ -218,7 +218,7 @@ export function DevicePanel({ onApplyRxPosition }: DevicePanelProps = {}) {
   const jammerDevices = devices.filter((d) => d.role === 'jammer');
 
   return (
-    <MinPanel as="aside" className="device-panel" title="裝置設定">
+    <MinPanel as="aside" className="device-panel" title="裝置設定" defaultMinimized>
       <div className="dp-header">裝置設定</div>
 
       <Section
