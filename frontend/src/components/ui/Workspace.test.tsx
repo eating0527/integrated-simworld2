@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { Workspace } from './Workspace';
 
 function renderWorkspace() {
-  render(
+  return render(
     <Workspace
       top={<div>場景列</div>}
       left={<div>左側內容</div>}
@@ -23,6 +23,8 @@ describe('Workspace', () => {
 
     expect(screen.getByText('場景列')).toBeInTheDocument();
     expect(screen.getByText('3D 場景')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '左側工作區' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '右側工作區' })).toBeInTheDocument();
 
     const left = screen.getByRole('button', { name: '切換左側工作區' });
     const right = screen.getByRole('button', { name: '切換右側工作區' });
@@ -35,7 +37,36 @@ describe('Workspace', () => {
     expect(right).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('switches mobile rails mutually exclusively and closes with Escape', async () => {
+  it('uses rail IDs scoped to each Workspace instance', () => {
+    const { container } = render(
+      <>
+        <Workspace left={<div>第一個左側</div>} right={<div>第一個右側</div>}>
+          <div>第一個場景</div>
+        </Workspace>
+        <Workspace left={<div>第二個左側</div>} right={<div>第二個右側</div>}>
+          <div>第二個場景</div>
+        </Workspace>
+      </>,
+    );
+
+    const workspaces = Array.from(container.querySelectorAll<HTMLElement>('.workspace'));
+    const rails = Array.from(container.querySelectorAll<HTMLElement>('aside.workspace__rail'));
+    expect(rails).toHaveLength(4);
+    expect(new Set(rails.map(rail => rail.id)).size).toBe(4);
+
+    for (const workspace of workspaces) {
+      const instanceRails = Array.from(workspace.querySelectorAll<HTMLElement>('aside.workspace__rail'));
+      const controls = within(workspace).getAllByRole('button');
+
+      expect(instanceRails).toHaveLength(2);
+      expect(controls).toHaveLength(4);
+      for (const control of controls) {
+        expect(instanceRails.some(rail => rail.id === control.getAttribute('aria-controls'))).toBe(true);
+      }
+    }
+  });
+
+  it('switches mobile rails mutually exclusively and uses the current action label to close', async () => {
     const user = userEvent.setup();
     renderWorkspace();
 
@@ -45,14 +76,49 @@ describe('Workspace', () => {
     expect(right).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(left);
-    expect(left).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: '關閉左側工作區' })).toHaveAttribute('aria-expanded', 'true');
     expect(right).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(right);
-    expect(left).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: '開啟左側工作區' })).toHaveAttribute('aria-expanded', 'false');
+    const closeRight = screen.getByRole('button', { name: '關閉右側工作區' });
+    expect(closeRight).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(closeRight);
+    expect(screen.getByRole('button', { name: '開啟右側工作區' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps the mobile drawer open for a prevented Escape and otherwise closes it', async () => {
+    const user = userEvent.setup();
+    const preventEscape = (event: KeyboardEvent) => event.preventDefault();
+    window.addEventListener('keydown', preventEscape);
+
+    try {
+      renderWorkspace();
+      await user.click(screen.getByRole('button', { name: '開啟左側工作區' }));
+
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+      });
+      expect(screen.getByRole('button', { name: '關閉左側工作區' })).toHaveAttribute('aria-expanded', 'true');
+
+      window.removeEventListener('keydown', preventEscape);
+      await user.keyboard('{Escape}');
+      expect(screen.getByRole('button', { name: '開啟左側工作區' })).toHaveAttribute('aria-expanded', 'false');
+    } finally {
+      window.removeEventListener('keydown', preventEscape);
+    }
+  });
+
+  it('closes the mobile drawer from its backdrop', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    const right = screen.getByRole('button', { name: '開啟右側工作區' });
+    await user.click(right);
     expect(right).toHaveAttribute('aria-expanded', 'true');
 
-    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: '關閉側欄' }));
     expect(right).toHaveAttribute('aria-expanded', 'false');
   });
 });
