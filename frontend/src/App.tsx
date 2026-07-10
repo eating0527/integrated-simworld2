@@ -483,6 +483,7 @@ export function App() {
       device={aircraftEntry?.[1] ?? null}
       isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
       compact={isMobile}
+      statusBar={!isMobile}
       onTrack={() => {
         if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
       }}
@@ -500,6 +501,7 @@ export function App() {
       localGPS={currentGPS}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={setSelectedDeviceId}
+      statusBar={!isMobile}
     />
   );
 
@@ -507,18 +509,24 @@ export function App() {
   return (
     <Workspace
       top={!isMobile && (
-        <SceneSwitcher
-          selectedScene={selectedScene}
-          generatedScenes={generatedScenes.scenes}
-          generatedStatus={generatedScenes.status}
-          onSelectPreset={(id) => {
-            setLastPresetSceneId(id);
-            setSelectedScene({ source: 'preset', id });
-          }}
-          onSelectGenerated={(taskId) => {
-            setSelectedScene({ source: 'generated', taskId });
-          }}
-        />
+        <>
+          <SceneSwitcher
+            selectedScene={selectedScene}
+            generatedScenes={generatedScenes.scenes}
+            generatedStatus={generatedScenes.status}
+            onSelectPreset={(id) => {
+              setLastPresetSceneId(id);
+              setSelectedScene({ source: 'preset', id });
+            }}
+            onSelectGenerated={(taskId) => {
+              setSelectedScene({ source: 'generated', taskId });
+            }}
+          />
+          <div className="workspace__status-strip" aria-label="即時狀態">
+            {aircraftPanel}
+            {gpsPanel}
+          </div>
+        </>
       )}
       left={!isMobile && (
         <>
@@ -536,8 +544,6 @@ export function App() {
       )}
       right={!isMobile && (
         <>
-          {aircraftPanel}
-          {gpsPanel}
           <ControllerScreenPanel />
           <SimulationPanel
             sceneId={simulationSceneId}

@@ -14,6 +14,7 @@ interface Props {
   localGPS?: { lat: number; lon: number; alt: number; accuracy: number } | null;
   selectedDeviceId?: string | null;
   onSelectDevice?: (id: string) => void;
+  statusBar?: boolean;
 }
 
 type StatusKey = 'connected' | 'connecting' | 'failed' | 'disconnected';
@@ -104,17 +105,28 @@ export function GPSStatus({
   localGPS,
   selectedDeviceId,
   onSelectDevice,
+  statusBar = false,
   style,
 }: Props & { style?: React.CSSProperties }) {
   const key = (connectionStatus as StatusKey) in STATUS_MAP ? connectionStatus as StatusKey : 'disconnected';
   const st = STATUS_MAP[key];
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  const summary = statusBar ? (
+    <span className="status-summary status-summary--connection" aria-label="連線狀態摘要">
+      <span className="status-summary__icon" aria-hidden="true">⌁</span>
+      <span className={`status-summary__light status-summary__light--${st.tone}`} aria-hidden="true" />
+      <span className="status-summary__state">{st.label}</span>
+      <span className="status-summary__count">{allDevices.size} 台</span>
+    </span>
+  ) : undefined;
 
   return (
     <MinPanel
-      className="panel-ui"
+      className={`panel-ui${statusBar ? ' status-panel status-panel--connection' : ''}`}
       title="連線狀態"
       style={style}
+      defaultMinimized={statusBar}
+      headerContent={summary}
       actions={<PanelStatus tone={st.tone} label={st.label} />}
     >
       <div style={S.row}>

@@ -8,6 +8,7 @@ interface Props {
   device?: GPSDevice | null;
   isTracked: boolean;
   compact?: boolean;
+  statusBar?: boolean;
   onTrack?: () => void;
 }
 
@@ -45,13 +46,27 @@ const S: Record<string, React.CSSProperties> = {
   },
 };
 
-export function AircraftTelemetry({ deviceId, device, isTracked, compact = false, onTrack }: Props) {
+export function AircraftTelemetry({ deviceId, device, isTracked, compact = false, statusBar = false, onTrack }: Props) {
   const age = ageSeconds(device);
+  const summary = statusBar ? (
+    <span className="status-summary status-summary--telemetry" aria-label="無人機遙測摘要">
+      <span className="status-summary__icon" aria-hidden="true">✈</span>
+      {device ? (
+        <span className="status-summary__data">
+          <span>LAT {device.lat.toFixed(5)}</span>
+          <span>LON {device.lon.toFixed(5)}</span>
+          <span>ALT {device.alt.toFixed(1)} m</span>
+        </span>
+      ) : <span className="status-summary__na">N/A</span>}
+    </span>
+  ) : undefined;
 
   return (
     <MinPanel
       title="無人機遙測"
-      className="panel-ui"
+      className={`panel-ui${statusBar ? ' status-panel status-panel--telemetry' : ''}`}
+      defaultMinimized={statusBar}
+      headerContent={summary}
       style={compact ? {
         position: 'fixed',
         right: 12,
