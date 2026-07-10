@@ -14,6 +14,7 @@ import type {
   ISSRoutePoint,
   ISSSamplePoint,
 } from '../../types/heatmap';
+import type { GpsReplayRate } from '../../utils/gpsReplay';
 import { MinPanel } from './MinPanel';
 
 const API = import.meta.env.VITE_API_URL || '';
@@ -118,6 +119,12 @@ interface SimulationPanelProps {
   onCfarClustersChange?: (clusters: CFARCluster[]) => void;
   onHeatmapOverlayChange?: (overlay: HeatmapOverlayConfig | null) => void;
   onRouteOverlayChange?: (overlay: ISSRouteOverlayConfig | null) => void;
+  gpsReplayRate?: GpsReplayRate;
+  gpsReplayPlaying?: boolean;
+  onGpsReplayPlay?: (file: File) => void;
+  onGpsReplayPause?: () => void;
+  onGpsReplayStop?: () => void;
+  onGpsReplayRateChange?: (rate: GpsReplayRate) => void;
 }
 
 export function SimulationPanel({
@@ -126,6 +133,12 @@ export function SimulationPanel({
   onCfarClustersChange,
   onHeatmapOverlayChange,
   onRouteOverlayChange,
+  gpsReplayRate = 1,
+  gpsReplayPlaying = false,
+  onGpsReplayPlay,
+  onGpsReplayPause,
+  onGpsReplayStop,
+  onGpsReplayRateChange,
 }: SimulationPanelProps) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>('sinr');
@@ -722,6 +735,17 @@ export function SimulationPanel({
                   <div />
                   <Hint>顯示建築物的遮蔽效果。</Hint>
                 </ParamGrid>
+                {issUnetParams.mode !== 'sim' && (
+                  <GpsReplayControls
+                    file={issUnetParams.gpsFile}
+                    playing={gpsReplayPlaying}
+                    rate={gpsReplayRate}
+                    onPlay={onGpsReplayPlay}
+                    onPause={onGpsReplayPause}
+                    onStop={onGpsReplayStop}
+                    onRateChange={onGpsReplayRateChange}
+                  />
+                )}
                 {issUnetOverlay && (
                   <div style={{
                     marginTop: 10,
@@ -1192,6 +1216,113 @@ function StatisticsResultView({
         title="點擊放大檢視"
       />
     </div>
+  );
+}
+
+function GpsReplayControls({
+  file,
+  playing,
+  rate,
+  onPlay,
+  onPause,
+  onStop,
+  onRateChange,
+}: {
+  file: File | null;
+  playing: boolean;
+  rate: GpsReplayRate;
+  onPlay?: (file: File) => void;
+  onPause?: () => void;
+  onStop?: () => void;
+  onRateChange?: (rate: GpsReplayRate) => void;
+}) {
+  const nextRate = rate === 1 ? 2 : rate === 2 ? 5 : 1;
+  const playDisabled = !file || playing || !onPlay;
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(4, 32px)',
+      gap: 6,
+      justifyContent: 'end',
+      marginTop: 8,
+      marginBottom: 8,
+    }}>
+      <IconButton
+        ariaLabel="GPS replay play"
+        title="播放 GPS 回播"
+        disabled={playDisabled}
+        active={playing}
+        onClick={() => {
+          if (file) onPlay?.(file);
+        }}
+      >
+        ▶
+      </IconButton>
+      <IconButton
+        ariaLabel="GPS replay pause"
+        title="暫停 GPS 回播"
+        disabled={!playing || !onPause}
+        onClick={onPause}
+      >
+        ❚❚
+      </IconButton>
+      <IconButton
+        ariaLabel="GPS replay stop"
+        title="停止 GPS 回播"
+        disabled={!onStop}
+        onClick={onStop}
+      >
+        ■
+      </IconButton>
+      <IconButton
+        ariaLabel="GPS replay rate"
+        title={`速率 ${rate}x`}
+        onClick={() => onRateChange?.(nextRate)}
+      >
+        {rate}x
+      </IconButton>
+    </div>
+  );
+}
+
+function IconButton({
+  ariaLabel,
+  title,
+  disabled = false,
+  active = false,
+  onClick,
+  children,
+}: {
+  ariaLabel: string;
+  title: string;
+  disabled?: boolean;
+  active?: boolean;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        width: 32,
+        height: 30,
+        border: active ? '1px solid rgba(0,255,255,.65)' : '1px solid rgba(255,255,255,.13)',
+        borderRadius: 6,
+        background: active ? 'rgba(0,255,255,.2)' : 'rgba(0,0,0,.32)',
+        color: disabled ? 'rgba(255,255,255,.25)' : '#0ff',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: 11,
+        fontWeight: 800,
+        lineHeight: 1,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

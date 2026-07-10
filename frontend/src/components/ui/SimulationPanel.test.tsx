@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -308,6 +309,41 @@ describe('SimulationPanel UI', () => {
     expect(JSON.parse(String(form.get('devices_json')))).toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'jammer' })]),
     );
+  });
+
+  it('shows GPS replay controls for ISS_UNET upload modes', async () => {
+    const onGpsReplayRateChange = vi.fn();
+    const user = userEvent.setup();
+    function Harness() {
+      const [rate, setRate] = useState<1 | 2 | 5>(1);
+      return (
+        <SimulationPanel
+          sceneId="NTPU"
+          gpsReplayRate={rate}
+          onGpsReplayRateChange={(nextRate) => {
+            onGpsReplayRateChange(nextRate);
+            setRate(nextRate);
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: /sionna/i }));
+    await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
+    expect(screen.queryByRole('button', { name: 'GPS replay play' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'GPS' }));
+
+    expect(screen.getByRole('button', { name: 'GPS replay play' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'GPS replay pause' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'GPS replay stop' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'GPS replay rate' }));
+    await user.click(screen.getByRole('button', { name: 'GPS replay rate' }));
+
+    expect(onGpsReplayRateChange).toHaveBeenNthCalledWith(1, 2);
+    expect(onGpsReplayRateChange).toHaveBeenNthCalledWith(2, 5);
   });
 
   it('publishes CFAR clusters from ISS_UNET results for scene beacon rendering', async () => {

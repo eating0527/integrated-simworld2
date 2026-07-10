@@ -29,6 +29,12 @@ import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
 import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from './types/heatmap';
+import {
+  getGpsReplayIntervalMs,
+  parseGpsReplayCsv,
+  type GpsReplayPoint,
+  type GpsReplayRate,
+} from './utils/gpsReplay';
 
 // ── 環境變數 ────────────────────────────────────────────────────────
 
@@ -234,6 +240,11 @@ export function App() {
   // ── UAV 位置 + 軌跡 ──────────────────────────────────────────────
   const [uavPosition, setUavPosition] = useState<[number, number, number]>(() => getInitialRxPosition());
   const [uavPath, setUavPath] = useState<Array<{ x: number; y: number; z: number }>>([]);
+  const [gpsReplayPoints, setGpsReplayPoints] = useState<GpsReplayPoint[]>([]);
+  const [gpsReplayIndex, setGpsReplayIndex] = useState(0);
+  const [gpsReplayPlaying, setGpsReplayPlaying] = useState(false);
+  const [gpsReplayRate, setGpsReplayRate] = useState<GpsReplayRate>(1);
+  const gpsReplayFixedYRef = useRef(uavPosition[1]);
 
   // ── 同步 UAV 位置 → DeviceStore rx（讓 ISS/SINR 模擬使用即時座標）────
   const updateDevice = useDeviceStore(s => s.updateDevice);
@@ -246,6 +257,7 @@ export function App() {
   const [otherUavs, setOtherUavs] = useState<Array<{ id: string; position: [number, number, number]; path: Array<{ x: number; y: number; z: number }> }>>([]);
 
   useEffect(() => {
+    if (gpsReplayPoints.length > 0) return;
     const trackId = isMobile ? myDeviceId : selectedDeviceId;
     if (!trackId) return;
 
@@ -267,7 +279,74 @@ export function App() {
       if (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.z - z) < 0.1) return prev;
       return [...prev, { x, y, z }];
     });
-  }, [activeOrigin, allDevices, localGPS, selectedDeviceId, myDeviceId, isMobile]);
+  }, [activeOrigin, allDevices, gpsReplayPoints.length, localGPS, selectedDeviceId, myDeviceId, isMobile]);
+
+  const applyGpsReplayPoint = useCallback((point: GpsReplayPoint, fixedY: number) => {
+    const [ex, ez] = latLonToENU(point.lat, point.lon, point.alt, activeOrigin);
+    const pos: [number, number, number] = [ex * SCALE, fixedY, ez * SCALE];
+    setUavPosition(pos);
+    setUavPath(prev => {
+      const last = prev[prev.length - 1];
+      if (last && Math.abs(last.x - pos[0]) < 0.1 && Math.abs(last.z - pos[2]) < 0.1) return prev;
+      return [...prev, { x: pos[0], y: pos[1], z: pos[2] }];
+    });
+  }, [activeOrigin]);
+
+  const handleGpsReplayPlay = useCallback(async (file: File) => {
+    if (gpsReplayPoints.length > 0 && gpsReplayIndex > 0) {
+      setGpsReplayPlaying(true);
+      return;
+    }
+
+    const points = parseGpsReplayCsv(await file.text());
+    if (points.length === 0) {
+      window.alert('GPS CSV 沒有可回播的座標點');
+      return;
+    }
+
+    const fixedY = uavPosition[1];
+    gpsReplayFixedYRef.current = fixedY;
+    setAuto(false);
+    resetManualControl();
+    setUavPath([]);
+    applyGpsReplayPoint(points[0], fixedY);
+    setGpsReplayPoints(points);
+    setGpsReplayIndex(1);
+    setGpsReplayPlaying(points.length > 1);
+  }, [applyGpsReplayPoint, gpsReplayIndex, gpsReplayPoints.length, resetManualControl, uavPosition]);
+
+  const handleGpsReplayPause = useCallback(() => {
+    setGpsReplayPlaying(false);
+  }, []);
+
+  const handleGpsReplayStop = useCallback(() => {
+    setGpsReplayPlaying(false);
+    setGpsReplayPoints([]);
+    setGpsReplayIndex(0);
+  }, []);
+
+  useEffect(() => {
+    if (!gpsReplayPlaying || gpsReplayPoints.length === 0) return;
+
+    const timer = window.setInterval(() => {
+      setGpsReplayIndex(prev => {
+        const point = gpsReplayPoints[prev];
+        if (!point) {
+          setGpsReplayPlaying(false);
+          return prev;
+        }
+
+        applyGpsReplayPoint(point, gpsReplayFixedYRef.current);
+        const next = prev + 1;
+        if (next >= gpsReplayPoints.length) {
+          setGpsReplayPlaying(false);
+        }
+        return next;
+      });
+    }, getGpsReplayIntervalMs(gpsReplayRate));
+
+    return () => window.clearInterval(timer);
+  }, [applyGpsReplayPoint, gpsReplayPlaying, gpsReplayPoints, gpsReplayRate]);
 
   // ── 追蹤所有裝置位置、建立各自軌跡 ─────────────────────────────────
   useEffect(() => {
@@ -488,6 +567,12 @@ export function App() {
           onCfarClustersChange={setCfarClusters}
           onHeatmapOverlayChange={setHeatmapOverlay}
           onRouteOverlayChange={setIssRouteOverlay}
+          gpsReplayRate={gpsReplayRate}
+          gpsReplayPlaying={gpsReplayPlaying}
+          onGpsReplayPlay={handleGpsReplayPlay}
+          onGpsReplayPause={handleGpsReplayPause}
+          onGpsReplayStop={handleGpsReplayStop}
+          onGpsReplayRateChange={setGpsReplayRate}
         />
       )}
 
