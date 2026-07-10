@@ -26,8 +26,11 @@ describe('Workspace', () => {
     expect(screen.getByRole('complementary', { name: '左側工作區' })).toBeInTheDocument();
     expect(screen.getByRole('complementary', { name: '右側工作區' })).toBeInTheDocument();
 
+    const statusHeader = screen.getByRole('banner');
     const left = screen.getByRole('button', { name: '切換左側工作區' });
     const right = screen.getByRole('button', { name: '切換右側工作區' });
+    expect(within(statusHeader).getByRole('button', { name: '切換左側工作區' })).toBe(left);
+    expect(within(statusHeader).getByRole('button', { name: '切換右側工作區' })).toBe(right);
     expect(left).toHaveAttribute('aria-expanded', 'true');
     expect(right).toHaveAttribute('aria-expanded', 'true');
 

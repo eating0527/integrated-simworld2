@@ -31,7 +31,11 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
   return (
     <div className="workspace">
       <main className="workspace__stage">{children}</main>
-      {top && <header className="workspace__top">{top}</header>}
+      <header className="workspace__top">
+        {left && <button type="button" className="workspace__top-control workspace__top-control--left" aria-label="切換左側工作區" aria-expanded={leftOpen} aria-controls={leftRailId} onClick={() => setLeftOpen(value => !value)}>‹</button>}
+        {top}
+        {right && <button type="button" className="workspace__top-control workspace__top-control--right" aria-label="切換右側工作區" aria-expanded={rightOpen} aria-controls={rightRailId} onClick={() => setRightOpen(value => !value)}>›</button>}
+      </header>
 
       {left && (
         <aside id={leftRailId} aria-label="左側工作區" className={`workspace__rail workspace__rail--left ${leftOpen ? 'is-open' : ''} ${mobileRail === 'left' ? 'is-mobile-open' : ''}`}>
@@ -43,11 +47,6 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
           {right}
         </aside>
       )}
-
-      <div className="workspace__rail-controls" aria-label="工作區顯示控制">
-        {left && <button type="button" aria-label="切換左側工作區" aria-expanded={leftOpen} aria-controls={leftRailId} onClick={() => setLeftOpen(value => !value)}>‹</button>}
-        {right && <button type="button" aria-label="切換右側工作區" aria-expanded={rightOpen} aria-controls={rightRailId} onClick={() => setRightOpen(value => !value)}>›</button>}
-      </div>
 
       <div className="workspace__drawer-controls" aria-label="行動工作區控制">
         {left && <button type="button" aria-label={mobileRail === 'left' ? '關閉左側工作區' : '開啟左側工作區'} aria-expanded={mobileRail === 'left'} aria-controls={leftRailId} onClick={() => toggleMobile('left')}>控制</button>}
