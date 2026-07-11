@@ -48,12 +48,13 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | Con
 任務輸出：
 
 ```text
-backend/app/static/scenes/generated/<task_id>/scene.glb
-backend/app/static/scenes/generated/<task_id>/scene.blend
-backend/app/static/scenes/generated/<task_id>/scene_metadata.json
-backend/app/static/scenes/generated/<task_id>/blender_stdout.log
-backend/app/static/scenes/generated/<task_id>/blender_stderr.log
+backend/app/static/scenes/T-<10 hex>/T-<10 hex>.glb
+backend/app/static/scenes/T-<10 hex>/T-<10 hex>.blend
+backend/app/static/scenes/T-<10 hex>/T-<10 hex>.xml
+backend/app/static/scenes/T-<10 hex>/scene_metadata.json
 ```
+
+舊任務若沒有 `sceneKey`，才會使用 `backend/app/static/scenes/generated/<task_id>/` 的 fallback 目錄。生成場景的索引 `backend/app/uploads/scene_index.json` 是可重建快取；任務來源仍是 `scene_tasks.json`。
 
 ## Sionna / ISS_UNET
 

@@ -70,4 +70,10 @@ Recent history uses Conventional Commit-style subjects, such as `feat(ui): add s
 
 ## Git Ignore Rules
 
-Keep secrets in `.env` or `frontend/.env.local`. Existing rules already ignore dependencies, caches, logs, temporary files, mission captures, and generated models or scenes. Add only `/.claude/worktrees/` for disposable agent worktrees. Do not broadly ignore `.claude/`, `.playwright/`, `.superpowers/`, `incoming/`, or `output/`: each contains tracked configuration, fixtures, or scripts. Check a candidate with `git status --ignored --short` and `git check-ignore -v <path>` before adding it.
+Keep secrets in `.env` or `frontend/.env.local`. Existing rules already ignore dependencies, caches, logs, temporary files, mission captures, and generated models or scenes.
+
+- Level 1 永遠忽略：secrets、`.env*`（`.env.example` 除外）、dependency 安裝環境、IDE/local agent 個人設定、模型權重與本機工具安裝。
+- Level 2 忽略並定期清理：logs、build、cache、test tmp、runtime mission、生成圖/地圖/場景與可重建索引；清理前先停止服務。
+- Level 3 納入版本控制：source、tests、docs/specs、lockfiles/manifests、example configs、operational scripts、刻意保留 fixtures 與 canonical assets。
+
+`.gitignore` 只影響未追蹤檔；既有 tracked 的 Level 1/2 檔案仍需另用 `git rm --cached <path>` 移出 index，本次規則不會自動修改 staging。
