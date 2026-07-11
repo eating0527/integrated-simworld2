@@ -1,4 +1,0 @@
-interface:
-  display_name: "Frontend UI Tests"
-  short_description: "Write focused React UI tests for frontend components"
-  default_prompt: "Use $frontend-ui-tests to plan and write frontend UI tests for this React feature."
