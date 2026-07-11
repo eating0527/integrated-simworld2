@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 
+import { AircraftTelemetry } from './AircraftTelemetry';
 import { GPSStatus } from './GPSStatus';
 
 function renderPanel(statusBar = false) {
@@ -68,5 +70,47 @@ describe('GPSStatus', () => {
     await user.click(screen.getByRole('button', { name: /restore 連線狀態/i }));
 
     expect(screen.getByRole('button', { name: '改名' })).toBeInTheDocument();
+  });
+
+  it('keeps GPS and connection status panels mutually exclusive', async () => {
+    const user = userEvent.setup();
+
+    function StatusPanels() {
+      const [activePanel, setActivePanel] = useState<'gps' | 'connection' | null>(null);
+      return (
+        <>
+          <AircraftTelemetry
+            statusBar
+            device={null}
+            isTracked={false}
+            minimized={activePanel !== 'gps'}
+            onMinimizedChange={minimized => setActivePanel(minimized ? null : 'gps')}
+          />
+          <GPSStatus
+            myDeviceId="device-123456"
+            deviceName="Drone"
+            onRenameClick={() => {}}
+            allDevices={new Map()}
+            uavPath={[]}
+            onClearPath={() => {}}
+            connectionStatus="connected"
+            statusBar
+            minimized={activePanel !== 'connection'}
+            onMinimizedChange={minimized => setActivePanel(minimized ? null : 'connection')}
+          />
+        </>
+      );
+    }
+
+    const { container } = render(<StatusPanels />);
+    const titleButtons = container.querySelectorAll('.min-panel__title-btn');
+
+    await user.click(titleButtons[0]);
+    expect(titleButtons[0]).toHaveAttribute('aria-expanded', 'true');
+    expect(titleButtons[1]).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(titleButtons[1]);
+    expect(titleButtons[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(titleButtons[1]).toHaveAttribute('aria-expanded', 'true');
   });
 });

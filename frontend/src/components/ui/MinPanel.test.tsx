@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 
 import { MinPanel } from './MinPanel';
 
@@ -69,5 +70,40 @@ describe('MinPanel', () => {
     expect(screen.getByText('Secondary action').closest('button')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Secondary action' })).not.toBeInTheDocument();
     expect(container.querySelector('.min-panel__body')).toHaveAttribute('inert');
+  });
+
+  it('supports controlled minimized state and change notifications', async () => {
+    const user = userEvent.setup();
+    const onMinimizedChange = vi.fn();
+
+    function ControlledPanel() {
+      const [minimized, setMinimized] = useState(true);
+      return (
+        <MinPanel
+          title="Panel"
+          minimized={minimized}
+          onMinimizedChange={value => {
+            onMinimizedChange(value);
+            setMinimized(value);
+          }}
+        >
+          <button>Details</button>
+        </MinPanel>
+      );
+    }
+
+    const { container } = render(<ControlledPanel />);
+
+    expect(screen.getByRole('button', { name: /restore panel/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Details').closest('button')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
+    expect(container.querySelector('.min-panel__body')).toHaveAttribute('inert');
+
+    await user.click(screen.getByRole('button', { name: /restore panel/i }));
+
+    expect(onMinimizedChange).toHaveBeenCalledWith(false);
+    expect(screen.getByRole('button', { name: /minimize panel/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeVisible();
+    expect(container.querySelector('.min-panel__body')).not.toHaveAttribute('inert');
   });
 });

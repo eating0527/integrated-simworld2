@@ -11,6 +11,8 @@ interface MinPanelProps {
   bodyStyle?: React.CSSProperties;
   actions?: React.ReactNode;
   defaultMinimized?: boolean;
+  minimized?: boolean;
+  onMinimizedChange?: (minimized: boolean) => void;
   headerContent?: React.ReactNode;
 }
 
@@ -24,9 +26,12 @@ export function MinPanel({
   bodyStyle,
   actions,
   defaultMinimized = false,
+  minimized: controlledMinimized,
+  onMinimizedChange,
   headerContent,
 }: MinPanelProps) {
-  const [minimized, setMinimized] = useState(defaultMinimized);
+  const [uncontrolledMinimized, setUncontrolledMinimized] = useState(defaultMinimized);
+  const minimized = controlledMinimized ?? uncontrolledMinimized;
   const bodyId = useId();
   const Root = as;
 
@@ -42,7 +47,11 @@ export function MinPanel({
           aria-label={`${minimized ? 'Restore' : 'Minimize'} ${title}`}
           aria-expanded={!minimized}
           aria-controls={bodyId}
-          onClick={() => setMinimized(value => !value)}
+          onClick={() => {
+            const next = !minimized;
+            onMinimizedChange?.(next);
+            if (controlledMinimized === undefined) setUncontrolledMinimized(next);
+          }}
         >
           {headerContent ?? <span>{title}</span>}
           <span className="min-panel__chevron" aria-hidden="true">⌄</span>

@@ -177,6 +177,8 @@ canvas {
 }
 
 .scene-switcher__chevron {
+  display: block;
+  flex: 0 0 auto;
   width: 0;
   height: 0;
   margin-left: 8px;
@@ -184,6 +186,8 @@ canvas {
   border-right: 4px solid transparent;
   border-left: 4px solid transparent;
   color: var(--accent-cyan);
+  font-size: 0;
+  line-height: 0;
   transition: transform 0.2s;
 }
 
@@ -1235,6 +1239,7 @@ canvas {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.08em;
+  white-space: nowrap;
 }
 
 .scene-switcher__toggle:hover,
@@ -1253,7 +1258,9 @@ canvas {
 .workspace__statusbar-items {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 8px;
+  justify-content: flex-end;
   min-width: 0;
   margin-left: auto;
 }
@@ -1289,10 +1296,29 @@ canvas {
 }
 
 .workspace__statusbar .status-panel .min-panel__title-btn {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  width: 100%;
   gap: 10px;
   color: var(--text-primary);
   letter-spacing: 0;
   text-transform: none;
+}
+
+.workspace__statusbar .status-panel .min-panel__title-btn > .status-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.workspace__statusbar .status-panel .status-summary {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.workspace__statusbar .status-panel .min-panel__title-btn > .min-panel__chevron {
+  flex: 0 0 auto;
 }
 
 .workspace__statusbar .status-panel:not(.is-min) .min-panel__body {
@@ -1391,7 +1417,7 @@ canvas {
 .workspace__rail {
   position: absolute;
   z-index: 25;
-  top: 84px;
+  top: 72px;
   bottom: 14px;
   display: flex;
   flex-direction: column;
@@ -1609,13 +1635,23 @@ canvas {
     display: flex;
     flex-wrap: nowrap;
     justify-content: space-between;
-    padding: 4px 46px;
+    padding: 4px 12px;
   }
 
   .workspace__statusbar-items {
     flex: 0 0 auto;
     justify-content: flex-end;
+    max-width: calc(50% - clamp(63px, 21vw, 105px));
     margin-left: auto;
+  }
+
+  .workspace__statusbar .scene-switcher {
+    width: clamp(126px, 42vw, 210px);
+    max-width: calc(100% - 24px);
+  }
+
+  .workspace__statusbar .status-panel {
+    flex: 0 1 auto;
   }
 
   .workspace__statusbar .status-panel--telemetry {
@@ -1627,7 +1663,68 @@ canvas {
   }
 
   .workspace__rail {
-    top: 84px;
+    top: 72px;
+  }
+}
+
+@media (max-width: 600px) {
+  .workspace__statusbar .scene-switcher {
+    width: clamp(84px, 24vw, 120px);
+  }
+
+  .workspace__statusbar-items {
+    flex: 0 0 100px;
+    width: 100px;
+    max-width: 100px;
+    gap: 4px;
+  }
+
+  .workspace__statusbar .status-panel--telemetry,
+  .workspace__statusbar .status-panel--connection {
+    flex: 0 0 calc(50% - 2px);
+    width: calc(50% - 2px);
+    min-width: 0;
+  }
+
+  .workspace__statusbar .status-panel .min-panel__bar {
+    padding-inline: 1px;
+  }
+
+  .workspace__statusbar .status-panel .min-panel__title-btn {
+    gap: 1px;
+  }
+
+  .workspace__statusbar .status-panel .min-panel__chevron {
+    display: none;
+  }
+
+  .workspace__statusbar .status-panel .status-summary {
+    gap: 1px;
+  }
+
+  .workspace__statusbar .status-panel .status-summary__icon {
+    font-size: 14px;
+  }
+
+  .workspace__statusbar .status-panel .status-summary__light {
+    width: 7px;
+    height: 7px;
+  }
+
+  .workspace__statusbar .status-panel .status-summary__data {
+    gap: 3px;
+    font-size: 9px;
+  }
+
+  .workspace__statusbar .status-panel .status-summary__count {
+    padding-left: 0;
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 1099px) {
+  .workspace__rail {
+    top: 12px;
   }
 }
 

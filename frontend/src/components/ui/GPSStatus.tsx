@@ -15,6 +15,8 @@ interface Props {
   selectedDeviceId?: string | null;
   onSelectDevice?: (id: string) => void;
   statusBar?: boolean;
+  minimized?: boolean;
+  onMinimizedChange?: (minimized: boolean) => void;
 }
 
 type StatusKey = 'connected' | 'connecting' | 'failed' | 'disconnected';
@@ -106,6 +108,8 @@ export function GPSStatus({
   selectedDeviceId,
   onSelectDevice,
   statusBar = false,
+  minimized,
+  onMinimizedChange,
   style,
 }: Props & { style?: React.CSSProperties }) {
   const key = (connectionStatus as StatusKey) in STATUS_MAP ? connectionStatus as StatusKey : 'disconnected';
@@ -125,6 +129,8 @@ export function GPSStatus({
       title="連線狀態"
       style={style}
       defaultMinimized={statusBar}
+      minimized={minimized}
+      onMinimizedChange={onMinimizedChange}
       headerContent={summary}
       actions={!statusBar && <PanelStatus tone={st.tone} label={st.label} />}
     >

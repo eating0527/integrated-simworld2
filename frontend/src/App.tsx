@@ -189,6 +189,7 @@ export function App() {
   const activeOriginKey = `${activeOrigin.lat}:${activeOrigin.lon}:${activeOrigin.alt}`;
 
   const [localGPS, setLocalGPS] = useState<LocalGPS>({ lat: 0, lon: 0, alt: 0, accuracy: 999 });
+  const [activeStatusPanel, setActiveStatusPanel] = useState<'gps' | 'connection' | null>(null);
 
   useEffect(() => {
     if (!isMobile) return;
@@ -484,6 +485,8 @@ export function App() {
       isTracked={Boolean(aircraftEntry && selectedDeviceId === aircraftEntry[0])}
       compact={isMobile}
       statusBar={!isMobile}
+      minimized={!isMobile ? activeStatusPanel !== 'gps' : undefined}
+      onMinimizedChange={!isMobile ? (minimized) => setActiveStatusPanel(minimized ? null : 'gps') : undefined}
       onTrack={() => {
         if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
       }}
@@ -502,6 +505,8 @@ export function App() {
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={setSelectedDeviceId}
       statusBar={!isMobile}
+      minimized={!isMobile ? activeStatusPanel !== 'connection' : undefined}
+      onMinimizedChange={!isMobile ? (minimized) => setActiveStatusPanel(minimized ? null : 'connection') : undefined}
     />
   );
 
