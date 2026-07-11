@@ -49,13 +49,13 @@ const S: Record<string, React.CSSProperties> = {
 export function AircraftTelemetry({ deviceId, device, isTracked, compact = false, statusBar = false, onTrack }: Props) {
   const age = ageSeconds(device);
   const summary = statusBar ? (
-    <span className="status-summary status-summary--telemetry" aria-label="無人機遙測摘要">
-      <span className="status-summary__icon" aria-hidden="true">✈</span>
+    <span className="status-summary status-summary--telemetry" aria-label="GPS 狀態摘要">
+      <span className="status-summary__icon" aria-hidden="true">⌖</span>
       {device ? (
         <span className="status-summary__data">
-          <span>LAT {device.lat.toFixed(5)}</span>
-          <span>LON {device.lon.toFixed(5)}</span>
-          <span>ALT {device.alt.toFixed(1)} m</span>
+          <span>{device.lat.toFixed(3)}</span>
+          <span>{device.lon.toFixed(3)}</span>
+          <span>{device.alt.toFixed(1)}</span>
         </span>
       ) : <span className="status-summary__na">N/A</span>}
     </span>
@@ -63,7 +63,7 @@ export function AircraftTelemetry({ deviceId, device, isTracked, compact = false
 
   return (
     <MinPanel
-      title="無人機遙測"
+      title={statusBar ? 'GPS 狀態' : '無人機遙測'}
       className={`panel-ui${statusBar ? ' status-panel status-panel--telemetry' : ''}`}
       defaultMinimized={statusBar}
       headerContent={summary}

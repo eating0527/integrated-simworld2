@@ -115,7 +115,6 @@ export function GPSStatus({
     <span className="status-summary status-summary--connection" aria-label="連線狀態摘要">
       <span className="status-summary__icon" aria-hidden="true">⌁</span>
       <span className={`status-summary__light status-summary__light--${st.tone}`} aria-hidden="true" />
-      <span className="status-summary__state">{st.label}</span>
       <span className="status-summary__count">{allDevices.size} 台</span>
     </span>
   ) : undefined;

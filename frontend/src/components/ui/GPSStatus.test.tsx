@@ -61,8 +61,8 @@ describe('GPSStatus', () => {
     const user = userEvent.setup();
     renderPanel(true);
 
-    expect(screen.getByLabelText('連線狀態摘要')).toHaveTextContent('已連線');
     expect(screen.getByLabelText('連線狀態摘要')).toHaveTextContent('1 台');
+    expect(screen.getByLabelText('連線狀態摘要')).not.toHaveTextContent('已連線');
     expect(screen.queryByRole('button', { name: '改名' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /restore 連線狀態/i }));

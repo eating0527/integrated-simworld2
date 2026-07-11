@@ -37,12 +37,12 @@ describe('AircraftTelemetry', () => {
       />,
     );
 
-    expect(screen.getByLabelText('無人機遙測摘要')).toHaveTextContent('LAT 24.12346');
-    expect(screen.getByLabelText('無人機遙測摘要')).toHaveTextContent('LON 121.76543');
-    expect(screen.getByLabelText('無人機遙測摘要')).toHaveTextContent('ALT 88.4 m');
+    expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('24.123');
+    expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('121.765');
+    expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('88.4');
     expect(screen.queryByRole('button', { name: 'Track' })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /restore 無人機遙測/i }));
+    await user.click(screen.getByRole('button', { name: /restore GPS 狀態/i }));
 
     expect(screen.getByRole('button', { name: 'Track' })).toBeInTheDocument();
   });

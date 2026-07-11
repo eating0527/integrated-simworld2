@@ -30,28 +30,34 @@ function renderSceneSwitcher() {
 }
 
 describe('SceneSwitcher', () => {
-  it('exposes scene navigation and selects preset and generated scenes', async () => {
+  it('opens a vertical scene menu and selects preset and generated scenes', async () => {
     const user = userEvent.setup();
     const { onSelectPreset, onSelectGenerated } = renderSceneSwitcher();
 
     expect(screen.getByRole('navigation', { name: '場景選擇' })).toHaveClass('scene-switcher');
 
-    await user.click(screen.getByRole('button', { name: /NYCU/ }));
+    await user.click(screen.getByRole('button', { name: 'SCENE' }));
+    expect(screen.getByRole('listbox', { name: 'Scene options' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NTPU' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NYCU' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '自訂場景' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'NYCU' }));
     expect(onSelectPreset).toHaveBeenCalledWith('nycu');
 
-    await user.click(screen.getByRole('button', { name: /Generated/ }));
-    await user.click(screen.getByRole('option', { name: '自訂場景' }));
+    await user.click(screen.getByRole('button', { name: 'SCENE' }));
+    await user.click(screen.getByRole('button', { name: '自訂場景' }));
     expect(onSelectGenerated).toHaveBeenCalledWith('task-1');
   });
 
-  it('closes the generated scene menu with Escape', async () => {
+  it('closes the scene menu with Escape', async () => {
     const user = userEvent.setup();
     renderSceneSwitcher();
 
-    await user.click(screen.getByRole('button', { name: /Generated/ }));
-    expect(screen.getByRole('listbox', { name: 'Generated scenes' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'SCENE' }));
+    expect(screen.getByRole('listbox', { name: 'Scene options' })).toBeInTheDocument();
 
     await user.keyboard('{Escape}');
-    expect(screen.queryByRole('listbox', { name: 'Generated scenes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('listbox', { name: 'Scene options' })).not.toBeInTheDocument();
   });
 });
