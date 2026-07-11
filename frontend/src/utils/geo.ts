@@ -33,3 +33,19 @@ export function latLonToENU(
 
   return [x, y, z];
 }
+
+export function worldXZToLatLon(
+  x: number,
+  z: number,
+  origin: { lat: number; lon: number; alt: number },
+): { lat: number; lon: number; alt: number } {
+  const R = 6_378_137;
+  const dLat = -z / R;
+  const dLon = x / (R * Math.cos(origin.lat * (Math.PI / 180)));
+
+  return {
+    lat: origin.lat + dLat * (180 / Math.PI),
+    lon: origin.lon + dLon * (180 / Math.PI),
+    alt: origin.alt,
+  };
+}

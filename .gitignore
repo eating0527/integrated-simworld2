@@ -1,51 +1,48 @@
-# Python
-backend/.venv/
-backend/__pycache__/
-backend/app/__pycache__/
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-*.egg-info/
-.eggs/
+.DS_Store
+node_modules/
 dist/
 build/
-
-# Node / frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-
-# 環境變數（含密鑰，不可推到公開 repo）
 .env
-.env.*
-!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# 產生的圖檔（sionna 輸出，數量多且可重新產生）
-backend/app/static/images/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.venv-*/
+venv/
+ENV/
+env/
+.pytest_cache/
 
-# 上傳的照片（使用者資料，不應推到 repo）
-backend/uploads/
-backend/app/uploads/
-backend/*.json
-backend/app/uploads/photos.json
+# Blender / blosm
+*.blend
+*.blend1
+*.blend2
+blosm/
 
-# 系統暫存
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
+# Docker
+docker-compose.override.yml
 
-# IDE
-.vscode/settings.json
+# IDEs
+.vscode/
 .idea/
 
 # Log
 *.log
 /tmp/
 
+# Capture control mission data
+incoming/mission_*/
+
 # Runtime-generated logs and temp files
 .logs/
 .playwright-cli/
+.test_tmp/
 .test_tmp/
 backend/.tmp/
 backend/.pip-cache/
@@ -57,7 +54,13 @@ frontend/.npm-cache/
 
 # Generated simulation map images
 backend/app/static/maps/
+backend/app/static/images/iss_unet_*
 backend/app/static/scenes/generated/
+
+# Local ISS_UNET model artifacts
+backend/app/model_artifacts/
+*.pt
+*.pth
 
 # 模型 artifacts
 backend/app/model_artifacts/
@@ -68,3 +71,5 @@ tools/platform-tools-latest-windows.zip
 
 # Generated simulation scenes
 backend/app/static/scenes/T-*
+backend/app/uploads/scene_index.json
+docs/plans/

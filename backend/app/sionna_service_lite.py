@@ -217,13 +217,134 @@ ANTENNA_CONFIG = {
 }
 
 
+def compute_radio_maps(
+    *,
+    scene_xml_path: str,
+    devices: List[dict],
+    cell_size: float = 3.0,
+    samples_per_tx: int = 10 ** 6,
+    noise_floor_dbm: float = -100.0,
+    frequency_hz: float = 1.5e9,
+) -> dict:
+    (
+        load_scene,
+        SionnaTransmitter,
+        SionnaReceiver,
+        PlanarArray,
+        RadioMapSolver,
+    ) = _import_sionna()
+
+    tx_devices = [d for d in devices if d["role"] == "tx"]
+    rx_devices = [d for d in devices if d["role"] == "rx"]
+    jam_devices = [d for d in devices if d["role"] == "jammer"]
+    if not rx_devices:
+        raise ValueError("At least one RX device is required.")
+
+    rx = rx_devices[0]
+
+    logger.info("Loading Sionna scene: %s", scene_xml_path)
+    scene = load_scene(scene_xml_path)
+    scene.tx_array = PlanarArray(**ANTENNA_CONFIG)
+    scene.rx_array = PlanarArray(**ANTENNA_CONFIG)
+    scene.frequency = frequency_hz
+
+    for name in list(scene.transmitters):
+        scene.remove(name)
+    for name in list(scene.receivers):
+        scene.remove(name)
+
+    all_tx_entries = []
+    idx_desired: List[int] = []
+    idx_jammer: List[int] = []
+
+    for d in tx_devices:
+        pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
+        power = d.get("power_dbm", DEFAULT_TX_POWER_DBM)
+        tx = SionnaTransmitter(
+            name=d["name"],
+            position=pos_sionna,
+            orientation=[0.0, 0.0, 0.0],
+            power_dbm=float(power),
+        )
+        tx.role = "desired"
+        scene.add(tx)
+        all_tx_entries.append(tx)
+        idx_desired.append(len(all_tx_entries) - 1)
+        logger.info("Added TX '%s' at Sionna %s, %.1f dBm", d["name"], pos_sionna, power)
+
+    for d in jam_devices:
+        pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
+        power = d.get("power_dbm", DEFAULT_JAM_POWER_DBM)
+        jammer = SionnaTransmitter(
+            name=d["name"],
+            position=pos_sionna,
+            orientation=[0.0, 0.0, 0.0],
+            power_dbm=float(power),
+        )
+        jammer.role = "jammer"
+        scene.add(jammer)
+        all_tx_entries.append(jammer)
+        idx_jammer.append(len(all_tx_entries) - 1)
+        logger.info("Added Jammer '%s' at Sionna %s, %.1f dBm", d["name"], pos_sionna, power)
+
+    rx_pos_sionna = threejs_to_sionna(rx["x"], rx["y"], rx["z"])
+    rx_obj = SionnaReceiver(name=rx["name"], position=rx_pos_sionna)
+    scene.add(rx_obj)
+    logger.info("Added RX '%s' at Sionna %s", rx["name"], rx_pos_sionna)
+
+    logger.info(
+        "Running RadioMapSolver: cell_size=%s, samples=%s",
+        cell_size, samples_per_tx,
+    )
+    rm_solver = RadioMapSolver()
+    rm = rm_solver(
+        scene,
+        max_depth=5,
+        samples_per_tx=samples_per_tx,
+        cell_size=(cell_size, cell_size),
+        refraction=False,
+        specular_reflection=True,
+        diffuse_reflection=True,
+    )
+
+    wss = rm.rss[:].numpy()
+    tss = np.sum(wss, axis=0)
+    dss = np.sum(wss[idx_desired, :, :], axis=0) if idx_desired else np.zeros_like(tss)
+    iss = np.sum(wss[idx_jammer, :, :], axis=0) if idx_jammer else np.zeros_like(tss)
+
+    def to_dbm(arr: np.ndarray) -> np.ndarray:
+        return 10.0 * np.log10(np.maximum(arr, 1e-12) / 1e-3)
+
+    dss_dbm = to_dbm(dss)
+    iss_dbm = to_dbm(iss)
+    tss_dbm = to_dbm(tss)
+    noise_floor_w = 10.0 ** ((float(noise_floor_dbm) - 30.0) / 10.0)
+    sinr_db = 10.0 * np.log10(np.maximum(dss, 1e-12) / np.maximum(iss + noise_floor_w, 1e-12))
+
+    cc = rm.cell_centers.numpy()
+    x_coords = np.unique(cc[:, :, 0])
+    y_coords = np.unique(cc[:, :, 1])
+
+    return {
+        "dss_dbm": dss_dbm,
+        "iss_dbm": iss_dbm,
+        "tss_dbm": tss_dbm,
+        "sinr_db": sinr_db,
+        "x_coords": x_coords,
+        "y_coords": y_coords,
+        "tx_devices": tx_devices,
+        "jam_devices": jam_devices,
+        "rx_device": rx,
+    }
+
+
 def generate_maps(
     *,
     scene_xml_path: str,
     devices: List[dict],
     output_dir: str,
     scene_name: str = "ntpu",
-    map_type: str = "iss",          # "iss" | "tss" | "cfar"
+    map_type: str = "iss",          # "sinr" | "iss" | "tss" | "cfar"
     cell_size: float = 3.0,
     map_size: tuple = (512, 512),
     samples_per_tx: int = 10 ** 6,  # reduced for lite version
@@ -231,6 +352,9 @@ def generate_maps(
     gaussian_sigma: float = 1.0,
     vmin_dbm: float = -60.0,
     vmax_dbm: float = 0.0,
+    sinr_vmin: float = -20.0,
+    sinr_vmax: float = 40.0,
+    noise_floor_dbm: float = -100.0,
     cfar_min_distance: int = 3,
     cfar_threshold_percentile: float = 99.5,
     frequency_hz: float = 1.5e9,
@@ -263,6 +387,12 @@ def generate_maps(
         PlanarArray,
         RadioMapSolver,
     ) = _import_sionna()
+    map_type = str(map_type).strip().lower()
+    supported_map_types = {"sinr", "iss", "tss", "cfar"}
+    if map_type not in supported_map_types:
+        raise ValueError(
+            f"Unsupported map_type '{map_type}'. Expected one of: {sorted(supported_map_types)}"
+        )
 
     os.makedirs(output_dir, exist_ok=True)
     scene_footprints: list[dict] = []
@@ -283,14 +413,14 @@ def generate_maps(
     # -----------------------------------------------------------------------
     # Separate devices by role
     # -----------------------------------------------------------------------
-    tx_devices   = [d for d in devices if d["role"] == "tx"]
-    rx_devices   = [d for d in devices if d["role"] == "rx"]
-    jam_devices  = [d for d in devices if d["role"] == "jammer"]
-
+    tx_devices = [d for d in devices if d["role"] == "tx"]
+    rx_devices = [d for d in devices if d["role"] == "rx"]
+    jam_devices = [d for d in devices if d["role"] == "jammer"]
     if not rx_devices:
         raise ValueError("At least one RX device is required.")
-
-    rx = rx_devices[0]  # only one RX (UAV)
+    rx = rx_devices[0]
+    if map_type == "sinr" and not tx_devices:
+        raise ValueError("At least one TX device is required for a SINR map.")
 
     # -----------------------------------------------------------------------
     # Load Sionna scene
@@ -396,6 +526,9 @@ def generate_maps(
 
     iss_dbm = to_dbm(ISS)
     tss_dbm = to_dbm(TSS)
+    noise_floor_w = 10.0 ** ((float(noise_floor_dbm) - 30.0) / 10.0)
+    sinr_db = 10.0 * np.log10(np.maximum(DSS, 1e-12) / np.maximum(ISS + noise_floor_w, 1e-12))
+    sinr_smooth = gaussian_filter(sinr_db, sigma=gaussian_sigma)
 
     # Cell centres for axis labels
     # Sionna 1.x: cell_centers shape is (num_cells_y, num_cells_x, 2)
@@ -420,7 +553,13 @@ def generate_maps(
     # -----------------------------------------------------------------------
     # Select data for requested map type
     # -----------------------------------------------------------------------
-    if map_type == "iss":
+    scale_unit = "dBm"
+    if map_type == "sinr":
+        data = sinr_smooth
+        title = f"SINR Map ??{scene_name.upper()}"
+        cbar_label = "SINR (dB)"
+        cmap = "RdYlGn"
+    elif map_type == "iss":
         data = iss_smooth
         title = f"ISS Map — {scene_name.upper()}"
         cbar_label = "ISS (dBm)"
@@ -436,15 +575,19 @@ def generate_maps(
         cbar_label = "ISS (dBm)"
         cmap = "jet"
 
-    map_vmin = float(vmin_dbm)
-    map_vmax = float(vmax_dbm)
+    map_vmin = float(sinr_vmin) if map_type == "sinr" else float(vmin_dbm)
+    map_vmax = float(sinr_vmax) if map_type == "sinr" else float(vmax_dbm)
+    if map_type == "sinr":
+        scale_unit = "dB"
     if map_vmax <= map_vmin:
         map_vmax = map_vmin + 1.0
     logger.info(
-        "Plot scale for %s map: vmin=%.2f dBm, vmax=%.2f dBm",
+        "Plot scale for %s map: vmin=%.2f %s, vmax=%.2f %s",
         map_type.upper(),
         map_vmin,
+        scale_unit,
         map_vmax,
+        scale_unit,
     )
 
     # -----------------------------------------------------------------------
@@ -543,8 +686,16 @@ def generate_maps(
     buf.close()
 
     # Also write to disk for caching / debugging
-    filename_map = {"iss": "iss_map.png", "tss": "tss_map.png", "cfar": "cfar_map.png"}
-    out_path = os.path.join(output_dir, filename_map[map_type])
+    filename_map = {
+        "sinr": "sinr_map.png",
+        "iss": "iss_map.png",
+        "tss": "tss_map.png",
+        "cfar": "cfar_map.png",
+    }
+    output_filename = filename_map.get(map_type)
+    if output_filename is None:
+        raise ValueError(f"No output filename configured for map_type '{map_type}'")
+    out_path = os.path.join(output_dir, output_filename)
     with open(out_path, "wb") as f:
         f.write(image_bytes)
     logger.info("Saved %s map to %s (%d bytes)", map_type.upper(), out_path, len(image_bytes))

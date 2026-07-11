@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useState, useRef, useCallback } from 'react';
 import { ManualDirection } from '../../hooks/useManualControl';
+import { MinPanel } from './MinPanel';
 
 const LONG_PRESS_DELAY = 150;   // ms before repeat kicks in
 const LONG_PRESS_INTERVAL = 80; // ms between repeated steps
@@ -258,7 +259,10 @@ export function UAVControlPanel({
       </button>
 
       {open && (
-        <div style={{
+        <MinPanel
+          title="無人機控制"
+          draggable
+          style={{
           position: 'fixed',
           bottom: 60,
           left: 14,
@@ -270,14 +274,8 @@ export function UAVControlPanel({
           boxShadow: '0 8px 40px rgba(68,170,255,.14), 0 2px 8px rgba(0,0,0,.5)',
           overflow: 'hidden',
           animation: 'slide-in-left .25s ease',
-        }}>
-          <div style={{ padding: '12px 16px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#4af', fontSize: 13, fontWeight: 700, letterSpacing: 1, flex: 1 }}>UAV Control</span>
-            <button
-              onClick={() => setOpen(false)}
-              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,.45)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}
-            >x</button>
-          </div>
+        }}
+        >
           <div style={{ ...S.panel, borderRadius: 0, border: 'none', boxShadow: 'none' }}>
 
       {/* Mode toggles */}
@@ -345,7 +343,7 @@ export function UAVControlPanel({
         </div>
       </div>
           </div>
-        </div>
+        </MinPanel>
       )}
     </>
   );

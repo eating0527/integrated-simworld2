@@ -1,0 +1,1476 @@
+[
+  {
+    "id": "task-eb9b0dd4b5",
+    "sceneKey": "T-D3465EF47E",
+    "sceneName": "picked_2026-07-09_08_56_25",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.943602246997187,
+      "lon": 121.37019932270051,
+      "zoom": 18,
+      "requested_zoom": 18,
+      "place_name": "龍恩里",
+      "location_id": "loc-2dd5ea599a"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E",
+    "modelUrl": "/generated-scenes/T-D3465EF47E/T-D3465EF47E.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\T-D3465EF47E.xml",
+    "createdAt": "2026-07-09T16:56:25.271823",
+    "updatedAt": "2026-07-09T16:57:13.714112",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-07-09T16:56:25.274821",
+    "finishedAt": "2026-07-09T16:57:13.712103",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-D3465EF47E",
+      "available": true,
+      "data_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-D3465EF47E",
+        "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\T-D3465EF47E.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "grid_bounds": {
+          "min_x": -318.5484924316406,
+          "max_x": 314.848388671875,
+          "min_y": -281.19744873046875,
+          "max_y": 315.8847351074219,
+          "pixel_size_x_m": 4.948413133621216,
+          "pixel_size_y_m": 4.6647045612335205
+        },
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-07-09T16:57:13.708520"
+      }
+    }
+  },
+  {
+    "id": "task-d2e527631e",
+    "sceneKey": "T-CE536C15D9",
+    "sceneName": "picked_2026-07-09_08_45_43",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.94468692382084,
+      "lon": 121.37198567390443,
+      "zoom": 18,
+      "requested_zoom": 18,
+      "place_name": "龍學里",
+      "location_id": "loc-44c542c0c7"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9",
+    "modelUrl": "/generated-scenes/T-CE536C15D9/T-CE536C15D9.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\T-CE536C15D9.xml",
+    "createdAt": "2026-07-09T16:45:43.151820",
+    "updatedAt": "2026-07-09T16:46:41.607358",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-07-09T16:45:43.154815",
+    "finishedAt": "2026-07-09T16:46:41.606357",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-CE536C15D9",
+      "available": true,
+      "data_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-CE536C15D9",
+        "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\T-CE536C15D9.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "grid_bounds": {
+          "min_x": -318.9698486328125,
+          "max_x": 287.88922119140625,
+          "min_y": -343.2821960449219,
+          "max_y": 328.150634765625,
+          "pixel_size_x_m": 4.741086483001709,
+          "pixel_size_y_m": 5.2455689907073975
+        },
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-07-09T16:46:41.604359"
+      }
+    }
+  },
+  {
+    "id": "task-de31ade75c",
+    "sceneKey": "T-C48D06AE5A",
+    "sceneName": "picked_2026-06-25_04_34_29",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.94260025005488,
+      "lon": 121.36856317520143,
+      "zoom": 18,
+      "requested_zoom": 17,
+      "place_name": "心湖垃圾桶",
+      "location_id": "loc-f1441b184f"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A",
+    "modelUrl": "/generated-scenes/T-C48D06AE5A/T-C48D06AE5A.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\T-C48D06AE5A.xml",
+    "createdAt": "2026-06-25T12:34:29.184546",
+    "updatedAt": "2026-06-25T12:35:23.152060",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-06-25T12:34:29.186546",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-06-25T12:35:23.151074",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-C48D06AE5A",
+      "available": true,
+      "data_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-C48D06AE5A",
+        "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\T-C48D06AE5A.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "grid_bounds": {
+          "min_x": -321.69091796875,
+          "max_x": 271.7635192871094,
+          "min_y": -308.7578430175781,
+          "max_y": 282.4808349609375,
+          "pixel_size_x_m": 4.636362791061401,
+          "pixel_size_y_m": 4.619052171707153
+        },
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-06-25T12:35:23.145178"
+      }
+    }
+  },
+  {
+    "id": "task-80df6c3a81",
+    "sceneKey": "T-74A95E33C6",
+    "sceneName": "picked_2026-06-22_07_10_26",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.942836157835504,
+      "lon": 121.3707169890404,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "電資院長椅",
+      "location_id": "loc-80044f874e"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6",
+    "modelUrl": "/generated-scenes/T-74A95E33C6/T-74A95E33C6.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\T-74A95E33C6.xml",
+    "createdAt": "2026-06-22T15:10:24.366232",
+    "updatedAt": "2026-06-22T15:11:07.925725",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-06-22T15:10:24.369233",
+    "finishedAt": "2026-06-22T15:11:07.924718",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-74A95E33C6",
+      "available": true,
+      "data_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-74A95E33C6",
+        "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-74A95E33C6\\T-74A95E33C6.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-06-22T15:11:07.922724"
+      }
+    }
+  },
+  {
+    "id": "task-57938ce500",
+    "sceneKey": "T-7F35CC74D9",
+    "sceneName": "picked_2026-06-02_02_07_41",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 25.12960827642523,
+      "lon": 121.75113201141357,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "義昭里",
+      "location_id": "loc-ea75e6d86a"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9",
+    "modelUrl": "/generated-scenes/T-7F35CC74D9/T-7F35CC74D9.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\T-7F35CC74D9.xml",
+    "createdAt": "2026-06-02T10:07:39.797650",
+    "updatedAt": "2026-06-02T10:08:44.179446",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-06-02T10:07:39.799657",
+    "finishedAt": "2026-06-02T10:08:44.177439",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-7F35CC74D9",
+      "available": true,
+      "data_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-7F35CC74D9",
+        "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-7F35CC74D9\\T-7F35CC74D9.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-06-02T10:08:44.175432"
+      }
+    }
+  },
+  {
+    "id": "task-7b4f715ec3",
+    "sceneKey": "T-954B4294FD",
+    "sceneName": "picked_2026-05-28_02_23_01",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.944818251756672,
+      "lon": 121.36933763390796,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "崇越館飲水機",
+      "location_id": "loc-5c116d22f9"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD",
+    "modelUrl": "/generated-scenes/T-954B4294FD/T-954B4294FD.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\T-954B4294FD.xml",
+    "createdAt": "2026-05-28T10:23:02.008813",
+    "updatedAt": "2026-05-28T10:25:12.142393",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-05-28T10:23:02.010830",
+    "finishedAt": "2026-05-28T10:25:12.139341",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-954B4294FD",
+      "available": true,
+      "data_dir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-954B4294FD",
+        "scene_xml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-954B4294FD\\T-954B4294FD.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-05-28T10:25:12.131649"
+      }
+    }
+  },
+  {
+    "id": "task-82334ec904",
+    "sceneKey": "T-BB975E3EFF",
+    "sceneName": "picked_2026-05-27_07_19_56",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 24.951588746750037,
+      "lon": 121.26922252283339,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "Bailu Village",
+      "location_id": "loc-ffe93bb654"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF",
+    "modelUrl": "/generated-scenes/T-BB975E3EFF/T-BB975E3EFF.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\T-BB975E3EFF.xml",
+    "createdAt": "2026-05-27T15:19:57.019920",
+    "updatedAt": "2026-05-27T15:22:18.115296",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-05-27T15:19:57.026547",
+    "finishedAt": "2026-05-27T15:22:18.115296",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-BB975E3EFF",
+      "available": true,
+      "data_dir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-BB975E3EFF",
+        "scene_xml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BB975E3EFF\\T-BB975E3EFF.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-05-27T15:22:18.103729"
+      }
+    }
+  },
+  {
+    "id": "task-f9df052911",
+    "sceneKey": "T-E9929455F7",
+    "sceneName": "picked_2026-05-17_06_10_48",
+    "status": "completed",
+    "stage": "iss_unet_dataset_prepared",
+    "location": {
+      "lat": 25.109766469635776,
+      "lon": 121.51452988704061,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "文林里",
+      "location_id": "loc-23cbb0a95c"
+    },
+    "outputDir": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7",
+    "modelUrl": "/generated-scenes/T-E9929455F7/T-E9929455F7.glb",
+    "sionnaSceneXml": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\T-E9929455F7.xml",
+    "createdAt": "2026-05-17T14:10:48.243025",
+    "updatedAt": "2026-05-17T14:12:43.815138",
+    "note": "Blender stage completed and ISS_UNET dataset prepared",
+    "startedAt": "2026-05-17T14:10:48.246019",
+    "finishedAt": "2026-05-17T14:12:43.814138",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 4.3\\blender.exe",
+    "issUnetDataset": {
+      "success": true,
+      "scene": "T-E9929455F7",
+      "available": true,
+      "data_dir": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data",
+      "missing_files": [],
+      "meta_available": true,
+      "outputs": {
+        "building_height_128.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\building_height_128.npy",
+        "sionna_dss.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\sionna_dss.npy",
+        "sionna_iss.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\sionna_iss.npy",
+        "sionna_tss.npy": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\iss_unet_data\\sionna_tss.npy"
+      },
+      "meta": {
+        "scene": "T-E9929455F7",
+        "scene_xml": "D:\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9929455F7\\T-E9929455F7.xml",
+        "grid_res": 128,
+        "area_m": 512.0,
+        "pixel_size_m": 4.0,
+        "frequency_hz": 3500000000.0,
+        "tx_list": [
+          {
+            "role": "desired",
+            "position_px": [
+              64,
+              64
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          },
+          {
+            "role": "jammer",
+            "position_px": [
+              30,
+              30
+            ],
+            "ptx_dbm": 40.0,
+            "height_m": 40.0
+          }
+        ],
+        "rx_height": 1.5,
+        "sionna": {
+          "max_depth": 10,
+          "samples_per_tx": 1000000
+        },
+        "outputs": {
+          "building_map": "building_height_128.npy",
+          "dss": "sionna_dss.npy",
+          "iss": "sionna_iss.npy",
+          "tss": "sionna_tss.npy"
+        },
+        "prepared_at": "2026-05-17T14:12:43.812138"
+      }
+    }
+  },
+  {
+    "id": "task-9375b041a3",
+    "sceneKey": "T-F52A5571A8",
+    "sceneName": "picked_2026-05-14_08_05_00",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 25.014431509761046,
+      "lon": 121.42227172851564,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": null,
+      "location_id": "loc-eda789843c"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F52A5571A8",
+    "modelUrl": "/generated-scenes/T-F52A5571A8/T-F52A5571A8.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F52A5571A8\\T-F52A5571A8.xml",
+    "createdAt": "2026-05-14T16:05:00.744280",
+    "updatedAt": "2026-05-14T16:05:44.694712",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-14T16:05:00.746283",
+    "finishedAt": "2026-05-14T16:05:44.694167",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe"
+  },
+  {
+    "id": "task-2271ae1931",
+    "sceneKey": "T-5D3B7D2B45",
+    "sceneName": "picked_2026-05-14_05_28_23",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.987652866658557,
+      "lon": 121.28554344177248,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "中聖里",
+      "location_id": "loc-a38c408b99"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5D3B7D2B45",
+    "modelUrl": "/generated-scenes/T-5D3B7D2B45/T-5D3B7D2B45.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5D3B7D2B45\\T-5D3B7D2B45.xml",
+    "createdAt": "2026-05-14T13:28:23.583761",
+    "updatedAt": "2026-05-14T13:30:00.017061",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-14T13:28:23.585762",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-05-14T13:30:00.016059"
+  },
+  {
+    "id": "task-5a4d12cd7b",
+    "sceneKey": "T-752752D30E",
+    "sceneName": "picked_2026-05-06_16_54_53",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 25.053101462955347,
+      "lon": 121.44407272338869,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "立廷里",
+      "location_id": "loc-ad43515984"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-752752D30E",
+    "modelUrl": "/generated-scenes/T-752752D30E/T-752752D30E.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-752752D30E\\T-752752D30E.xml",
+    "createdAt": "2026-05-07T00:54:53.382906",
+    "updatedAt": "2026-05-07T00:55:25.511087",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-07T00:54:53.385338",
+    "finishedAt": "2026-05-07T00:55:25.503560",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe"
+  },
+  {
+    "id": "task-7a4523a101",
+    "sceneKey": "T-ED6E328042",
+    "sceneName": "picked_2026-05-06_04_51_22",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 25.18873851324777,
+      "lon": 121.43531799316406,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "崁頂里",
+      "location_id": "loc-10b964c32e"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-ED6E328042",
+    "modelUrl": "/generated-scenes/T-ED6E328042/T-ED6E328042.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-ED6E328042\\T-ED6E328042.xml",
+    "createdAt": "2026-05-06T12:51:20.260653",
+    "updatedAt": "2026-05-06T12:52:25.824558",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-06T12:51:20.262651",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-05-06T12:52:25.824558"
+  },
+  {
+    "id": "task-159290d35f",
+    "sceneKey": "T-B4D1B16430",
+    "sceneName": "picked_2026-05-05_15_48_26",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 25.013906494432717,
+      "lon": 121.45299911499025,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "光榮里",
+      "location_id": "loc-17e1b61788"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-B4D1B16430",
+    "modelUrl": "/generated-scenes/T-B4D1B16430/T-B4D1B16430.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-B4D1B16430\\T-B4D1B16430.xml",
+    "createdAt": "2026-05-05T23:48:26.732515",
+    "updatedAt": "2026-05-05T23:49:23.964483",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-05T23:48:26.734520",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-05-05T23:49:23.964483"
+  },
+  {
+    "id": "task-6bea66f663",
+    "sceneKey": "T-0AE579A7F7",
+    "sceneName": "picked_2026-05-05_03_36_48",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.946841657070184,
+      "lon": 121.38158798217775,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "南園里",
+      "location_id": "loc-536ad96a06"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-0AE579A7F7",
+    "modelUrl": "/generated-scenes/T-0AE579A7F7/T-0AE579A7F7.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-0AE579A7F7\\T-0AE579A7F7.xml",
+    "createdAt": "2026-05-05T11:36:46.951700",
+    "updatedAt": "2026-05-05T11:37:19.729022",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-05T11:36:46.951700",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-05-05T11:37:19.729022"
+  },
+  {
+    "id": "task-132ab436a4",
+    "sceneKey": "T-2494FD0C00",
+    "sceneName": "picked_2026-05-01_08_09_15",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.96528424205014,
+      "lon": 121.42218589782716,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "虎躍第一停車場",
+      "location_id": "loc-678b0df2d2"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-2494FD0C00",
+    "modelUrl": "/generated-scenes/T-2494FD0C00/T-2494FD0C00.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-2494FD0C00\\T-2494FD0C00.xml",
+    "createdAt": "2026-05-01T16:09:14.590226",
+    "updatedAt": "2026-05-01T16:09:47.356020",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-01T16:09:14.590226",
+    "finishedAt": "2026-05-01T16:09:47.356020",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe"
+  },
+  {
+    "id": "task-eda2a1fc24",
+    "sceneKey": "T-0262EB2F0D",
+    "sceneName": "picked_2026-04-30_03_01_45",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.787007273936474,
+      "lon": 120.99783897399904,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "東區",
+      "location_id": "loc-49433a5350"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-0262EB2F0D",
+    "modelUrl": "/generated-scenes/T-0262EB2F0D/T-0262EB2F0D.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-0262EB2F0D\\T-0262EB2F0D.xml",
+    "createdAt": "2026-04-30T11:01:45.319816",
+    "updatedAt": "2026-04-30T11:03:58.926077",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-30T11:01:45.323247",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-30T11:03:58.926077"
+  },
+  {
+    "id": "task-fe04c02e75",
+    "sceneKey": "T-E9C97A2DF5",
+    "sceneName": "picked_2026-04-30_02_50_31",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.787981311712517,
+      "lon": 120.99714159965517,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "東區",
+      "location_id": "loc-1bf4d5ea8b"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9C97A2DF5",
+    "modelUrl": "/generated-scenes/T-E9C97A2DF5/T-E9C97A2DF5.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-E9C97A2DF5\\T-E9C97A2DF5.xml",
+    "createdAt": "2026-04-30T10:50:31.545574",
+    "updatedAt": "2026-04-30T10:51:06.713669",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-30T10:50:31.577763",
+    "error": "private.coffee (strict_zoom): Error: HTTP Error 504: Gateway Timeout\n ; overpass-api.de (strict_zoom): Error: HTTP Error 504: Gateway Timeout\n ; vk maps (strict_zoom): Error: HTTP Error 403: Forbidden\n",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-30T10:51:06.712670"
+  },
+  {
+    "id": "task-d7d4274244",
+    "sceneKey": "T-55A5E3F1A0",
+    "sceneName": "picked_2026-04-30_02_49_21",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.787883908279028,
+      "lon": 120.99691629409791,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "東區",
+      "location_id": "loc-abee1f3a85"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-55A5E3F1A0",
+    "modelUrl": "/generated-scenes/T-55A5E3F1A0/T-55A5E3F1A0.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-55A5E3F1A0\\T-55A5E3F1A0.xml",
+    "createdAt": "2026-04-30T10:49:21.538565",
+    "updatedAt": "2026-04-30T10:49:31.075578",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-30T10:49:21.540569",
+    "error": "Blender failed (exit=1): TBBmalloc: skip allocation functions replacement in ucrtbase.dll: unknown prologue for function _msize",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-30T10:49:31.075578"
+  },
+  {
+    "id": "task-9746d4950e",
+    "sceneKey": "T-B6F850874D",
+    "sceneName": "picked_2026-04-30_02_45_08",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.94855374329632,
+      "lon": 121.38090133666994,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "柑園里",
+      "location_id": "loc-f209fbb8ff"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-B6F850874D",
+    "modelUrl": "/generated-scenes/T-B6F850874D/T-B6F850874D.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-B6F850874D\\T-B6F850874D.xml",
+    "createdAt": "2026-04-30T10:45:08.620360",
+    "updatedAt": "2026-04-30T10:45:08.673318",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-30T10:45:08.622358",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-30T10:45:08.673318"
+  },
+  {
+    "id": "task-dca75d6bf7",
+    "sceneKey": "T-DCFB95385C",
+    "sceneName": "picked_2026-04-30_02_36_21",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.948252184381012,
+      "lon": 121.38050436973573,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "柑園里",
+      "location_id": "loc-126bcff10b"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-DCFB95385C",
+    "modelUrl": "/generated-scenes/T-DCFB95385C/T-DCFB95385C.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-DCFB95385C\\T-DCFB95385C.xml",
+    "createdAt": "2026-04-30T10:36:21.234875",
+    "updatedAt": "2026-04-30T10:36:21.584140",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-30T10:36:21.239092",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-30T10:36:21.583140"
+  },
+  {
+    "id": "task-05d918d36a",
+    "sceneKey": "T-5E714CDFC3",
+    "sceneName": "picked_2026-04-24_04_55_26",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.999360732941128,
+      "lon": 121.36073112487794,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "新嶺里",
+      "location_id": "loc-3ed6cab0ab"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5E714CDFC3",
+    "modelUrl": "/generated-scenes/T-5E714CDFC3/T-5E714CDFC3.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5E714CDFC3\\T-5E714CDFC3.xml",
+    "createdAt": "2026-04-24T12:55:26.910722",
+    "updatedAt": "2026-04-24T12:55:26.959115",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-24T12:55:26.912727",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-24T12:55:26.958553"
+  },
+  {
+    "id": "task-b181f7e065",
+    "sceneKey": "T-393CD8874A",
+    "sceneName": "picked_2026-04-24_04_46_57",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.977422157063152,
+      "lon": 121.25206947326662,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "復興里",
+      "location_id": "loc-635e71c2c1"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-393CD8874A",
+    "modelUrl": "/generated-scenes/T-393CD8874A/T-393CD8874A.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-393CD8874A\\T-393CD8874A.xml",
+    "createdAt": "2026-04-24T12:46:57.615743",
+    "updatedAt": "2026-04-24T12:46:57.668407",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-24T12:46:57.617942",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-24T12:46:57.668407"
+  },
+  {
+    "id": "task-7cbb73879c",
+    "sceneKey": "T-5D85FF5FAB",
+    "sceneName": "picked_2026-04-24_03_30_26",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.7861890762952,
+      "lon": 120.99951267242433,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "LALA Kitchen",
+      "location_id": "loc-553bfbca0b"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5D85FF5FAB",
+    "modelUrl": "/generated-scenes/T-5D85FF5FAB/T-5D85FF5FAB.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-5D85FF5FAB\\T-5D85FF5FAB.xml",
+    "createdAt": "2026-04-24T11:30:26.944734",
+    "updatedAt": "2026-04-24T11:30:26.993707",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-24T11:30:26.946740",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-24T11:30:26.993707"
+  },
+  {
+    "id": "task-9743c90579",
+    "sceneKey": "T-A546151888",
+    "sceneName": "picked_2026-04-24_03_28_28",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.966957166865082,
+      "lon": 121.29717350006105,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "大宏里",
+      "location_id": "loc-9cef324d5b"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-A546151888",
+    "modelUrl": "/generated-scenes/T-A546151888/T-A546151888.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-A546151888\\T-A546151888.xml",
+    "createdAt": "2026-04-24T11:28:29.004152",
+    "updatedAt": "2026-04-24T11:28:29.061830",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-24T11:28:29.005991",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-24T11:28:29.061830"
+  },
+  {
+    "id": "task-5e0b025940",
+    "sceneKey": "T-36F15F1FA9",
+    "sceneName": "picked_2026-04-24_03_20_33",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.80901866083198,
+      "lon": 120.9767246246338,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "東區",
+      "location_id": "loc-b9a27baae0"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-36F15F1FA9",
+    "modelUrl": "/generated-scenes/T-36F15F1FA9/T-36F15F1FA9.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-36F15F1FA9\\T-36F15F1FA9.xml",
+    "createdAt": "2026-04-24T11:20:33.969133",
+    "updatedAt": "2026-04-24T11:20:34.350402",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-24T11:20:33.969133",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-24T11:20:34.349406"
+  },
+  {
+    "id": "task-05f1424e55",
+    "sceneKey": "T-D890B68469",
+    "sceneName": "picked_2026-04-23_15_54_06",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.787572216777985,
+      "lon": 120.99691629409791,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "東區",
+      "location_id": "loc-59c7d1ade6"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D890B68469",
+    "modelUrl": "/generated-scenes/T-D890B68469/T-D890B68469.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D890B68469\\T-D890B68469.xml",
+    "createdAt": "2026-04-23T23:54:06.289310",
+    "updatedAt": "2026-04-23T23:54:06.529034",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-23T23:54:06.292315",
+    "error": "Blender failed (exit=3221225794): Blender exited with error",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-23T23:54:06.528522"
+  },
+  {
+    "id": "task-c295ebcb46",
+    "sceneKey": "T-3BCC4C60A0",
+    "sceneName": "picked_2026-04-23_06_47_53",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.94562567228545,
+      "lon": 121.37622356414796,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "龍學里",
+      "location_id": "loc-92a4e2fae0"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-3BCC4C60A0",
+    "modelUrl": "/generated-scenes/T-3BCC4C60A0/T-3BCC4C60A0.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-3BCC4C60A0\\T-3BCC4C60A0.xml",
+    "createdAt": "2026-04-23T14:47:53.532897",
+    "updatedAt": "2026-04-23T14:48:35.143832",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-23T14:47:53.534551",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-23T14:48:35.143832"
+  },
+  {
+    "id": "task-9f8c35cb92",
+    "sceneKey": "T-F9D6B35FD7",
+    "sceneName": "picked_2026-04-22_10_06_25",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.950460356764918,
+      "lon": 121.3831651210785,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "南園里",
+      "location_id": "loc-57b3bde968"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F9D6B35FD7",
+    "modelUrl": "/generated-scenes/T-F9D6B35FD7/T-F9D6B35FD7.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-F9D6B35FD7\\T-F9D6B35FD7.xml",
+    "createdAt": "2026-04-22T18:06:25.031656",
+    "updatedAt": "2026-04-22T18:06:49.857083",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-22T18:06:25.032660",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-22T18:06:49.857083"
+  },
+  {
+    "id": "task-94186623d9",
+    "sceneKey": "T-6C4EDE51B8",
+    "sceneName": "picked_2026-04-22_10_04_38",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.942862910235686,
+      "lon": 121.3703978061676,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": null,
+      "location_id": "loc-0bda4cfca5"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-6C4EDE51B8",
+    "modelUrl": "/generated-scenes/T-6C4EDE51B8/T-6C4EDE51B8.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-6C4EDE51B8\\T-6C4EDE51B8.xml",
+    "createdAt": "2026-04-22T18:04:38.507361",
+    "updatedAt": "2026-04-22T18:05:23.044290",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-22T18:04:38.507361",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-22T18:05:23.044290"
+  },
+  {
+    "id": "task-255930fa52",
+    "sceneKey": "T-8ABBDA756F",
+    "sceneName": "picked_2026-04-22_08_46_15",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 24.77177232822881,
+      "lon": 121.44836425781251,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "福山里",
+      "location_id": "loc-0154c268b8"
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-8ABBDA756F",
+    "modelUrl": "/generated-scenes/T-8ABBDA756F/T-8ABBDA756F.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-8ABBDA756F\\T-8ABBDA756F.xml",
+    "createdAt": "2026-04-22T16:46:15.870843",
+    "updatedAt": "2026-04-22T16:46:58.903771",
+    "note": "Blender stage failed",
+    "startedAt": "2026-04-22T16:46:15.872842",
+    "finishedAt": "2026-04-22T16:46:58.891261",
+    "error": "private.coffee (strict_zoom): returned {'FINISHED'}, imported_meshes=0 ; overpass-api.de (strict_zoom): returned {'FINISHED'}, imported_meshes=0 ; vk maps (strict_zoom): Error: HTTP Error 403: Forbidden\n",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe"
+  },
+  {
+    "id": "task-2a9d4d1fb7",
+    "sceneKey": "T-BCB52DC2DD",
+    "sceneName": "e2e_20260420_010501",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.942913,
+      "lon": 121.37054,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "e2e_24.942913_121.370540",
+      "location_id": null
+    },
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BCB52DC2DD",
+    "modelUrl": "/generated-scenes/T-BCB52DC2DD/T-BCB52DC2DD.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-BCB52DC2DD\\T-BCB52DC2DD.xml",
+    "createdAt": "2026-04-20T01:05:01.660951",
+    "updatedAt": "2026-04-20T01:06:40.794473",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-20T01:06:08.439171",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "finishedAt": "2026-04-20T01:06:40.784474"
+  },
+  {
+    "id": "task-57e1d853c6",
+    "sceneName": "picked_2026-04-18_08_19_39",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.966140159912975,
+      "lon": 121.38244628906251,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "樂山里",
+      "location_id": "loc-8d987dcb15"
+    },
+    "createdAt": "2026-04-18T16:19:39.455069",
+    "updatedAt": "2026-04-18T16:20:07.873160",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-18T16:19:39.456067",
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\generated\\task-57e1d853c6",
+    "finishedAt": "2026-04-18T16:20:07.865162",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe"
+  },
+  {
+    "id": "task-360d52d50e",
+    "sceneName": "picked_2026-04-18_05_49_20",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.973609735832184,
+      "lon": 121.40441894531251,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "東山里",
+      "location_id": "loc-a9a3eba3de"
+    },
+    "createdAt": "2026-04-18T13:49:20.312707",
+    "updatedAt": "2026-04-18T13:50:05.968232",
+    "note": "Blender stage completed",
+    "startedAt": "2026-04-18T13:49:20.313707",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+    "outputDir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\generated\\task-360d52d50e",
+    "finishedAt": "2026-04-18T13:50:05.968232"
+  },
+  {
+    "id": "task-e53b5567d1",
+    "sceneKey": "T-844C12EF59",
+    "sceneName": "picked_2026-05-21_07_02_54",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.943806954484117,
+      "lon": 121.36875687941034,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "National Taipei University School of Social Sciences (Tuzi Avenue)",
+      "location_id": "loc-c5012b567e"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-844C12EF59",
+    "modelUrl": "/generated-scenes/T-844C12EF59/T-844C12EF59.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-844C12EF59\\T-844C12EF59.xml",
+    "createdAt": "2026-05-21T15:02:55.099837",
+    "updatedAt": "2026-05-21T15:06:26.008074",
+    "note": "Recovered from generated artifacts",
+    "startedAt": "2026-05-21T15:02:55.099837",
+    "finishedAt": "2026-05-21T15:06:26.006080",
+    "error": null
+  },
+  {
+    "id": "task-8746371efb",
+    "sceneKey": "T-1EF693E466",
+    "sceneName": "picked_2026-05-21_06_35_55",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.943493202627817,
+      "lon": 121.36877935760126,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "長椅",
+      "location_id": "loc-40b0aeaba5"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-1EF693E466",
+    "modelUrl": "/generated-scenes/T-1EF693E466/T-1EF693E466.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-1EF693E466\\T-1EF693E466.xml",
+    "createdAt": "2026-05-21T14:35:55.775085",
+    "updatedAt": "2026-05-21T14:42:59.788320",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-21T14:35:55.780109",
+    "finishedAt": "2026-05-21T14:42:59.785320",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+  },
+  {
+    "id": "task-aa3e49afbf",
+    "sceneKey": "T-30247364D8",
+    "sceneName": "picked_2026-05-21_03_24_46",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.944877113981587,
+      "lon": 121.36960974162415,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "崇越館飲水機",
+      "location_id": "loc-5f31f0a70b"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-30247364D8",
+    "modelUrl": "/generated-scenes/T-30247364D8/T-30247364D8.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-30247364D8\\T-30247364D8.xml",
+    "createdAt": "2026-05-21T11:24:46.542459",
+    "updatedAt": "2026-05-21T11:29:24.496450",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-21T11:24:46.542459",
+    "finishedAt": "2026-05-21T11:29:24.494433",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+  },
+  {
+    "id": "task-bceee837dd",
+    "sceneKey": "T-C4E16A4FF7",
+    "sceneName": "picked_2026-05-21_03_13_40",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.942383565222997,
+      "lon": 121.36703745146704,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "長椅",
+      "location_id": "loc-e48f43a0b1"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C4E16A4FF7",
+    "modelUrl": "/generated-scenes/T-C4E16A4FF7/T-C4E16A4FF7.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C4E16A4FF7\\T-C4E16A4FF7.xml",
+    "createdAt": "2026-05-21T11:13:40.558598",
+    "updatedAt": "2026-05-21T11:14:56.157932",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-21T11:13:40.561955",
+    "finishedAt": "2026-05-21T11:14:56.155926",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+  },
+  {
+    "id": "task-6cbe682eab",
+    "sceneKey": "T-9FBC690203",
+    "sceneName": "picked_2026-05-20_02_58_00",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.943899657491666,
+      "lon": 121.37111174143271,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "龍恩里",
+      "location_id": "loc-179ecd9058"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-9FBC690203",
+    "modelUrl": "/generated-scenes/T-9FBC690203/T-9FBC690203.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-9FBC690203\\T-9FBC690203.xml",
+    "createdAt": "2026-05-20T10:58:00.454235",
+    "updatedAt": "2026-05-20T10:59:31.123929",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-20T10:58:00.464449",
+    "finishedAt": "2026-05-20T10:59:31.123929",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+  },
+  {
+    "id": "task-e73d27fc2d",
+    "sceneKey": "T-1E5AEE90A5",
+    "sceneName": "picked_2026-05-19_13_26_14",
+    "status": "failed",
+    "stage": "blender_generation_failed",
+    "location": {
+      "lat": 25.00270308741286,
+      "lon": 121.4176375621703,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "(25.0027, 121.4176)",
+      "location_id": "loc-e40ddd7dcc"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-1E5AEE90A5",
+    "modelUrl": "/generated-scenes/T-1E5AEE90A5/T-1E5AEE90A5.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-1E5AEE90A5\\T-1E5AEE90A5.xml",
+    "createdAt": "2026-05-19T21:26:14.904197",
+    "updatedAt": "2026-05-19T21:26:27.902331",
+    "note": "Blender stage failed",
+    "startedAt": "2026-05-19T21:26:14.904197",
+    "finishedAt": "2026-05-19T21:26:27.897374",
+    "error": "private.coffee (strict_zoom): Error: <urlopen error [Errno 11001] getaddrinfo failed>\n ; overpass-api.de (strict_zoom): Error: <urlopen error [Errno 11001] getaddrinfo failed>\n ; vk maps (strict_zoom): Error: <urlopen error [Errno 11001] getaddrinfo failed>\n",
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+  },
+  {
+    "id": "task-92cacb1e1d",
+    "sceneKey": "T-8425FA40ED",
+    "sceneName": "picked_2026-05-19_13_02_45",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.943549016859066,
+      "lon": 121.36787469467004,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "長椅",
+      "location_id": "loc-1f3c2dcc37"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-8425FA40ED",
+    "modelUrl": "/generated-scenes/T-8425FA40ED/T-8425FA40ED.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-8425FA40ED\\T-8425FA40ED.xml",
+    "createdAt": "2026-05-19T21:02:45.957345",
+    "updatedAt": "2026-05-19T21:05:10.630373",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-19T21:02:45.969826",
+    "finishedAt": "2026-05-19T21:05:10.626828",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+  },
+  {
+    "id": "task-a42dd656fa",
+    "sceneKey": "T-9E77D716E2",
+    "sceneName": "picked_2026-05-19_10_06_42",
+    "status": "completed",
+    "stage": "blender_generated",
+    "location": {
+      "lat": 24.943477857455136,
+      "lon": 121.3688401711786,
+      "zoom": 17,
+      "requested_zoom": 17,
+      "place_name": "長椅",
+      "location_id": "loc-d6715a5154"
+    },
+    "outputDir": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-9E77D716E2",
+    "modelUrl": "/generated-scenes/T-9E77D716E2/T-9E77D716E2.glb",
+    "sionnaSceneXml": "C:\\Users\\user\\projects\\integrated-sim-world2\\integrated-simworld2\\backend\\app\\static\\scenes\\T-9E77D716E2\\T-9E77D716E2.xml",
+    "createdAt": "2026-05-19T18:06:42.633014",
+    "updatedAt": "2026-05-19T18:09:19.078307",
+    "note": "Blender stage completed",
+    "startedAt": "2026-05-19T18:06:42.633014",
+    "error": null,
+    "blenderPath": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe",
+    "finishedAt": "2026-05-19T18:09:19.077742"
+  }
+]

@@ -15,16 +15,26 @@ import { CameraUpload } from './components/ui/CameraUpload';
 import { PhotoViewer } from './components/ui/PhotoViewer';
 import { GPSStatus } from './components/ui/GPSStatus';
 import { useGPSSync } from './hooks/useGPSSync';
-import { useGeneratedScene } from './hooks/useGeneratedScene';
-import { latLonToENU } from './utils/geo';
+import { useGeneratedScenes } from './hooks/useGeneratedScene';
+import { latLonToENU, worldXZToLatLon } from './utils/geo';
+import { ControllerScreenPanel } from './components/ui/ControllerScreenPanel';
 import { SimulationPanel } from './components/ui/SimulationPanel';
-import { SceneSwitcher } from './components/ui/SceneSwitcher';
+import { SceneSwitcher, type SelectedScene } from './components/ui/SceneSwitcher';
 import { type SceneId, DEFAULT_SCENE_ID, getSceneById } from './config/scenes.config';
 import { DevicePanel } from './components/ui/DevicePanel';
 import { UAVControlPanel } from './components/ui/UAVControlPanel';
 import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
+import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
+import type { CFARBeacon, CFARCluster } from './types/cfar';
+import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from './types/heatmap';
+import {
+  getGpsReplayIntervalMs,
+  parseGpsReplayCsv,
+  type GpsReplayPoint,
+  type GpsReplayRate,
+} from './utils/gpsReplay';
 
 // ── 環境變數 ────────────────────────────────────────────────────────
 
@@ -53,9 +63,37 @@ interface Photo {
   deviceId?: string | null;
 }
 
+interface GeoOrigin {
+  lat: number;
+  lon: number;
+  alt: number;
+}
+
 function getInitialRxPosition(): [number, number, number] {
   const rx = useDeviceStore.getState().devices.find((d) => d.id === 'dev-rx-0');
   return rx ? [rx.x, rx.y, rx.z] : [0, 0, 0];
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function getGeneratedSceneOrigin(metadata: Record<string, unknown> | null | undefined): GeoOrigin | null {
+  if (!metadata) return null;
+
+  const lat = metadata.lat;
+  const lon = metadata.lon;
+  const alt = metadata.alt;
+
+  if (!isFiniteNumber(lat) || !isFiniteNumber(lon)) {
+    return null;
+  }
+
+  return {
+    lat,
+    lon,
+    alt: isFiniteNumber(alt) ? alt : 0,
+  };
 }
 
 // ── App ─────────────────────────────────────────────────────────────
@@ -113,17 +151,41 @@ export function App() {
   }, [resetManualControl]);
 
   // ── 生成場景管理（地圖點選生成）─────────────────────────────────
-  const generatedScene = useGeneratedScene();
-  const [usePickedScene, setUsePickedScene] = useState(false);
+  const generatedScenes = useGeneratedScenes();
 
   // ── 場景管理 ────────────────────────────────────────────────
-  const [sceneId, setSceneId] = useState<SceneId>(DEFAULT_SCENE_ID);
-  const sceneDef = getSceneById(sceneId);
-  const ORIGIN = {
+  const [selectedScene, setSelectedScene] = useState<SelectedScene>({
+    source: 'preset',
+    id: DEFAULT_SCENE_ID,
+  });
+  const [lastPresetSceneId, setLastPresetSceneId] = useState<SceneId>(DEFAULT_SCENE_ID);
+  const activeGeneratedScene = selectedScene.source === 'generated'
+    ? generatedScenes.scenes.find(scene => scene.taskId === selectedScene.taskId) ?? null
+    : null;
+  const renderSceneId = selectedScene.source === 'preset' ? selectedScene.id : lastPresetSceneId;
+  const sceneDef = getSceneById(renderSceneId);
+  const defaultOrigin = useMemo<GeoOrigin>(() => ({
     lat: sceneDef.config.observer.lat,
     lon: sceneDef.config.observer.lon,
     alt: sceneDef.config.observer.alt,
-  };
+  }), [
+    sceneDef.config.observer.alt,
+    sceneDef.config.observer.lat,
+    sceneDef.config.observer.lon,
+  ]);
+  const pickedSceneOrigin = useMemo(() => {
+    if (!activeGeneratedScene?.location) return null;
+    return getGeneratedSceneOrigin({
+      lat: activeGeneratedScene.location.lat,
+      lon: activeGeneratedScene.location.lon,
+      alt: 0,
+    });
+  }, [activeGeneratedScene?.location]);
+  const activeOrigin = useMemo(
+    () => (activeGeneratedScene && pickedSceneOrigin ? pickedSceneOrigin : defaultOrigin),
+    [activeGeneratedScene, defaultOrigin, pickedSceneOrigin]
+  );
+  const activeOriginKey = `${activeOrigin.lat}:${activeOrigin.lon}:${activeOrigin.alt}`;
 
   const [localGPS, setLocalGPS] = useState<LocalGPS>({ lat: 0, lon: 0, alt: 0, accuracy: 999 });
 
@@ -168,7 +230,6 @@ export function App() {
       null
     );
   }, [allDevices]);
-
   // 當第一個裝置上線時自動選取
   useEffect(() => {
     if (selectedDeviceId && allDevices.has(selectedDeviceId)) return;
@@ -179,6 +240,11 @@ export function App() {
   // ── UAV 位置 + 軌跡 ──────────────────────────────────────────────
   const [uavPosition, setUavPosition] = useState<[number, number, number]>(() => getInitialRxPosition());
   const [uavPath, setUavPath] = useState<Array<{ x: number; y: number; z: number }>>([]);
+  const [gpsReplayPoints, setGpsReplayPoints] = useState<GpsReplayPoint[]>([]);
+  const [gpsReplayIndex, setGpsReplayIndex] = useState(0);
+  const [gpsReplayPlaying, setGpsReplayPlaying] = useState(false);
+  const [gpsReplayRate, setGpsReplayRate] = useState<GpsReplayRate>(1);
+  const gpsReplayFixedYRef = useRef(uavPosition[1]);
 
   // ── 同步 UAV 位置 → DeviceStore rx（讓 ISS/SINR 模擬使用即時座標）────
   const updateDevice = useDeviceStore(s => s.updateDevice);
@@ -191,6 +257,7 @@ export function App() {
   const [otherUavs, setOtherUavs] = useState<Array<{ id: string; position: [number, number, number]; path: Array<{ x: number; y: number; z: number }> }>>([]);
 
   useEffect(() => {
+    if (gpsReplayPoints.length > 0) return;
     const trackId = isMobile ? myDeviceId : selectedDeviceId;
     if (!trackId) return;
 
@@ -201,7 +268,7 @@ export function App() {
 
     if (!gps) return;
 
-    const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, ORIGIN);
+    const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, activeOrigin);
     const x = ex * SCALE;
     const z = ez * SCALE;
     const y = Math.max(ealt * ALT_GAIN, 10);
@@ -212,7 +279,74 @@ export function App() {
       if (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.z - z) < 0.1) return prev;
       return [...prev, { x, y, z }];
     });
-  }, [allDevices, localGPS, selectedDeviceId, myDeviceId, isMobile]);
+  }, [activeOrigin, allDevices, gpsReplayPoints.length, localGPS, selectedDeviceId, myDeviceId, isMobile]);
+
+  const applyGpsReplayPoint = useCallback((point: GpsReplayPoint, fixedY: number) => {
+    const [ex, ez] = latLonToENU(point.lat, point.lon, point.alt, activeOrigin);
+    const pos: [number, number, number] = [ex * SCALE, fixedY, ez * SCALE];
+    setUavPosition(pos);
+    setUavPath(prev => {
+      const last = prev[prev.length - 1];
+      if (last && Math.abs(last.x - pos[0]) < 0.1 && Math.abs(last.z - pos[2]) < 0.1) return prev;
+      return [...prev, { x: pos[0], y: pos[1], z: pos[2] }];
+    });
+  }, [activeOrigin]);
+
+  const handleGpsReplayPlay = useCallback(async (file: File) => {
+    if (gpsReplayPoints.length > 0 && gpsReplayIndex > 0) {
+      setGpsReplayPlaying(true);
+      return;
+    }
+
+    const points = parseGpsReplayCsv(await file.text());
+    if (points.length === 0) {
+      window.alert('GPS CSV 沒有可回播的座標點');
+      return;
+    }
+
+    const fixedY = uavPosition[1];
+    gpsReplayFixedYRef.current = fixedY;
+    setAuto(false);
+    resetManualControl();
+    setUavPath([]);
+    applyGpsReplayPoint(points[0], fixedY);
+    setGpsReplayPoints(points);
+    setGpsReplayIndex(1);
+    setGpsReplayPlaying(points.length > 1);
+  }, [applyGpsReplayPoint, gpsReplayIndex, gpsReplayPoints.length, resetManualControl, uavPosition]);
+
+  const handleGpsReplayPause = useCallback(() => {
+    setGpsReplayPlaying(false);
+  }, []);
+
+  const handleGpsReplayStop = useCallback(() => {
+    setGpsReplayPlaying(false);
+    setGpsReplayPoints([]);
+    setGpsReplayIndex(0);
+  }, []);
+
+  useEffect(() => {
+    if (!gpsReplayPlaying || gpsReplayPoints.length === 0) return;
+
+    const timer = window.setInterval(() => {
+      setGpsReplayIndex(prev => {
+        const point = gpsReplayPoints[prev];
+        if (!point) {
+          setGpsReplayPlaying(false);
+          return prev;
+        }
+
+        applyGpsReplayPoint(point, gpsReplayFixedYRef.current);
+        const next = prev + 1;
+        if (next >= gpsReplayPoints.length) {
+          setGpsReplayPlaying(false);
+        }
+        return next;
+      });
+    }, getGpsReplayIntervalMs(gpsReplayRate));
+
+    return () => window.clearInterval(timer);
+  }, [applyGpsReplayPoint, gpsReplayPlaying, gpsReplayPoints, gpsReplayRate]);
 
   // ── 追蹤所有裝置位置、建立各自軌跡 ─────────────────────────────────
   useEffect(() => {
@@ -221,7 +355,7 @@ export function App() {
     pmap.forEach((_, id) => { if (!allDevices.has(id)) pmap.delete(id); });
 
     allDevices.forEach((gps, deviceId) => {
-      const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, ORIGIN);
+      const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, activeOrigin);
       const x = ex * SCALE;
       const z = ez * SCALE;
       const y = Math.max(ealt * ALT_GAIN, 10);
@@ -247,7 +381,7 @@ export function App() {
       }
     });
     setOtherUavs(others);
-  }, [allDevices, selectedDeviceId, isMobile]);
+  }, [activeOrigin, allDevices, selectedDeviceId, isMobile]);
 
   // ── 清除軌跡 ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -267,13 +401,14 @@ export function App() {
       allDevicePathsRef.current.set(id, { position: data.position, path: [] });
     });
     setOtherUavs(prev => prev.map(u => ({ ...u, path: [] })));
-  }, [sceneId]);
+  }, [activeOriginKey]);
 
   useEffect(() => {
-    if (!generatedScene.modelPath) {
-      setUsePickedScene(false);
+    if (selectedScene.source !== 'generated') return;
+    if (!activeGeneratedScene) {
+      setSelectedScene({ source: 'preset', id: lastPresetSceneId });
     }
-  }, [generatedScene.modelPath]);
+  }, [activeGeneratedScene?.taskId, lastPresetSceneId, selectedScene.source]);
 
   const handleClearPath = useCallback(() => {
     sendClearPath();
@@ -318,8 +453,28 @@ export function App() {
 
   // ── 目前 GPS（供 HUD 顯示）────────────────────────────────────────
   const currentGPS = isMobile && localGPS.lat !== 0 ? localGPS : null;
-  const simulationSceneId = usePickedScene ? generatedScene.sceneKey : sceneId;
-  const simulationUsesGeneratedScene = usePickedScene;
+  const simulationSceneId = activeGeneratedScene?.sceneKey ?? renderSceneId;
+  const simulationUsesGeneratedScene = Boolean(activeGeneratedScene);
+  const [cfarClusters, setCfarClusters] = useState<CFARCluster[]>([]);
+  const [heatmapOverlay, setHeatmapOverlay] = useState<HeatmapOverlayConfig | null>(null);
+  const [issRouteOverlay, setIssRouteOverlay] = useState<ISSRouteOverlayConfig | null>(null);
+  const cfarBeacons = useMemo<CFARBeacon[]>(() => (
+    cfarClusters.map((cluster) => {
+      const gps = worldXZToLatLon(cluster.world_x, cluster.world_z, activeOrigin);
+      return {
+        ...cluster,
+        lat: isFiniteNumber(cluster.lat) ? cluster.lat : gps.lat,
+        lon: isFiniteNumber(cluster.lon) ? cluster.lon : gps.lon,
+        alt: gps.alt,
+      };
+    })
+  ), [activeOrigin, cfarClusters]);
+
+  useEffect(() => {
+    setCfarClusters([]);
+    setHeatmapOverlay(null);
+    setIssRouteOverlay(null);
+  }, [activeOriginKey, simulationSceneId]);
 
   // ── Render ────────────────────────────────────────────────────────
   return (
@@ -329,13 +484,16 @@ export function App() {
       <MainScene
         uavPosition={uavPosition}
         uavPath={uavPath}
-        sceneId={sceneId}
+        sceneId={renderSceneId}
         auto={auto}
         manualDirection={manualDirection}
         onManualMoveDone={handleManualMoveDone}
         uavAnimation={uavAnimation}
         otherUavs={otherUavs}
-        generatedSceneModelPath={usePickedScene ? (generatedScene.modelPath ?? undefined) : undefined}
+        cfarBeacons={cfarBeacons}
+        heatmapOverlay={heatmapOverlay}
+        issRouteOverlay={issRouteOverlay}
+        generatedSceneModelPath={activeGeneratedScene?.modelPath}
         onPositionUpdate={(pos) => {
           setUavPosition(pos);
           setUavPath(prev => {
@@ -373,6 +531,9 @@ export function App() {
           if (aircraftEntry) setSelectedDeviceId(aircraftEntry[0]);
         }}
       />
+      {!isMobile && (
+        <USRPTelemetry />
+      )}
 
       <GPSStatus
         myDeviceId={myDeviceId}
@@ -403,24 +564,32 @@ export function App() {
         <SimulationPanel
           sceneId={simulationSceneId}
           generatedScene={simulationUsesGeneratedScene}
+          onCfarClustersChange={setCfarClusters}
+          onHeatmapOverlayChange={setHeatmapOverlay}
+          onRouteOverlayChange={setIssRouteOverlay}
+          gpsReplayRate={gpsReplayRate}
+          gpsReplayPlaying={gpsReplayPlaying}
+          onGpsReplayPlay={handleGpsReplayPlay}
+          onGpsReplayPause={handleGpsReplayPause}
+          onGpsReplayStop={handleGpsReplayStop}
+          onGpsReplayRateChange={setGpsReplayRate}
         />
       )}
 
       {/* 場景切換器 */}
+      {!isMobile && <ControllerScreenPanel />}
+
       {!isMobile && (
         <SceneSwitcher
-          currentScene={sceneId}
-          onChange={(id) => {
-            setUsePickedScene(false);
-            setSceneId(id);
+          selectedScene={selectedScene}
+          generatedScenes={generatedScenes.scenes}
+          generatedStatus={generatedScenes.status}
+          onSelectPreset={(id) => {
+            setLastPresetSceneId(id);
+            setSelectedScene({ source: 'preset', id });
           }}
-          hasPickedScene={Boolean(generatedScene.modelPath)}
-          pickedActive={usePickedScene}
-          pickedLabel={generatedScene.pickedPlaceName}
-          onSelectPicked={() => {
-            if (generatedScene.modelPath) {
-              setUsePickedScene(true);
-            }
+          onSelectGenerated={(taskId) => {
+            setSelectedScene({ source: 'generated', taskId });
           }}
         />
       )}

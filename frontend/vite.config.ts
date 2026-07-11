@@ -4,6 +4,11 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.ts',
+    globals: true,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -26,6 +31,11 @@ export default defineConfig({
       },
       // 動態生成場景（GLB）
       '/generated-scenes': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+      },
+      // Simulation result images
+      '/simulations': {
         target: 'http://localhost:8888',
         changeOrigin: true,
       },

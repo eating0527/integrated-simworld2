@@ -1,0 +1,66 @@
+<h2>設計三：前端控制與驗證</h2>
+<p class="subtitle">前端將 UAV 與 USRP 分區顯示；Bind 只改變操作協調，不把兩路狀態混成一個。</p>
+
+<div class="mockup">
+  <div class="mockup-header">採樣控制面板</div>
+  <div class="mockup-body">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <strong>Bind services</strong>
+      <button class="mock-button">OFF（預設）</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div>
+        <div class="label">UAV / AP3 GPS</div>
+        <div class="placeholder">Connection　Connected</div>
+        <div class="placeholder">Service　　 Running</div>
+        <div class="placeholder">File　　　　 Recording</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="mock-button">Start UAV</button>
+          <button class="mock-button">Stop UAV</button>
+        </div>
+      </div>
+      <div>
+        <div class="label">RasPi / USRP Noise</div>
+        <div class="placeholder">Connection　Offline</div>
+        <div class="placeholder">Service　　 Presumed running</div>
+        <div class="placeholder">File　　　　 Recording</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="mock-button">Test</button>
+          <button class="mock-button">USRP</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="mock-button">Start USRP</button>
+          <button class="mock-button">Stop USRP</button>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:14px">
+      <div class="placeholder">Mission: flight_20260624_143012　Overall: partial_failed</div>
+      <button class="mock-button" style="margin-top:8px">Stop All</button>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>顯示原則</h3>
+  <ul>
+    <li>Connection：裝置目前是否可達。</li>
+    <li>Service：idle、starting、running、presumed_running、stopping、stopped、failed。</li>
+    <li>File：none、recording、finalizing、upload_pending、uploaded、failed。</li>
+    <li>Bind OFF 時隱藏共同操作；Bind ON 時顯示共同 Start 與 Stop All。</li>
+    <li>任一子任務執行中禁止切換 Bind；USRP 執行中禁止切換 Test／USRP。</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>最小驗證集合</h3>
+  <ul>
+    <li>Bind OFF：UAV 與 USRP 可在另一方離線時獨立啟動。</li>
+    <li>Bind ON：兩方必須 ready，且收到相同 mission_id。</li>
+    <li>SSH 中斷：USRP 顯示 offline + presumed_running，重連後恢復真實狀態。</li>
+    <li>單路失敗：另一條繼續，整體為 partial_failed。</li>
+    <li>Stop USRP：上傳完成前不得顯示 completed；失敗顯示 upload_pending。</li>
+    <li>重複 Stop：不重複破壞檔案，也不建立第二次上傳。</li>
+    <li>RasPi 重開機：任務 failed，既有 CSV 可繼續補傳。</li>
+  </ul>
+</div>

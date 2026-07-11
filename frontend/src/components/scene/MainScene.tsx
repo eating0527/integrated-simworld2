@@ -17,6 +17,11 @@ import { useDeviceStore } from '@/store/useDeviceStore';
 import { Jam } from './Jam';
 import { Tower } from './Tower';
 import UAVFlight, { UAVManualDirection } from './UAVFlight';
+import { CFARBeaconMarker } from './CFARBeaconMarker';
+import type { CFARBeacon } from '../../types/cfar';
+import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from '../../types/heatmap';
+import { ISSHeatmapOverlay } from './ISSHeatmapOverlay';
+import { ISSRouteOverlay } from './ISSRouteOverlay';
 
 function Loader({ label }: { label: string }) {
   return (
@@ -44,7 +49,10 @@ interface MainSceneProps {
   uavAnimation?: boolean;
   onPositionUpdate?: (pos: [number, number, number]) => void;
   otherUavs?: Array<{ id: string; position: [number, number, number]; path: Array<{ x: number; y: number; z: number }> }>;
+  cfarBeacons?: CFARBeacon[];
   generatedSceneModelPath?: string; // Path to dynamically generated GLB model
+  heatmapOverlay?: HeatmapOverlayConfig | null;
+  issRouteOverlay?: ISSRouteOverlayConfig | null;
 }
 
 export function MainScene({
@@ -57,7 +65,10 @@ export function MainScene({
   uavAnimation = false,
   onPositionUpdate,
   otherUavs = [],
+  cfarBeacons = [],
   generatedSceneModelPath,
+  heatmapOverlay = null,
+  issRouteOverlay = null,
 }: MainSceneProps) {
   const sceneDef = getSceneById(sceneId);
   const cfg = sceneDef.config;
@@ -129,6 +140,8 @@ export function MainScene({
         </Suspense>
 
         <Suspense fallback={null}>
+          {heatmapOverlay && <ISSHeatmapOverlay overlay={heatmapOverlay} />}
+          {issRouteOverlay && <ISSRouteOverlay overlay={issRouteOverlay} />}
           <UAVFlight
             position={uavPosition}
             scale={[10, 10, 10]}
@@ -164,6 +177,14 @@ export function MainScene({
           <Suspense key={d.id} fallback={null}>
             <Tower position={[d.x, d.y, d.z]} scale={0.1} />
           </Suspense>
+        ))}
+
+        {cfarBeacons.map((beacon, index) => (
+          <CFARBeaconMarker
+            key={`${beacon.peak_pixel_row}:${beacon.peak_pixel_col}:${index}`}
+            beacon={beacon}
+            index={index}
+          />
         ))}
 
         <Starfield starCount={180} />

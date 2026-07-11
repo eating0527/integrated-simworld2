@@ -1,167 +1,204 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const API = import.meta.env.VITE_API_URL || '';
+const RECENT_TASK_ID_KEY = 'recent-generated-scene-task-id';
 
-interface GeneratedSceneState {
-  taskId: string | null;
-  status: 'idle' | 'polling' | 'completed' | 'failed';
-  modelPath: string | null;
-  sceneKey: string | null;
-  sceneMetadata: Record<string, any> | null;
-  pickedPlaceName: string | null;
+type SceneTaskStatus = 'idle' | 'loading' | 'polling' | 'error';
+
+interface SceneTaskLocation {
+  lat?: number;
+  lon?: number;
+  place_name?: string | null;
+}
+
+interface SceneTask {
+  id?: string;
+  sceneKey?: string;
+  sceneName?: string;
+  status?: string;
+  modelUrl?: string;
+  createdAt?: string;
+  location?: SceneTaskLocation | null;
+}
+
+export interface GeneratedSceneOption {
+  taskId: string;
+  sceneKey: string;
+  label: string;
+  modelPath: string;
+  createdAt: string;
+  location?: {
+    lat?: number;
+    lon?: number;
+    placeName?: string | null;
+  };
+}
+
+interface GeneratedScenesState {
+  scenes: GeneratedSceneOption[];
+  status: SceneTaskStatus;
+  pollingTaskId: string | null;
   error: string | null;
 }
 
-/**
- * Hook to manage the lifecycle of a generated scene from map selection
- * - Monitors localStorage for new taskId
- * - Polls for completion
- * - Provides the GLB path when ready
- */
-export function useGeneratedScene() {
-  const [state, setState] = useState<GeneratedSceneState>({
-    taskId: null,
+function getSceneLabel(task: SceneTask, taskId: string, sceneKey: string): string {
+  return (
+    task.location?.place_name?.trim() ||
+    task.sceneName?.trim() ||
+    sceneKey ||
+    taskId
+  );
+}
+
+function normalizeTask(task: SceneTask): GeneratedSceneOption | null {
+  const taskId = task.id?.trim();
+  const sceneKey = task.sceneKey?.trim();
+  const modelPath = task.modelUrl?.trim();
+
+  if ((task.status && task.status !== 'completed') || !taskId || !sceneKey || !modelPath) {
+    return null;
+  }
+
+  return {
+    taskId,
+    sceneKey,
+    label: getSceneLabel(task, taskId, sceneKey),
+    modelPath,
+    createdAt: task.createdAt ?? '',
+    location: task.location
+      ? {
+          lat: task.location.lat,
+          lon: task.location.lon,
+          placeName: task.location.place_name ?? null,
+        }
+      : undefined,
+  };
+}
+
+async function fetchGeneratedSceneIndex(rebuildIndex: boolean): Promise<GeneratedSceneOption[]> {
+  const res = await fetch(`${API}/api/generated-scenes${rebuildIndex ? '/refresh' : ''}`, {
+    method: rebuildIndex ? 'POST' : 'GET',
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch generated scenes: ${res.statusText}`);
+  }
+
+  const payload = await res.json();
+  const tasks = Array.isArray(payload?.scenes) ? payload.scenes as SceneTask[] : [];
+  return tasks
+    .map(normalizeTask)
+    .filter((scene): scene is GeneratedSceneOption => Boolean(scene));
+}
+
+async function fetchSceneTasks(): Promise<SceneTask[]> {
+  const res = await fetch(`${API}/api/scene-tasks`, { method: 'GET' });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch scene tasks: ${res.statusText}`);
+  }
+
+  const payload = await res.json();
+  return Array.isArray(payload?.tasks) ? payload.tasks as SceneTask[] : [];
+}
+
+export function useGeneratedScenes() {
+  const [state, setState] = useState<GeneratedScenesState>({
+    scenes: [],
     status: 'idle',
-    modelPath: null,
-    sceneKey: null,
-    sceneMetadata: null,
-    pickedPlaceName: null,
+    pollingTaskId: null,
     error: null,
   });
 
-  // Start polling for a task
-  const startPolling = useCallback((taskId: string) => {
+  const refreshScenes = useCallback(async (options?: { rebuildIndex?: boolean }) => {
     setState(prev => ({
       ...prev,
-      taskId,
+      status: prev.pollingTaskId ? 'polling' : 'loading',
+      error: null,
+    }));
+
+    try {
+      let scenes = await fetchGeneratedSceneIndex(Boolean(options?.rebuildIndex));
+      let nextPollingTaskId = state.pollingTaskId;
+
+      if (nextPollingTaskId) {
+        const completed = scenes.some(scene => scene.taskId === nextPollingTaskId);
+
+        if (completed) {
+          nextPollingTaskId = null;
+        } else {
+          const tasks = await fetchSceneTasks();
+          const pollingTask = tasks.find(task => task.id === nextPollingTaskId);
+          const stillPending = pollingTask?.status === 'queued' || pollingTask?.status === 'running';
+
+          if (pollingTask?.status === 'completed') {
+            scenes = await fetchGeneratedSceneIndex(true);
+            nextPollingTaskId = null;
+          } else if (pollingTask && !stillPending) {
+            nextPollingTaskId = null;
+          }
+        }
+      }
+
+      setState(prev => {
+        return {
+          scenes,
+          status: nextPollingTaskId ? 'polling' : 'idle',
+          pollingTaskId: nextPollingTaskId,
+          error: null,
+        };
+      });
+    } catch (err) {
+      setState(prev => ({
+        ...prev,
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }, [state.pollingTaskId]);
+
+  const watchTask = useCallback((taskId: string) => {
+    setState(prev => ({
+      ...prev,
+      pollingTaskId: taskId,
       status: 'polling',
       error: null,
     }));
   }, []);
 
-  // Clear the current generated scene
-  const clearScene = useCallback(() => {
-    setState({
-      taskId: null,
-      status: 'idle',
-      modelPath: null,
-      sceneKey: null,
-      sceneMetadata: null,
-      pickedPlaceName: null,
-      error: null,
-    });
-    // Also clear localStorage
-    localStorage.removeItem('recent-generated-scene-task-id');
-    localStorage.removeItem('recent-generated-scene-place-name');
-  }, []);
-
-  // Listen for new taskId in localStorage (from map page)
   useEffect(() => {
-    const handleStorageChange = () => {
-      const taskId = localStorage.getItem('recent-generated-scene-task-id');
-      const placeName = localStorage.getItem('recent-generated-scene-place-name');
+    const recentTaskId = localStorage.getItem(RECENT_TASK_ID_KEY);
+    if (recentTaskId) {
+      watchTask(recentTaskId);
+    }
 
-      if (placeName && placeName !== state.pickedPlaceName) {
-        setState(prev => ({
-          ...prev,
-          pickedPlaceName: placeName,
-        }));
-      }
+    void refreshScenes({ rebuildIndex: true });
+  }, [refreshScenes, watchTask]);
 
-      if (taskId && taskId !== state.taskId) {
-        console.log('Detected new generated scene task:', taskId);
-        startPolling(taskId);
-      }
+  useEffect(() => {
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key !== RECENT_TASK_ID_KEY || !event.newValue) return;
+      watchTask(event.newValue);
+      void refreshScenes();
     };
 
-    // Check on mount and when storage changes
-    handleStorageChange();
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [state.taskId, state.pickedPlaceName, startPolling]);
+  }, [refreshScenes, watchTask]);
 
-  // Poll for task status
   useEffect(() => {
-    if (state.status !== 'polling' || !state.taskId) return;
+    if (!state.pollingTaskId) return;
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API}/api/scene-tasks/${state.taskId}`, {
-          method: 'GET',
-        });
+    const interval = window.setInterval(() => {
+      void refreshScenes();
+    }, 1000);
 
-        if (!res.ok) {
-          throw new Error(`Failed to fetch task status: ${res.statusText}`);
-        }
+    return () => window.clearInterval(interval);
+  }, [refreshScenes, state.pollingTaskId]);
 
-        const taskPayload = await res.json();
-        const task = taskPayload?.task;
-        const taskPlaceName = task?.location?.place_name ?? null;
-
-        if (!task) {
-          throw new Error('Task payload missing task field');
-        }
-
-        if (taskPlaceName && taskPlaceName !== state.pickedPlaceName) {
-          setState(prev => ({
-            ...prev,
-            pickedPlaceName: taskPlaceName,
-          }));
-        }
-
-        // Check if task is completed or failed
-        if (task.status === 'completed') {
-          // Try to load the scene metadata to confirm GLB exists
-          const metadataRes = await fetch(
-            `${API}/api/scene-tasks/${state.taskId}/metadata`,
-            { method: 'GET' }
-          );
-
-          if (metadataRes.ok) {
-            const metadataPayload = await metadataRes.json();
-            const metadata = metadataPayload?.metadata ?? null;
-            const sceneKey = task?.sceneKey ?? metadata?.scene_key ?? metadata?.sceneKey ?? null;
-            const modelPath =
-              task?.modelUrl ??
-              metadata?.model_url ??
-              metadata?.modelUrl ??
-              (sceneKey
-                ? `/generated-scenes/${sceneKey}/${sceneKey}.glb`
-                : `/generated-scenes/generated/${state.taskId}/scene.glb`);
-
-            setState(prev => ({
-              ...prev,
-              status: 'completed',
-              modelPath,
-              sceneKey,
-              sceneMetadata: metadata,
-              pickedPlaceName: taskPlaceName ?? prev.pickedPlaceName,
-            }));
-            clearInterval(interval);
-          } else {
-            throw new Error('Failed to fetch scene metadata');
-          }
-        } else if (task.status === 'failed') {
-          setState(prev => ({
-            ...prev,
-            status: 'failed',
-            error: task.error || 'Task failed without error message',
-          }));
-          clearInterval(interval);
-        }
-        // If still 'queued' or 'running', continue polling
-      } catch (err) {
-        setState(prev => ({
-          ...prev,
-          status: 'failed',
-          error: err instanceof Error ? err.message : String(err),
-        }));
-        clearInterval(interval);
-      }
-    }, 1000); // Poll every 1 second
-
-    return () => clearInterval(interval);
-  }, [state.status, state.taskId]);
-
-  return { ...state, startPolling, clearScene };
+  return {
+    ...state,
+    refreshScenes,
+    watchTask,
+  };
 }

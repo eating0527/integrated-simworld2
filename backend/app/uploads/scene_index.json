@@ -1,0 +1,56 @@
+[
+  {
+    "id": "task-eb9b0dd4b5",
+    "sceneKey": "T-D3465EF47E",
+    "sceneName": "picked_2026-07-09_08_56_25",
+    "location": {
+      "lat": 24.943602246997187,
+      "lon": 121.37019932270051,
+      "zoom": 18,
+      "requested_zoom": 18,
+      "place_name": "龍恩里",
+      "location_id": "loc-2dd5ea599a"
+    },
+    "modelUrl": "/generated-scenes/T-D3465EF47E/T-D3465EF47E.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\T-D3465EF47E.xml",
+    "createdAt": "2026-07-09T16:56:25.271823",
+    "updatedAt": "2026-07-09T16:57:13.714112",
+    "indexedAt": "2026-07-10T12:11:48.098349"
+  },
+  {
+    "id": "task-d2e527631e",
+    "sceneKey": "T-CE536C15D9",
+    "sceneName": "picked_2026-07-09_08_45_43",
+    "location": {
+      "lat": 24.94468692382084,
+      "lon": 121.37198567390443,
+      "zoom": 18,
+      "requested_zoom": 18,
+      "place_name": "龍學里",
+      "location_id": "loc-44c542c0c7"
+    },
+    "modelUrl": "/generated-scenes/T-CE536C15D9/T-CE536C15D9.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\T-CE536C15D9.xml",
+    "createdAt": "2026-07-09T16:45:43.151820",
+    "updatedAt": "2026-07-09T16:46:41.607358",
+    "indexedAt": "2026-07-10T12:11:48.098349"
+  },
+  {
+    "id": "task-de31ade75c",
+    "sceneKey": "T-C48D06AE5A",
+    "sceneName": "picked_2026-06-25_04_34_29",
+    "location": {
+      "lat": 24.94260025005488,
+      "lon": 121.36856317520143,
+      "zoom": 18,
+      "requested_zoom": 17,
+      "place_name": "心湖垃圾桶",
+      "location_id": "loc-f1441b184f"
+    },
+    "modelUrl": "/generated-scenes/T-C48D06AE5A/T-C48D06AE5A.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\T-C48D06AE5A.xml",
+    "createdAt": "2026-06-25T12:34:29.184546",
+    "updatedAt": "2026-06-25T12:35:23.152060",
+    "indexedAt": "2026-07-10T12:11:48.098349"
+  }
+]

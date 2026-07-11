@@ -1,77 +1,60 @@
 # Integrated Sim World
 
-整合即時 GPS、3D 場景、地圖選點建模（Blender + blosm）、照片上傳、Sionna 模擬。
+整合即時 GPS、3D 場景、地圖選點建模、照片上傳、Sionna 模擬與 USRP 採樣控制的前端操作平台。
 
-## 目前功能
+## 目錄
 
-### 前端
-- 即時 GPS 追蹤（WebSocket）
-- 多裝置顯示與切換
-- 3D UAV 場景檢視（NTPU / NYCU / 生成場景）
-- 地圖選點頁（my_map）：
-  - 可自由平移、自由縮放瀏覽
-  - 建模時固定使用 zoom 17
-  - 點選中心點後送出 Blender 任務
-  - 成功後回到 React 主頁
-- 照片上傳與歷史查看
-- Sionna 視覺化圖層查看
-- ALIGN AP3 / M4P TOP 無人機即時定位顯示
+- [Production 入口](#production-入口)
+- [從零開始建立專案](#從零開始建立專案)
+- [安裝套件](#安裝套件)
+- [設定變數](#設定變數)
+- [Cloudflare Tunnel](#cloudflare-tunnel)
+- [啟動](#啟動)
+- [前端操作](#前端操作)
+- [其他文件](#其他文件)
 
-### 後端
-- FastAPI REST + WebSocket (`/ws/gps`)
-- 場景任務 API：
-  - `POST /api/location/select`
-  - `POST /api/scene-tasks/from-location`
-  - `GET /api/scene-tasks`
-  - `GET /api/scene-tasks/{task_id}`
-  - `GET /api/scene-tasks/{task_id}/metadata`
-  - `POST /api/scene-tasks/{task_id}/run`
-- Blender 任務狀態自動校正（避免 artifact 已生成但狀態仍 running）
-- zoom 固定策略：建立任務時後端強制 `zoom=17`
-- AP3 MAVLink bridge：透過 USB ADB forward 接無人機資料到 `/ws/gps`
+## Production 入口
 
-### Blender / blosm 生成策略（目前）
-- 以地圖點選座標為中心建模
-- 使用 strict zoom bbox（依 zoom 對應範圍）
-- 底圖大小可透過 padding 放大（目前已放大）
-- 單張 bbox 底圖輸出，避免分塊拼接痕跡
-- 可偵測並清除自然圖層殘留（如 water/lake/forest/vegetation）
-- 生成 metadata 供檢查：`basemap_*`、`bbox_*`、`excluded_layer_*`
-- 已修正 Blender 5.0 與 blosm 相容性問題，優先使用 Blender 4.2 LTS
-- 目前預設採用 blosm `3Dsimple`，穩定輸出含建築幾何的 OSM 場景
+- Frontend: <https://frontend.simworld.website>
+- Backend: <https://backend.simworld.website>
+- Backend docs: <https://backend.simworld.website/docs>
 
-## 專案結構
+本機啟動後的預設入口：
 
-- `frontend/`: Vite + React + Three.js
-- `backend/`: FastAPI + Blender 任務調度
-- `backend/app/blender_generate_scene.py`: Blender 建模與底圖生成腳本
-- `tools/ap3_to_simulator.py`: ALIGN AP3 MAVLink -> 模擬器 WebSocket bridge
-- `tools/platform-tools/`: Android platform-tools / adb，本機安裝後使用
-- `start.ps1`: Windows 一鍵啟動
-- `start.sh`: Linux/macOS 啟動
+- Frontend: <http://localhost:5173>
+- Backend: <http://localhost:8888>
+- Backend docs: <http://localhost:8888/docs>
 
-## 安裝需求
+## 從零開始建立專案
 
-- Python 3.12+
-- PyTorch 2.9+（Sionna 2.x PHY/SYS 使用 PyTorch）
-- Node.js 18+（建議 20+）
-- Blender 4.2 LTS，或能相容 blosm 的版本
-- Blosm (Blender 插件)
-- Mitsuba (Blender 插件)
-- （選用）LLVM：Sionna 在 Windows 可能需要 `LLVM-C.dll`
-- （選用）cloudflared：若要開外網 tunnel
-- Android platform-tools / ADB：若要啟用 AP3 telemetry bridge
+第一次建立：
 
-## 安裝步驟
-
-### 1) 下載專案
-
-```bash
-git clone https://github.com/711483135/integrated-sim-world.git
-cd integrated-sim-world
+```powershell
+git clone https://github.com/eating0527/integrated-simworld2.git
+cd integrated-simworld2
 ```
 
-### 2) 安裝後端依賴
+已經有資料夾時更新：
+
+```powershell
+git pull --ff-only
+```
+
+## 安裝套件
+
+必要工具：
+
+- Git
+- Python 3.12+
+- Node.js 18+，建議 20+
+- Blender 4.2 LTS
+- Blosm: <https://prochitecture.gumroad.com/l/blender-osm>
+- Mitsuba: <https://github.com/mitsuba-renderer/mitsuba-blender>
+- LLVM，Windows 執行 Sionna 時需要 `C:\Program Files\LLVM\bin\LLVM-C.dll`
+- cloudflared，production tunnel 需要
+- Android platform-tools / ADB，AP3 / M4P TOP USB 定位需要
+
+安裝後端套件：
 
 ```powershell
 cd backend
@@ -81,184 +64,178 @@ python -m venv .venv
 cd ..
 ```
 
-### 3) 安裝前端依賴
+安裝前端套件：
 
 ```powershell
 cd frontend
 npm install
-cd ..
-```
-
-### 4) 準備前端環境檔
-
-```powershell
-cd frontend
 if (Test-Path .env.example) { Copy-Item .env.example .env -Force }
 cd ..
 ```
 
-### 5) 安裝 Blender 與插件
-
-Blender 版本支援 5.1/4.1/4.3/4.0/3.6。
-安裝成功後，下一步安裝兩個插件：
-1. Blosm: https://prochitecture.gumroad.com/l/blender-osm
-2. Mitsuba: https://github.com/mitsuba-renderer/mitsuba-blender
-
-兩個插件都安裝成功後，自動生成地圖功能才可以正常使用。
-
-### 6) 安裝 LLVM（Sionna RT / Dr.Jit 需要）
-
-Windows 執行 Sionna RT 時需要 `LLVM-C.dll`。建議用 winget 安裝：
+安裝 LLVM：
 
 ```powershell
 winget install --id LLVM.LLVM --exact --accept-package-agreements --accept-source-agreements
 ```
 
-安裝後確認 DLL 存在：
+## 設定變數
 
-```powershell
-Test-Path "C:\Program Files\LLVM\bin\LLVM-C.dll"
+專案根目錄建立 `.env`。密碼與 token 只放在本機，不要放到 `frontend/.env`，也不要提交。
+
+```dotenv
+RASPI_HOST=<Raspberry Pi IP，例如 192.168.1.50>
+RASPI_USER=<Raspberry Pi 帳號，例如 user>
+RASPI_PSW=<Raspberry Pi 密碼>
+RASPI_PORT=22
+USRP_UPLOAD_API_URL=http://<這台電腦的區網 IP>:8888/api/usrp/upload-noise-csv
+
+# 有 Cloudflare token 時才填
+CLOUDFLARED_TOKEN=<Cloudflare tunnel token>
 ```
 
-## 啟動方式
+前端環境檔位於 `frontend/.env`。本機預設可使用：
 
-### Windows（建議）
+```dotenv
+VITE_WS_URL=ws://localhost:5173/ws/gps
+VITE_API_URL=
+VITE_ORIGIN_LAT=24.942349
+VITE_ORIGIN_LON=121.367164
+VITE_ORIGIN_ALT=0
+VITE_NTPU_ORIGIN_LAT=24.943476
+VITE_NTPU_ORIGIN_LON=121.370054
+VITE_NTPU_ORIGIN_ALT=0
+VITE_SCENE_SCALE=1
+```
 
-本機模式（不開 tunnel）
+Production tunnel 啟動時，`start.ps1` 會自動把 `frontend/.env.local` 寫成：
+
+```dotenv
+VITE_WS_URL=wss://backend.simworld.website
+```
+
+## Cloudflare Tunnel
+
+Windows PowerShell 啟動 production tunnel 時使用：
+
+```powershell
+.\start.ps1
+```
+
+`start.ps1` 會產生 `.logs/cloudflared-win.yml`，內容會把：
+
+- `backend.simworld.website` 指到 `http://localhost:8888`
+- `frontend.simworld.website` 指到 `http://localhost:5173`
+
+cloudflared 認證二選一：
+
+- 在目前 PowerShell session 設定 `CLOUDFLARED_TOKEN`
+- 或把 credentials JSON 放在 `%USERPROFILE%\.cloudflared\c85697e6-ff3d-426e-b689-1de63c3f3338.json`
+
+Docker compose 使用 `cloudflared/config.yml`，其中 backend container 走 `http://localhost:8000`，不要拿來覆蓋 Windows 的 8888 設定。
+
+## 啟動
+
+Production tunnel：
+
+```powershell
+.\start.ps1
+```
+
+只開本機，不開 tunnel：
 
 ```powershell
 .\start.ps1 -NoTunnel
 ```
 
-含 tunnel
-
-```powershell
-.\start.ps1
-```
-
-啟動後：
-- Frontend: http://localhost:5173
-- Backend: http://localhost:8888
-- Backend docs: http://localhost:8888/docs
-- Public frontend: https://frontend.simworld.website
-- Public backend: https://backend.simworld.website
-
-### Linux / macOS
-
-```bash
-bash start.sh --no-tunnel
-# 或
-bash start.sh
-```
-
-### 不啟動 AP3 bridge
+不啟動 AP3 bridge：
 
 ```powershell
 .\start.ps1 -NoAP3
 ```
 
-## AP3 / M4P TOP USB 連線流程
-
-1. 遙控器用 USB 接到電腦。
-2. 遙控器上允許 USB debugging / ADB 授權。
-3. 確認 ADB 看得到裝置：
+同時寫入 AP3 GPS CSV：
 
 ```powershell
-.\tools\platform-tools\adb.exe devices
+.\start.ps1 -GpsCsv
 ```
 
-應該要看到類似：
+啟動成功後終端機會顯示：
 
 ```text
-xxxxxxxx	device
+Frontend : http://localhost:5173
+Public   : https://frontend.simworld.website
+AP3 GPS  : bridge auto-start enabled
 ```
 
-4. 啟動專案：
+## 前端操作
 
-```powershell
-.\start.ps1
-```
+### 地圖建模
 
-5. 檢查後端是否收到無人機資料：
+1. 開啟 `http://localhost:5173` 或 `https://frontend.simworld.website`。
+2. 畫面會前往 `建模選點`。
+3. 在地圖上點選位置。
+4. 確認面板顯示：
+   - `Latitude`
+   - `Longitude`
+   - `Generation Zoom`: `18 (fixed)`
+   - `Place`
+5. 按 `送出 Blender 任務並返回 React`。
+6. 按鈕流程會依序顯示 `確認地圖中...`、`送出選點並建立任務中...`。
+7. 若沒有自動返回，按 `手動返回 React 頁面`。
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8888/api/gps/devices | ConvertTo-Json -Depth 5
-```
+### GPS 與照片
 
-## 手動重啟 AP3 bridge
+- `連線狀態` 面板會顯示 `已連線`、`連線中` 或 `連線失敗`。
+- 手機端會出現拍照上傳按鈕；上傳時顯示 `上傳中…`，完成後顯示 `上傳成功`。
+- 電腦端會顯示 `照片` 歷史清單。
 
-如果 backend 重啟後無人機資料消失，可以手動重建 ADB forward 並重啟 bridge：
+### 採樣控制面板
 
-```powershell
-.\tools\platform-tools\adb.exe forward tcp:15760 tcp:5760
+面板名稱是 `採樣控制面板`。
 
-$py = (Resolve-Path backend\.venv\Scripts\python.exe).Path
-$script = (Resolve-Path tools\ap3_to_simulator.py).Path
-$logDir = (Resolve-Path .logs).Path
+`裝置綁定`：
 
-Start-Process -FilePath $py `
-  -ArgumentList @("-u", $script, "--websocket-url", "ws://127.0.0.1:8888/ws/gps") `
-  -WorkingDirectory (Resolve-Path .).Path `
-  -RedirectStandardOutput ($logDir + "\ap3_bridge.log") `
-  -RedirectStandardError ($logDir + "\ap3_bridge.log.err")
-```
+- `關閉`：`無人機 GPS 採樣` 與 `USRP 干擾採樣` 分開控制。
+- `啟用`：兩邊都 Ready 時，用 `Start Bound Capture` 同步開始。
 
-## 實際操作流程（地圖建模）
+`無人機 GPS 採樣`：
 
-1. 開啟 `http://localhost:5173`
-2. 進入地圖選點頁（my_map）
-3. 自由移動/縮放找到目標區域
-4. 點選中心點
-5. 按「送出 Blender 任務並返回 React」
-6. 系統建立場景任務（後端固定 zoom=17）
-7. 回到 React 後等待任務完成並查看生成場景
+- 狀態欄位：`Connection`、`Service`、`File`
+- 按鈕：`Start UAV`、`Stop UAV`
 
-## 常用 API 測試
+`USRP 干擾採樣`：
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8888/ping
-Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks | ConvertTo-Json -Depth 6
-Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id> | ConvertTo-Json -Depth 8
-Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | ConvertTo-Json -Depth 8
-```
+- 模式：`Test`、`USRP`
+- 按鈕：`Start USRP`、`Stop USRP`
+- 綁定模式按鈕：`Start Bound Capture`、`Stop All`
+- 常見狀態值：`Ready`、`Offline`、`Running`、`Presumed running`、`Pending upload`、`Uploaded`
 
-## 任務與輸出檔案
+### 無線模擬與干擾源定位
 
-每個任務輸出在：
+按 `📡 無線模擬` 開啟 `無線通道模擬` 面板。面板有 8 個子面板：
 
-- `backend/app/static/scenes/generated/<task_id>/scene.glb`
-- `backend/app/static/scenes/generated/<task_id>/scene.blend`
-- `backend/app/static/scenes/generated/<task_id>/scene_metadata.json`
-- `backend/app/static/scenes/generated/<task_id>/blender_stdout.log`
-- `backend/app/static/scenes/generated/<task_id>/blender_stderr.log`
+- `SINR Map`：產生訊號強度覆蓋圖，可調 `SINR Min (dB)`、`SINR Max (dB)`、`Cell Size (m)` 與 `Samples / TX`。
+- `CFR`：產生通道頻率響應，可選 `QPSK` 或 `16QAM`，也可打開 `進階設定`。
+- `Doppler`：產生都卜勒分析圖。
+- `Channel IR`：產生通道脈衝響應圖。
+- `ISS Map`：產生 ISS 訊號地圖。
+- `TSS Map`：產生 TSS 訊號地圖。
+- `ISS+CFAR Map`：在 ISS 地圖上標示 CFAR 偵測結果。
+- `ISS_UNET`：用 `Sim`、`GPS` 或 `Noise with GPS` 產生 ISS_UNET 重建結果。
 
-## 常見問題
+`ISS_UNET` 的重建干擾地圖流程：
 
-### 1) 顯示 running 很久，像是卡住
-- 先打 `GET /api/scene-tasks/{task_id}`，系統會嘗試用 artifact 自動校正狀態
-- 再看 `scene_metadata.json` 是否已是 completed
-- 再看 `blender_stderr.log` 是否有錯誤
+1. 在 `Mode` 選 `Sim`、`GPS` 或 `Noise with GPS`。
+2. 選 `Resolution`：`1 m/px (512)`、`2 m/px (256)` 或 `4 m/px (128)`。
+3. 若選 `GPS`，上傳 `GPS CSV`；若選 `Noise with GPS`，同時上傳 `GPS CSV` 與 `Noise CSV`。
+4. 視需要開啟 `OS-CFAR` 與 `Building Mask`。
+5. 按 `開始計算` 後，結果區可看 `干擾地圖`；`OS-CFAR` 啟用後可切到 `CFAR` 查看干擾源定位。
+6. `Noise with GPS` 可另外按 `產生統計資料`，檢查 GPS 與 Noise 對齊後的統計圖。
 
-### 2) `start.ps1` 啟動失敗
-- 確認 Python venv 存在：`backend/.venv`
-- 確認前端依賴存在：`frontend/node_modules`
-- 先清掉占用 port 5173 / 8888 的程序再重啟
+## 其他文件
 
-### 3) 生成範圍/底圖大小不符預期
-- 查看該 task 的 metadata：
-  - `bbox_mode`
-  - `bbox_span_tiles`
-  - `basemap_cover_padding`
-  - `basemap_applied_size`
-
-### 4) blosm 沒有建築物
-- 優先確認是否使用 Blender 4.2 LTS
-- Blender 5.0 可能因為 `bgl` 缺失導致 blosm addon 失敗
-- 目前專案使用 `3Dsimple`，會有 OSM 建築幾何，但不是 realistic 材質建築
-- 如果要 realistic，需要另外安裝 blosm assets pack
-
-## 目前開發重點
-
-- 生成場景視覺對齊與品質微調
-- 任務狀態與使用者等待體驗
-- Blender/blosm 物件過濾與場景清理策略
+- [後端與硬體操作](docs/ops.md)
+- [技術細節](docs/tech.md)
+- [測試與檢查](docs/test.md)
+- [開發筆記](docs/dev.md)

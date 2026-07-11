@@ -1,9 +1,20 @@
 # GPS Tracker startup script for Windows PowerShell
 # Usage: .\start.ps1
-#        .\start.ps1 --no-tunnel
+#        .\start.ps1 -NoTunnel
 #        .\start.ps1 -NoAP3
+#        .\start.ps1 -NoGpsCsv
+#        .\start.ps1 -Reload
 
-param([switch]$NoTunnel, [switch]$NoAP3)
+param(
+    [switch]$NoTunnel,
+    [switch]$NoAP3,
+    [switch]$NoGpsCsv,
+    [switch]$Reload,
+    [switch]$GpsCsv,
+    [string]$GpsMissionId = "",
+    [string]$GpsAltitude = "relative",
+    [string]$GpsMavlinkUrl = ""
+)
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir  = Join-Path $ScriptDir "backend"
@@ -11,6 +22,9 @@ $FrontendDir = Join-Path $ScriptDir "frontend"
 $LogDir      = Join-Path $ScriptDir ".logs"
 $EnvFile     = Join-Path $ScriptDir ".env"
 $ToolsDir    = Join-Path $ScriptDir "tools"
+$IncomingDir = Join-Path $ScriptDir "incoming"
+$MissionStateDir = Join-Path $ScriptDir ".logs"
+$CurrentMissionFile = Join-Path $MissionStateDir "current_mission_id.txt"
 
 # Reload PATH so winget-installed tools are visible
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
@@ -41,13 +55,34 @@ function Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
 function Err   { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
+function Initialize-GpsCsvTarget {
+    param(
+        [string]$IncomingRoot,
+        [string]$MissionId
+    )
+
+    $missionDir = Join-Path $IncomingRoot $MissionId
+    $gpsCsvPath = Join-Path $missionDir "gps.csv"
+    New-Item -ItemType Directory -Force -Path $missionDir | Out-Null
+    if (-not (Test-Path $gpsCsvPath)) {
+        Set-Content -Path $gpsCsvPath -Value "time_stamp,lat,lon,alt" -Encoding ASCII
+    }
+    return $gpsCsvPath
+}
+
 function Stop-PortListeners {
     param(
         [int[]]$Ports
     )
-    $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $Ports -contains $_.LocalPort }
-    $pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+    $pids = netstat -ano -p TCP | ForEach-Object {
+        $parts = $_.Trim() -split '\s+'
+        if ($parts.Count -eq 5 -and $parts[3] -eq "LISTENING") {
+            $port = [int]($parts[1] -replace '^.*:', '')
+            if ($Ports -contains $port) {
+                [int]$parts[4]
+            }
+        }
+    } | Sort-Object -Unique
     if (-not $pids) {
         return
     }
@@ -80,6 +115,26 @@ if (-not (Test-Path $pythonExe)) {
     Err "Missing .venv, run: cd backend; python -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
 }
+$nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $nodeExe) {
+    Err "Missing node.exe, install Node.js and ensure it is available on PATH"
+    exit 1
+}
+$viteScript = Join-Path $FrontendDir "node_modules\vite\bin\vite.js"
+if (-not (Test-Path $viteScript)) {
+    Err "Missing Vite entrypoint, run: cd frontend; npm install"
+    exit 1
+}
+
+# Check environment versions
+Info "Checking environment versions..."
+$checkEnvScript = Join-Path $ToolsDir "check_env.py"
+& $pythonExe $checkEnvScript
+if ($LASTEXITCODE -ne 0) {
+    Warn "Environment check reported issues. Continuing startup with the current environment."
+    Warn "If startup later fails, update dependencies: cd backend; .venv\Scripts\python -m pip install -r requirements.txt"
+}
+
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
     Err "Missing node_modules, run: cd frontend; npm install"
     exit 1
@@ -89,8 +144,21 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $jobs = @()
 $ap3BridgeJob = $null
+$gpsCsvJob = $null
 $ap3BridgeScript = Join-Path $ToolsDir "ap3_to_simulator.py"
 $ap3BridgeLog = Join-Path $LogDir "ap3_bridge.log"
+$gpsCsvScript = Join-Path $ToolsDir "ap3_to_gps_csv.py"
+$gpsCsvLog = Join-Path $LogDir "ap3_gps_csv.log"
+$enableGpsCsv = $GpsCsv -and -not $NoGpsCsv
+
+if (-not $GpsMissionId) {
+    $GpsMissionId = Get-Date -Format "yyyyMMdd_HHmmss"
+}
+
+New-Item -ItemType Directory -Force -Path $MissionStateDir | Out-Null
+$GpsMissionId | Set-Content -Path $CurrentMissionFile -Encoding ASCII
+Info "Current mission id: $GpsMissionId"
+Info "   Saved to: .logs\current_mission_id.txt"
 
 # Ensure required ports are free before startup.
 Stop-PortListeners -Ports @(5173, 8888)
@@ -108,24 +176,32 @@ if ($NoTunnel) {
 # --- Backend ---
 Info "Starting backend (port 8888)..."
 $backendLog = Join-Path $LogDir "backend.log"
-# Pass DRJIT_LIBLLVM_PATH explicitly so sionna can find LLVM-C.dll
-$drjitEnv = if ($env:DRJIT_LIBLLVM_PATH) { "set `"DRJIT_LIBLLVM_PATH=$env:DRJIT_LIBLLVM_PATH`" && " } else { "" }
-$backendCmd = "`"$pythonExe`" -m uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload"
-$backendJob = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c","${drjitEnv}cd /d `"$BackendDir`" && $backendCmd" `
+$backendArgs = @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888")
+if ($Reload) {
+    $backendArgs += "--reload"
+}
+$backendJob = Start-Process -FilePath $pythonExe `
+    -ArgumentList $backendArgs `
+    -WorkingDirectory $BackendDir `
     -RedirectStandardOutput $backendLog `
     -RedirectStandardError  ($backendLog + ".err") `
     -NoNewWindow -PassThru
 $jobs += $backendJob
 Info "   Backend PID: $($backendJob.Id)  log: .logs\backend.log"
+if ($Reload) {
+    Info "   Backend reload mode: enabled"
+} else {
+    Info "   Backend reload mode: disabled"
+}
 
 Start-Sleep -Seconds 2
 
 # --- Frontend ---
 Info "Starting frontend (port 5173)..."
 $frontendLog = Join-Path $LogDir "frontend.log"
-$frontendJob = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c","npm run dev" `
+$frontendArgs = @($viteScript, "--host", "0.0.0.0", "--port", "5173")
+$frontendJob = Start-Process -FilePath $nodeExe `
+    -ArgumentList $frontendArgs `
     -WorkingDirectory $FrontendDir `
     -RedirectStandardOutput $frontendLog `
     -RedirectStandardError  ($frontendLog + ".err") `
@@ -196,8 +272,44 @@ function Start-Ap3Bridge {
         -NoNewWindow -PassThru
 }
 
+function Start-Ap3GpsCsvWriter {
+    param(
+        [string]$PythonExe,
+        [string]$WriterScript,
+        [string]$WorkingDir,
+        [string]$LogPath,
+        [string]$MissionId,
+        [string]$IncomingDir,
+        [string]$Altitude,
+        [string]$MavlinkUrl
+    )
+
+    $writerArgs = @(
+        "-u",
+        $WriterScript,
+        "--mission-id",
+        $MissionId,
+        "--incoming-dir",
+        $IncomingDir,
+        "--altitude",
+        $Altitude
+    )
+    if ($MavlinkUrl) {
+        $writerArgs += @("--mavlink-url", $MavlinkUrl)
+    }
+    return Start-Process -FilePath $PythonExe `
+        -ArgumentList $writerArgs `
+        -WorkingDirectory $WorkingDir `
+        -RedirectStandardOutput $LogPath `
+        -RedirectStandardError  ($LogPath + ".err") `
+        -NoNewWindow -PassThru
+}
+
 if (-not $NoAP3) {
     $adbExe = Join-Path $ToolsDir "platform-tools\adb.exe"
+    if (-not (Test-Path $adbExe)) {
+        $adbExe = Join-Path $ToolsDir "scrcpy\scrcpy-win64-v3.3.4\adb.exe"
+    }
     if ((Test-Path $adbExe) -and (Test-Path $ap3BridgeScript)) {
         Info "Starting ALIGN AP3 telemetry bridge..."
         $ap3BridgeJob = Start-Ap3Bridge `
@@ -224,6 +336,33 @@ if (-not $NoAP3) {
     }
 }
 
+# --- AP3 GPS CSV writer ---
+if ($enableGpsCsv) {
+    if (Test-Path $gpsCsvScript) {
+        $gpsCsvTarget = Initialize-GpsCsvTarget -IncomingRoot $IncomingDir -MissionId $GpsMissionId
+        Info "Starting AP3 GPS CSV writer..."
+        $gpsCsvJob = Start-Ap3GpsCsvWriter `
+            -PythonExe $pythonExe `
+            -WriterScript $gpsCsvScript `
+            -WorkingDir $ScriptDir `
+            -LogPath $gpsCsvLog `
+            -MissionId $GpsMissionId `
+            -IncomingDir $IncomingDir `
+            -Altitude $GpsAltitude `
+            -MavlinkUrl $GpsMavlinkUrl
+        $jobs += $gpsCsvJob
+        Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
+        Info "   GPS CSV target: $gpsCsvTarget"
+        if ($gpsCsvJob.HasExited) {
+            Warn "AP3 GPS CSV writer exited immediately; it will be restarted by the monitor loop."
+        } else {
+            Info "   AP3 GPS CSV auto-restart monitor enabled"
+        }
+    } else {
+        Warn "AP3 GPS CSV writer script not found, skipping GPS CSV worker"
+    }
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Frontend : http://localhost:5173"
@@ -233,6 +372,10 @@ if (-not $NoTunnel) {
 if (-not $NoAP3) {
     Write-Host "  AP3 GPS  : bridge auto-start enabled"
 }
+if ($enableGpsCsv) {
+    Write-Host "  GPS CSV  : enabled (mission: $GpsMissionId)"
+}
+Write-Host "  Mission  : $GpsMissionId"
 Write-Host "  Press Ctrl+C to stop all services"
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
@@ -262,6 +405,29 @@ try {
                     -LogPath $ap3BridgeLog
                 $jobs += $ap3BridgeJob
                 Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
+            }
+        }
+        if ($enableGpsCsv -and $gpsCsvJob) {
+            if ($gpsCsvJob.HasExited) {
+                Warn "AP3 GPS CSV writer exited, restarting..."
+                try {
+                    $jobs = @($jobs | Where-Object { $_.Id -ne $gpsCsvJob.Id })
+                } catch {
+                    $jobs = @($jobs)
+                }
+                Start-Sleep -Seconds 2
+                Initialize-GpsCsvTarget -IncomingRoot $IncomingDir -MissionId $GpsMissionId | Out-Null
+                $gpsCsvJob = Start-Ap3GpsCsvWriter `
+                    -PythonExe $pythonExe `
+                    -WriterScript $gpsCsvScript `
+                    -WorkingDir $ScriptDir `
+                    -LogPath $gpsCsvLog `
+                    -MissionId $GpsMissionId `
+                    -IncomingDir $IncomingDir `
+                    -Altitude $GpsAltitude `
+                    -MavlinkUrl $GpsMavlinkUrl
+                $jobs += $gpsCsvJob
+                Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
             }
         }
     }

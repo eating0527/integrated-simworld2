@@ -1,0 +1,11 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "executablePath": "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "headless": false
+    }
+  },
+  "outputDir": "output/playwright",
+  "outputMode": "stdout"
+}

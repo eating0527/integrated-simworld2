@@ -51,15 +51,22 @@ def _format_llvm_error(exc: BaseException) -> str:
 # ── 路徑設定 ────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).parent
 SCENE_DIR   = _HERE / "static" / "scenes"
-OUTPUT_DIR  = _HERE / "static" / "images"
+OUTPUT_DIR  = _HERE / "static" / "maps"
 NYCU_XML    = SCENE_DIR / "NYCU" / "NYCU.xml"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SINR_MAP_PATH     = str(OUTPUT_DIR / "sinr_map.png")
-CFR_PLOT_PATH     = str(OUTPUT_DIR / "cfr_plot.png")
-DOPPLER_PLOT_PATH = str(OUTPUT_DIR / "doppler_plot.png")
-CHANNEL_RESP_PATH = str(OUTPUT_DIR / "channel_response.png")
+def output_path_for_scene(scene: str, filename: str) -> str:
+    scene_id = (scene or "unknown").strip().lower()
+    if any(part in scene_id for part in ("/", "\\", "..")):
+        scene_id = "unknown"
+    return str(OUTPUT_DIR / scene_id / filename)
+
+
+SINR_MAP_PATH     = output_path_for_scene("NYCU", "sinr_map.png")
+CFR_PLOT_PATH     = output_path_for_scene("NYCU", "cfr_plot.png")
+DOPPLER_PLOT_PATH = output_path_for_scene("NYCU", "doppler_plot.png")
+CHANNEL_RESP_PATH = output_path_for_scene("NYCU", "channel_response.png")
 
 # ── 預設 TX / RX 位置（NYCU 場景座標系）──────────────────────────────────────
 DEFAULT_TX_LIST = [
@@ -130,10 +137,9 @@ def _load_sionna():
             Receiver as SionnaRX,
             PlanarArray,
             PathSolver,
-            subcarrier_frequencies,
             RadioMapSolver,
         )
-        return load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, RadioMapSolver
+        return load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, RadioMapSolver
     except ImportError as e:
         if _is_llvm_error(e):
             raise SionnaLLVMError(_format_llvm_error(e)) from e
@@ -181,6 +187,8 @@ async def generate_sinr_map(
     sinr_vmax: float = 0.0,
     cell_size: float = 1.0,
     samples_per_tx: int = 10 ** 7,
+    scene_xml: Optional[str] = None,
+    scene_name: str = "Unknown",
 ) -> bool:
     """
     生成 SINR Map。
@@ -192,7 +200,7 @@ async def generate_sinr_map(
     _clean(output_path)
 
     try:
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, RadioMapSolver = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, RadioMapSolver = _load_sionna()
         _setup_torch()
 
         if tx_list is None:
@@ -200,7 +208,8 @@ async def generate_sinr_map(
         if rx_config is None:
             rx_config = DEFAULT_RX
 
-        scene_xml = str(NYCU_XML)
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
         logger.info(f"使用場景: {scene_xml}")
 
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
@@ -223,10 +232,10 @@ async def generate_sinr_map(
                        samples_per_tx=samples_per_tx)
 
         # path_gain: [num_tx, H, W]（線性，無單位）
-        pg = rm.path_gain.numpy()
+        pg = _to_numpy(rm.path_gain)
 
         # cell_centers: [H, W, 3] → 取 X/Y 座標
-        cc = rm.cell_centers.numpy()
+        cc = _to_numpy(rm.cell_centers)
         X = cc[:, :, 0]
         Y = cc[:, :, 1]
 
@@ -260,7 +269,7 @@ async def generate_sinr_map(
                           cmap="RdYlGn", vmin=sinr_vmin, vmax=sinr_vmax,
                           shading="auto")
         plt.colorbar(c, ax=ax, label="SINR (dB)")
-        ax.set_title("SINR Map (NYCU Scene)")
+        ax.set_title(f"SINR Map ({scene_name})")
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         plt.tight_layout()
@@ -312,6 +321,23 @@ def _solver_and_cir(scene, PathSolver, n_time=1, samp_freq=30e3,
 def _dbm2w(dbm): return 10 ** (dbm / 10) / 1e3
 
 
+def _torch_subcarrier_frequencies(num_subcarriers: int, subcarrier_spacing_hz: float, device):
+    from sionna.phy.channel import subcarrier_frequencies
+
+    freqs = subcarrier_frequencies(int(num_subcarriers), float(subcarrier_spacing_hz))
+    return freqs.to(device=device)
+
+
+def _to_numpy(value):
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        return value.numpy()
+    return np.array(value)
+
+
 def _compute_H_f(a, tau, tx_i, freqs_hz):
     """單一 TX 的 H(f) = Σ_p a_p · exp(−j2πf·τ_p)  [num_paths] → [N_F]"""
     a_p = a[0, 0, tx_i, 0, :, 0]     # [num_paths]
@@ -358,6 +384,7 @@ async def generate_cfr_plot(
     subcarrier_spacing_hz: float = 30e3,
     ebn0_db: float = 20.0,
     ray_tracing_max_depth: int = 10,
+    scene_name: str = "Unknown",
 ) -> bool:
     """生成通道頻率響應（CFR）圖 + QPSK 星座圖"""
     logger.info("▶ 開始生成 CFR Plot...")
@@ -368,10 +395,9 @@ async def generate_cfr_plot(
         if modulation not in {"qpsk", "16qam"}:
             raise ValueError("modulation must be 'qpsk' or '16qam'")
 
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()
         import torch
-        from sionna.phy.channel import AWGN, ApplyOFDMChannel
-        from sionna.phy.channel.utils import cir_to_ofdm_channel
+        from sionna.phy.channel import AWGN, ApplyOFDMChannel, cir_to_ofdm_channel
         from sionna.phy.mapping import Mapper
         device = _setup_torch() or torch.device("cpu")
 
@@ -394,9 +420,8 @@ async def generate_cfr_plot(
         SCS = float(subcarrier_spacing_hz)
         EBN0_dB = float(ebn0_db)
         BATCH_SIZE = int(constellation_batch_size)
-        freqs_hz = torch.tensor(np.array(subcarrier_frequencies(N_SUB, SCS)),
-                                dtype=torch.float32, device=device)
-        cir_out_type = "torch" if device.type == "cuda" else "numpy"
+        freqs_hz = _torch_subcarrier_frequencies(N_SUB, SCS, device)
+        cir_out_type = "torch"
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=1, samp_freq=SCS,
@@ -473,6 +498,7 @@ async def generate_cfr_plot(
         ax[2].plot(np.abs(h_main), label="|H_main|")
         ax[2].plot(np.abs(h_intf), label="|H_jammer|")
         ax[2].set(title=f"CFR Magnitude ({mod_label})", xlabel="Subcarrier Index"); ax[2].legend(); ax[2].grid(True)
+        fig.suptitle(f"Channel Frequency Response - {scene_name}")
         plt.tight_layout()
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -494,13 +520,15 @@ async def generate_doppler_plot(
     output_path: str = DOPPLER_PLOT_PATH,
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
+    scene_xml: Optional[str] = None,
+    scene_name: str = "Unknown",
 ) -> bool:
     """生成延遲多普勒（Delay-Doppler）圖"""
     logger.info("▶ 開始生成 Delay-Doppler Plot...")
     _clean(output_path)
 
     try:
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()
         _setup_torch()
 
         if tx_list is None:
@@ -508,8 +536,11 @@ async def generate_doppler_plot(
         if rx_config is None:
             rx_config = DEFAULT_RX
 
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
+
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
-                             tx_list, rx_config, str(NYCU_XML))
+                             tx_list, rx_config, scene_xml)
 
         tx_names = list(scene.transmitters.keys())
         all_txs  = [scene.get(n) for n in tx_names]
@@ -556,7 +587,7 @@ async def generate_doppler_plot(
         cols = min(3, len(grids))
         rows = int(np.ceil(len(grids) / cols))
         fig  = plt.figure(figsize=(cols * 5, rows * 4.5))
-        fig.suptitle("Delay-Doppler Plots")
+        fig.suptitle(f"Delay-Doppler Plots - {scene_name}")
 
         for k, (Z, lbl) in enumerate(zip(grids, labels), start=1):
             ax = fig.add_subplot(rows, cols, k, projection="3d")
@@ -586,13 +617,15 @@ async def generate_channel_response(
     output_path: str = CHANNEL_RESP_PATH,
     tx_list: Optional[List[Tuple]] = None,
     rx_config: Optional[Tuple] = None,
+    scene_xml: Optional[str] = None,
+    scene_name: str = "Unknown",
 ) -> bool:
     """生成 H(t, f) 通道響應 3D 曲面圖（H_des / H_jam / H_all）"""
     logger.info("▶ 開始生成 Channel Response Plot...")
     _clean(output_path)
 
     try:
-        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, subcarrier_frequencies, _ = _load_sionna()
+        load_scene, SionnaTX, SionnaRX, PlanarArray, PathSolver, _ = _load_sionna()
         _setup_torch()
 
         if tx_list is None:
@@ -600,8 +633,11 @@ async def generate_channel_response(
         if rx_config is None:
             rx_config = DEFAULT_RX
 
+        if scene_xml is None:
+            scene_xml = str(NYCU_XML)
+
         scene = _build_scene(load_scene, SionnaTX, SionnaRX, PlanarArray,
-                             tx_list, rx_config, str(NYCU_XML))
+                             tx_list, rx_config, scene_xml)
 
         tx_names = list(scene.transmitters.keys())
         all_txs  = [scene.get(n) for n in tx_names]
@@ -612,7 +648,7 @@ async def generate_channel_response(
         N_F  = 76       # 子載波數
         SCS  = 30e3     # 子載波間距 Hz
         T_sym = 1.0 / SCS
-        freqs_hz = np.array(subcarrier_frequencies(N_F, SCS))   # drjit 轉 numpy [N_F]
+        freqs_hz = _torch_subcarrier_frequencies(N_F, SCS, "cpu").numpy()
 
         a_cir, tau_cir = _solver_and_cir(scene, PathSolver,
                                          n_time=N_T, samp_freq=1.0/T_sym,
@@ -635,6 +671,7 @@ async def generate_channel_response(
             ax = fig.add_subplot(1, 3, k, projection="3d")
             ax.plot_surface(F_mesh, T_mesh, np.abs(H), cmap="viridis", edgecolor="none")
             ax.set_xlabel("Subcarrier"); ax.set_ylabel("OFDM Symbol"); ax.set_title(title)
+        fig.suptitle(f"Channel Response 3D Surface - {scene_name}")
         plt.tight_layout()
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

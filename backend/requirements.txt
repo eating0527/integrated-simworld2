@@ -2,10 +2,15 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.12
 aiofiles==24.1.0
+websockets>=12,<16
+paramiko>=3.5.0
+python-dotenv>=1.0.1
+httpx>=0.27,<1
+pymavlink>=2.4.42
 
 # Sionna simulation
-sionna
-sionna-rt
+sionna==2.0.1
+sionna-rt==2.0.1
 torch>=2.9.0
 trimesh
 pyrender>=0.1.45

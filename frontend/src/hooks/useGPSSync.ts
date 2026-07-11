@@ -155,6 +155,7 @@ export function useGPSSync(
         setPhotoDeleteEvent({ ...msg });
         return;
       }
+
     } catch (_) {
       // ignore parse errors
     }
