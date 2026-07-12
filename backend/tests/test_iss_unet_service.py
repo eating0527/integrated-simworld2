@@ -14,6 +14,7 @@ import matplotlib.axes
 import numpy as np
 
 from app import main
+from app.coordinate_frame import SceneFrame
 
 
 REQUIRED_FILES = {
@@ -47,6 +48,14 @@ class ISSUNetServiceTests(unittest.TestCase):
             item.stop()
         shutil.rmtree(self.root, ignore_errors=True)
 
+    def _frame_meta(self, lat: float = 24.0, lon: float = 121.0, alt_m: float = 0.0) -> dict:
+        return {"frame": SceneFrame(
+            frame_id="scene-test",
+            origin_lat=lat,
+            origin_lon=lon,
+            origin_alt_m=alt_m,
+        ).to_dict()}
+
     def _write_ntpu_dataset(self):
         data_dir = self.scene_dir / "NTPU" / "iss_unet_data"
         data_dir.mkdir(parents=True)
@@ -55,7 +64,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         np.save(data_dir / "sionna_dss.npy", np.full(shape, -100.0, dtype=np.float32))
         np.save(data_dir / "sionna_iss.npy", np.full(shape, -95.0, dtype=np.float32))
         np.save(data_dir / "sionna_tss.npy", np.full(shape, -90.0, dtype=np.float32))
-        (data_dir / "scene_meta.json").write_text("{}", encoding="utf-8")
+        (data_dir / "scene_meta.json").write_text(json.dumps(self._frame_meta()), encoding="utf-8")
         return data_dir
 
     def test_dataset_resolver_finds_ntpu_required_files(self):
@@ -98,15 +107,15 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(arrays["building"].shape, shape)
         self.assertEqual(arrays["iss"].shape, shape)
 
-    def test_ntpu_fallback_center_matches_frontend_origin(self):
+    def test_scene_center_comes_from_scene_frame(self):
         self._write_ntpu_dataset()
         from app.iss_real import resolve_scene_center as resolve_route_scene_center
         from app.iss_unet_service import _scene_center, resolve_scene_dataset
 
         dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
 
-        self.assertEqual(_scene_center(dataset), (24.943476, 121.370054))
-        self.assertEqual(resolve_route_scene_center(dataset), (24.943476, 121.370054))
+        self.assertEqual(_scene_center(dataset), (24.0, 121.0))
+        self.assertEqual(resolve_route_scene_center(dataset), (24.0, 121.0))
 
     def test_dataset_resolver_reports_missing_files_for_nycu(self):
         from app.iss_unet_service import resolve_scene_dataset
@@ -443,12 +452,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         from app.iss_unet_service import resolve_scene_dataset
 
         data_dir = self._write_ntpu_dataset()
-        meta = {
-            "center_lat": 24.0,
-            "center_lon": 121.0,
-            "area_m": 512.0,
-            "grid_res": 128,
-        }
+        meta = self._frame_meta()
         (data_dir / "scene_meta.json").write_text(json.dumps(meta), encoding="utf-8")
         iss = np.full((128, 128), -100.0, dtype=np.float32)
         iss[64, 64] = -81.0
@@ -496,7 +500,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         gps_path = self.root / "gps.csv"
@@ -548,7 +552,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         gps_path = self.root / "gps.csv"
@@ -602,7 +606,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         building = np.zeros((128, 128), dtype=np.float32)
@@ -653,19 +657,13 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(result.aligned_points[1]["used_in_sparse"], True)
         self.assertEqual(result.sparse_points[0]["noise_floor_db"], -70.0)
 
-    def test_gps_noise_route_points_use_grid_bounds_world_coordinates(self):
+    def test_gps_noise_route_points_use_fixed_enu_grid_coordinates(self):
         from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
         from app.iss_unet_service import resolve_scene_dataset
 
         data_dir = self._write_ntpu_dataset()
-        grid_bounds = {
-            "min_x": -300.0,
-            "max_x": 293.0,
-            "min_y": -260.0,
-            "max_y": 270.0,
-        }
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128, "grid_bounds": grid_bounds}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         row = 10
@@ -697,21 +695,20 @@ class ISSUNetServiceTests(unittest.TestCase):
             noise_points=parse_noise_csv(noise_path),
         )
 
-        expected_x = -300.0 + (col + 0.5) * (593.0 / 128.0)
-        expected_z = -(270.0 - (row + 0.5) * (530.0 / 128.0))
-        self.assertEqual(result.route_points[0]["row"], row)
-        self.assertEqual(result.route_points[0]["col"], col)
-        self.assertAlmostEqual(result.route_points[0]["world_x"], expected_x)
-        self.assertAlmostEqual(result.route_points[0]["world_z"], expected_z)
-        self.assertAlmostEqual(result.aligned_points[0]["world_x"], expected_x)
-        self.assertAlmostEqual(result.aligned_points[0]["world_z"], expected_z)
+        self.assertEqual(result.route_points[0]["grid"]["row"], row)
+        self.assertEqual(result.route_points[0]["grid"]["col"], col)
+        self.assertAlmostEqual(result.route_points[0]["enu"]["east_m"], east_m)
+        self.assertAlmostEqual(result.route_points[0]["enu"]["north_m"], north_m)
+        self.assertTrue(result.route_points[0]["grid"]["inside_extent"])
+        self.assertNotIn("world_x", result.route_points[0])
+        self.assertNotIn("world_z", result.route_points[0])
 
     def test_gpsn_artifacts_include_reconstructed_sparse_and_cfar_inputs(self):
         from app.iss_unet_service import ISSUNetCFARParams, _build_iss_unet_artifacts, resolve_scene_dataset
 
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
@@ -748,7 +745,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         fake_cfar = {
@@ -790,8 +787,8 @@ class ISSUNetServiceTests(unittest.TestCase):
         cluster = result["cfar"]["clusters"][0]
         self.assertEqual(cluster["peak_pixel_row"], 64)
         self.assertEqual(cluster["peak_pixel_col"], 64)
-        self.assertAlmostEqual(cluster["world_x"], 2.0)
-        self.assertAlmostEqual(cluster["world_z"], 2.0)
+        self.assertAlmostEqual(cluster["enu"]["east_m"], 2.0)
+        self.assertAlmostEqual(cluster["enu"]["north_m"], -2.0)
         self.assertAlmostEqual(cluster["lat"], 24.0 - (2.0 / 111320.0))
         self.assertAlmostEqual(cluster["lon"], 121.0 + (2.0 / (111320.0 * np.cos(np.radians(24.0)))))
         overlay = result["overlay"]
@@ -807,20 +804,12 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(overlay["vmin_dbm"], -90.0)
         self.assertEqual(overlay["vmax_dbm"], -15.0)
 
-    def test_reconstruct_result_uses_grid_bounds_for_cfar_and_overlay_world_coordinates(self):
+    def test_reconstruct_result_uses_fixed_frame_for_cfar_and_overlay_coordinates(self):
         from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
 
         data_dir = self._write_ntpu_dataset()
-        grid_bounds = {
-            "min_x": -300.0,
-            "max_x": 293.0,
-            "min_y": -260.0,
-            "max_y": 270.0,
-            "pixel_size_x_m": 593.0 / 128.0,
-            "pixel_size_y_m": 530.0 / 128.0,
-        }
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128, "grid_bounds": grid_bounds}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         fake_cfar = {
@@ -853,15 +842,16 @@ class ISSUNetServiceTests(unittest.TestCase):
         grid = result["cfar"]["grid"]
         self.assertEqual(grid["rows"], 128)
         self.assertEqual(grid["cols"], 128)
-        self.assertEqual(grid["grid_bounds"], grid_bounds)
-        self.assertAlmostEqual(grid["pixel_size_x_m"], 593.0 / 128.0)
-        self.assertAlmostEqual(grid["pixel_size_y_m"], 530.0 / 128.0)
+        self.assertEqual(grid["grid_bounds"]["min_x"], -256.0)
+        self.assertEqual(grid["grid_bounds"]["max_x"], 256.0)
+        self.assertEqual(grid["pixel_size_x_m"], 4.0)
+        self.assertEqual(grid["pixel_size_y_m"], 4.0)
         cluster = result["cfar"]["clusters"][0]
-        self.assertAlmostEqual(cluster["world_x"], 293.0 - (593.0 / 128.0) / 2.0)
-        self.assertAlmostEqual(cluster["world_z"], -(270.0 - (530.0 / 128.0) / 2.0))
-        self.assertEqual(result["overlay"]["grid_bounds"], grid_bounds)
-        self.assertAlmostEqual(result["overlay"]["width_m"], 593.0)
-        self.assertAlmostEqual(result["overlay"]["height_m"], 530.0)
+        self.assertAlmostEqual(cluster["enu"]["east_m"], 254.0)
+        self.assertAlmostEqual(cluster["enu"]["north_m"], 254.0)
+        self.assertEqual(result["overlay"]["grid"]["pixel_size_e_m"], 4.0)
+        self.assertAlmostEqual(result["overlay"]["width_m"], 512.0)
+        self.assertAlmostEqual(result["overlay"]["height_m"], 512.0)
 
     def test_grid_endpoint_returns_reconstructed_overlay_json(self):
         from app.iss_unet_service import OUTPUT_DIR
@@ -1202,9 +1192,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                 {
                     "name": "jam-0",
                     "role": "jammer",
-                    "x": 12.0,
-                    "y": 34.0,
-                    "z": 56.0,
+                    "enu": {"east_m": 12.0, "north_m": 34.0, "up_m": 56.0},
                     "power_dbm": 77.0,
                 }
             ],
@@ -1212,7 +1200,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(len(req.devices), 1)
         self.assertEqual(req.devices[0].role, "jammer")
-        self.assertEqual(req.devices[0].x, 12.0)
+        self.assertEqual(req.devices[0].enu.east_m, 12.0)
 
     def test_reconstruct_endpoint_forwards_devices_for_sim(self):
         self._write_ntpu_dataset()
@@ -1237,7 +1225,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         req = main.ISSUNetReconstructRequest(
             scene="NTPU",
             devices=[
-                main.DeviceIn(name="jam-0", role="jammer", x=11.0, y=22.0, z=33.0, power_dbm=44.0),
+                main.DeviceIn(name="jam-0", role="jammer", enu={"east_m": 11.0, "north_m": 22.0, "up_m": 33.0}, power_dbm=44.0),
             ],
         )
 
@@ -1248,7 +1236,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(response["success"], True)
         self.assertEqual(len(captured["devices"]), 1)
         self.assertEqual(captured["devices"][0].role, "jammer")
-        self.assertEqual(captured["devices"][0].x, 11.0)
+        self.assertEqual(captured["devices"][0].enu.east_m, 11.0)
 
     def test_reconstruct_endpoint_forwards_pixel_size(self):
         self._write_ntpu_dataset()
@@ -1373,9 +1361,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                 {
                     "name": "jam-0",
                     "role": "jammer",
-                    "x": 111.0,
-                    "y": 0.0,
-                    "z": 22.0,
+                    "enu": {"east_m": 111.0, "north_m": -22.0, "up_m": 0.0},
                     "power_dbm": 55.0,
                 }
             ]
@@ -1396,7 +1382,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(response["success"], True)
         self.assertEqual(len(captured["devices"]), 1)
         self.assertEqual(captured["devices"][0].role, "jammer")
-        self.assertEqual(captured["devices"][0].x, 111.0)
+        self.assertEqual(captured["devices"][0].enu.east_m, 111.0)
 
     def test_sim_reconstruction_does_not_load_unet_model(self):
         self._write_ntpu_dataset()
@@ -1476,7 +1462,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         live_iss = np.full((128, 128), -61.0, dtype=np.float32)
         live_iss[0, 0] = -44.0
-        devices = [{"name": "jam-0", "role": "jammer", "x": 1.0, "y": 2.0, "z": 3.0, "power_dbm": 77.0}]
+        devices = [{"name": "jam-0", "role": "jammer", "enu": {"east_m": 1.0, "north_m": -3.0, "up_m": 2.0}, "power_dbm": 77.0}]
         captured = {}
 
         def fake_live_scene_arrays(*, scene_xml_path, devices, cell_size, samples_per_tx, target_shape, area_m):
@@ -1507,7 +1493,14 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         reconstructed = np.load(result["files"]["reconstructed_npy"])
         self.assertEqual(captured["scene_xml_path"], self.scene_dir / "NTPU" / "NTPU.xml")
-        self.assertEqual(captured["devices"], devices)
+        self.assertEqual(captured["devices"], [{
+            "name": "jam-0",
+            "role": "jammer",
+            "east_m": 1.0,
+            "north_m": -3.0,
+            "up_m": 2.0,
+            "power_dbm": 77.0,
+        }])
         self.assertEqual(captured["cell_size"], 4.0)
         self.assertEqual(captured["samples_per_tx"], 100000000)
         self.assertEqual(captured["target_shape"], (128, 128))
@@ -1537,7 +1530,7 @@ class ISSUNetServiceTests(unittest.TestCase):
             },
         )
         live_iss = np.full(shape, -58.0, dtype=np.float32)
-        devices = [{"name": "jam-0", "role": "jammer", "x": 1.0, "y": 2.0, "z": 3.0, "power_dbm": 77.0}]
+        devices = [{"name": "jam-0", "role": "jammer", "enu": {"east_m": 1.0, "north_m": -3.0, "up_m": 2.0}, "power_dbm": 77.0}]
         captured = {}
 
         def fake_live_scene_arrays(*, scene_xml_path, devices, cell_size, samples_per_tx, target_shape, area_m):
@@ -1564,7 +1557,14 @@ class ISSUNetServiceTests(unittest.TestCase):
                                 )
 
         self.assertEqual(captured["scene_xml_path"], self.scene_dir / "NTPU" / "NTPU.xml")
-        self.assertEqual(captured["devices"], devices)
+        self.assertEqual(captured["devices"], [{
+            "name": "jam-0",
+            "role": "jammer",
+            "east_m": 1.0,
+            "north_m": -3.0,
+            "up_m": 2.0,
+            "power_dbm": 77.0,
+        }])
         np.testing.assert_allclose(captured["route_iss"], live_iss)
 
     def test_live_radio_map_resamples_to_top_down_scene_grid(self):
@@ -1670,11 +1670,8 @@ class ISSUNetServiceTests(unittest.TestCase):
                     "lat": 24.0,
                     "lon": 121.0,
                     "alt": 1.0,
-                    "row": 64,
-                    "col": 64,
-                    "world_x": 2.0,
-                    "world_z": -2.0,
-                    "in_bounds": True,
+                    "enu": {"east_m": 2.0, "north_m": -2.0, "up_m": 1.0},
+                    "grid": {"row": 64, "col": 64, "inside_extent": True},
                 }
             ],
             aligned_points=[
@@ -1684,11 +1681,8 @@ class ISSUNetServiceTests(unittest.TestCase):
                     "lon": 121.0,
                     "alt": 1.0,
                     "noise_floor_db": -80.0,
-                    "row": 64,
-                    "col": 64,
-                    "world_x": 2.0,
-                    "world_z": -2.0,
-                    "in_bounds": True,
+                    "enu": {"east_m": 2.0, "north_m": -2.0, "up_m": 1.0},
+                    "grid": {"row": 64, "col": 64, "inside_extent": True},
                     "used_in_sparse": False,
                 }
             ],
@@ -1709,7 +1703,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                                 scene_dir=self.scene_dir,
                             )
 
-        self.assertEqual(result["route"]["all_points"][0]["world_x"], 2.0)
+        self.assertEqual(result["route"]["all_points"][0]["enu"]["east_m"], 2.0)
         self.assertEqual(result["route"]["aligned_points"][0]["noise_floor_db"], -80.0)
         self.assertEqual(result["route"]["sparse_points"], [])
 
@@ -1725,8 +1719,8 @@ class ISSUNetServiceTests(unittest.TestCase):
             inputs=np.zeros((5, 128, 128), dtype=np.float32),
             metrics={"mode": "gps_n", "route_points": 2, "used_samples": 0, "aligned_noise": 1, "skipped_noise": 0},
             route_points=[
-                {"row": 64, "col": 64, "world_x": 2.0, "world_z": -2.0},
-                {"row": 63, "col": 65, "world_x": 6.0, "world_z": -6.0},
+                {"grid": {"row": 64, "col": 64}, "enu": {"east_m": 2.0, "north_m": -2.0, "up_m": 0.0}},
+                {"grid": {"row": 63, "col": 65}, "enu": {"east_m": 6.0, "north_m": 6.0, "up_m": 0.0}},
             ],
             aligned_points=[],
             sparse_points=[],
@@ -1828,7 +1822,7 @@ class ISSUNetServiceTests(unittest.TestCase):
     def test_gps_noise_reconstruct_does_not_apply_focus_sampling_confidence(self):
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
@@ -1939,7 +1933,7 @@ class ISSUNetServiceTests(unittest.TestCase):
     def test_gps_noise_reconstruct_has_no_focus_sampling_toggle(self):
         data_dir = self._write_ntpu_dataset()
         (data_dir / "scene_meta.json").write_text(
-            json.dumps({"center_lat": 24.0, "center_lon": 121.0, "area_m": 512.0, "grid_res": 128}),
+            json.dumps(self._frame_meta()),
             encoding="utf-8",
         )
         model_path = self.artifact_dir / "best_iss_reconstruction_model.pth"
@@ -2057,6 +2051,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         scene_root.mkdir(parents=True)
         scene_xml = scene_root / "NYCU.xml"
         scene_xml.write_text("<scene/>", encoding="utf-8")
+        (scene_root / "scene_metadata.json").write_text(json.dumps(self._frame_meta()), encoding="utf-8")
         source_map = np.arange(512 * 512, dtype=np.float32).reshape(512, 512)
         np.save(scene_root / "building_height_512.npy", source_map)
 
@@ -2105,12 +2100,12 @@ class ISSUNetServiceTests(unittest.TestCase):
         )
         vertices = np.array(
             [
-                [-4.0, -4.0, 0.0],
-                [4.0, -4.0, 0.0],
-                [-4.0, 4.0, 0.0],
-                [-4.0, -4.0, 10.0],
-                [4.0, -4.0, 10.0],
-                [-4.0, 4.0, 10.0],
+                [-40.0, -40.0, 0.0],
+                [40.0, -40.0, 0.0],
+                [-40.0, 40.0, 0.0],
+                [-40.0, -40.0, 10.0],
+                [40.0, -40.0, 10.0],
+                [-40.0, 40.0, 10.0],
             ],
             dtype=np.float32,
         )
@@ -2130,7 +2125,7 @@ class ISSUNetServiceTests(unittest.TestCase):
             building_map = rasterize_building_height_from_ply(scene_xml, grid_res=8, area_m=8.0)
 
         self.assertEqual(building_map.shape, (8, 8))
-        self.assertGreater(building_map[6, 1], 9.0)
+        self.assertGreater(building_map[3, 3], 9.0)
         self.assertEqual(float(building_map[1, 6]), 0.0)
 
     def test_dataset_status_endpoint_reports_scene_availability(self):

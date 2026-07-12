@@ -16,7 +16,7 @@ import { PhotoViewer } from './components/ui/PhotoViewer';
 import { GPSStatus } from './components/ui/GPSStatus';
 import { useGPSSync } from './hooks/useGPSSync';
 import { useGeneratedScenes } from './hooks/useGeneratedScene';
-import { latLonToENU, worldXZToLatLon } from './utils/geo';
+import { enuToGrid, enuToThree, gpsToEnu } from './utils/geo';
 import { ControllerScreenPanel } from './components/ui/ControllerScreenPanel';
 import { SimulationPanel } from './components/ui/SimulationPanel';
 import { SceneSwitcher, type SelectedScene } from './components/ui/SceneSwitcher';
@@ -30,6 +30,7 @@ import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
 import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from './types/heatmap';
+import { createSceneFrame, type SceneFrame } from './types/sceneFrame';
 import {
   getGpsReplayIntervalMs,
   parseGpsReplayCsv,
@@ -39,12 +40,9 @@ import {
 
 // ── 環境變數 ────────────────────────────────────────────────────────
 
-const SCALE = Number(import.meta.env.VITE_SCENE_SCALE ?? 1);
 // 空字串時使用相對路徑，讓 Vite proxy 接管（本地開發用）
 const API = import.meta.env.VITE_API_URL || '';
 
-// 高度視覺增益（現實 1m → 場景 ALT_GAIN 單位）
-const ALT_GAIN = 2.14;
 
 // ── Types ───────────────────────────────────────────────────────────
 interface LocalGPS {
@@ -52,6 +50,7 @@ interface LocalGPS {
   lon: number;
   alt: number;
   accuracy: number;
+  alt_mode: 'amsl' | 'relative';
 }
 
 interface Photo {
@@ -64,12 +63,6 @@ interface Photo {
   deviceId?: string | null;
 }
 
-interface GeoOrigin {
-  lat: number;
-  lon: number;
-  alt: number;
-}
-
 function getInitialRxPosition(): [number, number, number] {
   const rx = useDeviceStore.getState().devices.find((d) => d.id === 'dev-rx-0');
   return rx ? [rx.x, rx.y, rx.z] : [0, 0, 0];
@@ -77,24 +70,6 @@ function getInitialRxPosition(): [number, number, number] {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-function getGeneratedSceneOrigin(metadata: Record<string, unknown> | null | undefined): GeoOrigin | null {
-  if (!metadata) return null;
-
-  const lat = metadata.lat;
-  const lon = metadata.lon;
-  const alt = metadata.alt;
-
-  if (!isFiniteNumber(lat) || !isFiniteNumber(lon)) {
-    return null;
-  }
-
-  return {
-    lat,
-    lon,
-    alt: isFiniteNumber(alt) ? alt : 0,
-  };
 }
 
 // ── App ─────────────────────────────────────────────────────────────
@@ -165,30 +140,31 @@ export function App() {
     : null;
   const renderSceneId = selectedScene.source === 'preset' ? selectedScene.id : lastPresetSceneId;
   const sceneDef = getSceneById(renderSceneId);
-  const defaultOrigin = useMemo<GeoOrigin>(() => ({
+  const defaultFrame = useMemo(() => createSceneFrame(`scene-${renderSceneId}`, {
     lat: sceneDef.config.observer.lat,
     lon: sceneDef.config.observer.lon,
-    alt: sceneDef.config.observer.alt,
+    alt_m: sceneDef.config.observer.alt,
   }), [
+    renderSceneId,
     sceneDef.config.observer.alt,
     sceneDef.config.observer.lat,
     sceneDef.config.observer.lon,
   ]);
-  const pickedSceneOrigin = useMemo(() => {
-    if (!activeGeneratedScene?.location) return null;
-    return getGeneratedSceneOrigin({
-      lat: activeGeneratedScene.location.lat,
-      lon: activeGeneratedScene.location.lon,
-      alt: 0,
-    });
-  }, [activeGeneratedScene?.location]);
-  const activeOrigin = useMemo(
-    () => (activeGeneratedScene && pickedSceneOrigin ? pickedSceneOrigin : defaultOrigin),
-    [activeGeneratedScene, defaultOrigin, pickedSceneOrigin]
-  );
-  const activeOriginKey = `${activeOrigin.lat}:${activeOrigin.lon}:${activeOrigin.alt}`;
+  const activeFrame = useMemo<SceneFrame>(() => {
+    if (activeGeneratedScene?.frame) return activeGeneratedScene.frame;
+    const location = activeGeneratedScene?.location;
+    if (location && isFiniteNumber(location.lat) && isFiniteNumber(location.lon)) {
+      return createSceneFrame(`scene-${activeGeneratedScene.sceneKey}`, {
+        lat: location.lat,
+        lon: location.lon,
+        alt_m: 0,
+      });
+    }
+    return defaultFrame;
+  }, [activeGeneratedScene, defaultFrame]);
+  const activeOriginKey = activeFrame.frame_id;
 
-  const [localGPS, setLocalGPS] = useState<LocalGPS>({ lat: 0, lon: 0, alt: 0, accuracy: 999 });
+  const [localGPS, setLocalGPS] = useState<LocalGPS>({ lat: 0, lon: 0, alt: 0, accuracy: 999, alt_mode: 'amsl' });
   const [activeStatusPanel, setActiveStatusPanel] = useState<'gps' | 'connection' | null>(null);
 
   useEffect(() => {
@@ -202,6 +178,7 @@ export function App() {
           lon: pos.coords.longitude,
           alt: pos.coords.altitude ?? 0,
           accuracy: pos.coords.accuracy,
+          alt_mode: 'amsl',
         });
       },
       (err) => console.warn('GPS 錯誤:', err),
@@ -246,7 +223,6 @@ export function App() {
   const [gpsReplayIndex, setGpsReplayIndex] = useState(0);
   const [gpsReplayPlaying, setGpsReplayPlaying] = useState(false);
   const [gpsReplayRate, setGpsReplayRate] = useState<GpsReplayRate>(1);
-  const gpsReplayFixedYRef = useRef(uavPosition[1]);
 
   // ── 同步 UAV 位置 → DeviceStore rx（讓 ISS/SINR 模擬使用即時座標）────
   const updateDevice = useDeviceStore(s => s.updateDevice);
@@ -270,29 +246,27 @@ export function App() {
 
     if (!gps) return;
 
-    const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, activeOrigin);
-    const x = ex * SCALE;
-    const z = ez * SCALE;
-    const y = Math.max(ealt * ALT_GAIN, 10);
+    const [x, y, z] = enuToThree(gpsToEnu(gps, activeFrame, gps.alt_mode));
 
     setUavPosition([x, y, z]);
     setUavPath(prev => {
       const last = prev[prev.length - 1];
-      if (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.z - z) < 0.1) return prev;
+      if (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.y - y) < 0.1 && Math.abs(last.z - z) < 0.1) return prev;
       return [...prev, { x, y, z }];
     });
-  }, [activeOrigin, allDevices, gpsReplayPoints.length, localGPS, selectedDeviceId, myDeviceId, isMobile]);
+  }, [activeFrame, allDevices, gpsReplayPoints.length, localGPS, selectedDeviceId, myDeviceId, isMobile]);
 
-  const applyGpsReplayPoint = useCallback((point: GpsReplayPoint, fixedY: number) => {
-    const [ex, ez] = latLonToENU(point.lat, point.lon, point.alt, activeOrigin);
-    const pos: [number, number, number] = [ex * SCALE, fixedY, ez * SCALE];
+  const applyGpsReplayPoint = useCallback((point: GpsReplayPoint) => {
+    const enu = gpsToEnu(point, activeFrame, point.altMode);
+    if (!enuToGrid(enu, activeFrame).displayable) return;
+    const pos = enuToThree(enu);
     setUavPosition(pos);
     setUavPath(prev => {
       const last = prev[prev.length - 1];
-      if (last && Math.abs(last.x - pos[0]) < 0.1 && Math.abs(last.z - pos[2]) < 0.1) return prev;
+      if (last && Math.abs(last.x - pos[0]) < 0.1 && Math.abs(last.y - pos[1]) < 0.1 && Math.abs(last.z - pos[2]) < 0.1) return prev;
       return [...prev, { x: pos[0], y: pos[1], z: pos[2] }];
     });
-  }, [activeOrigin]);
+  }, [activeFrame]);
 
   const handleGpsReplayPlay = useCallback(async (file: File) => {
     if (gpsReplayPoints.length > 0 && gpsReplayIndex > 0) {
@@ -306,16 +280,14 @@ export function App() {
       return;
     }
 
-    const fixedY = uavPosition[1];
-    gpsReplayFixedYRef.current = fixedY;
     setAuto(false);
     resetManualControl();
     setUavPath([]);
-    applyGpsReplayPoint(points[0], fixedY);
+    applyGpsReplayPoint(points[0]);
     setGpsReplayPoints(points);
     setGpsReplayIndex(1);
     setGpsReplayPlaying(points.length > 1);
-  }, [applyGpsReplayPoint, gpsReplayIndex, gpsReplayPoints.length, resetManualControl, uavPosition]);
+  }, [applyGpsReplayPoint, gpsReplayIndex, gpsReplayPoints.length, resetManualControl]);
 
   const handleGpsReplayPause = useCallback(() => {
     setGpsReplayPlaying(false);
@@ -338,7 +310,7 @@ export function App() {
           return prev;
         }
 
-        applyGpsReplayPoint(point, gpsReplayFixedYRef.current);
+        applyGpsReplayPoint(point);
         const next = prev + 1;
         if (next >= gpsReplayPoints.length) {
           setGpsReplayPlaying(false);
@@ -357,16 +329,13 @@ export function App() {
     pmap.forEach((_, id) => { if (!allDevices.has(id)) pmap.delete(id); });
 
     allDevices.forEach((gps, deviceId) => {
-      const [ex, ez, ealt] = latLonToENU(gps.lat, gps.lon, gps.alt, activeOrigin);
-      const x = ex * SCALE;
-      const z = ez * SCALE;
-      const y = Math.max(ealt * ALT_GAIN, 10);
-      const newPos: [number, number, number] = [x, y, z];
+      const newPos = enuToThree(gpsToEnu(gps, activeFrame, gps.alt_mode));
+      const [x, y, z] = newPos;
       const existing = pmap.get(deviceId);
       let path: Array<{ x: number; y: number; z: number }>;
       if (existing) {
         const last = existing.path[existing.path.length - 1];
-        path = (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.z - z) < 0.1)
+        path = (last && Math.abs(last.x - x) < 0.1 && Math.abs(last.y - y) < 0.1 && Math.abs(last.z - z) < 0.1)
           ? existing.path
           : [...existing.path, { x, y, z }];
       } else {
@@ -383,7 +352,7 @@ export function App() {
       }
     });
     setOtherUavs(others);
-  }, [activeOrigin, allDevices, selectedDeviceId, isMobile]);
+  }, [activeFrame, allDevices, selectedDeviceId, isMobile]);
 
   // ── 清除軌跡 ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -460,17 +429,10 @@ export function App() {
   const [cfarClusters, setCfarClusters] = useState<CFARCluster[]>([]);
   const [heatmapOverlay, setHeatmapOverlay] = useState<HeatmapOverlayConfig | null>(null);
   const [issRouteOverlay, setIssRouteOverlay] = useState<ISSRouteOverlayConfig | null>(null);
-  const cfarBeacons = useMemo<CFARBeacon[]>(() => (
-    cfarClusters.map((cluster) => {
-      const gps = worldXZToLatLon(cluster.world_x, cluster.world_z, activeOrigin);
-      return {
-        ...cluster,
-        lat: isFiniteNumber(cluster.lat) ? cluster.lat : gps.lat,
-        lon: isFiniteNumber(cluster.lon) ? cluster.lon : gps.lon,
-        alt: gps.alt,
-      };
-    })
-  ), [activeOrigin, cfarClusters]);
+  const cfarBeacons = useMemo<CFARBeacon[]>(
+    () => cfarClusters.filter((cluster) => cluster.grid.displayable),
+    [cfarClusters],
+  );
 
   useEffect(() => {
     setCfarClusters([]);
@@ -553,6 +515,7 @@ export function App() {
           <SimulationPanel
             sceneId={simulationSceneId}
             generatedScene={simulationUsesGeneratedScene}
+            sceneFrame={activeFrame}
             onCfarClustersChange={setCfarClusters}
             onHeatmapOverlayChange={setHeatmapOverlay}
             onRouteOverlayChange={setIssRouteOverlay}

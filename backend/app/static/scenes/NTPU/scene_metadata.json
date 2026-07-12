@@ -1,0 +1,326 @@
+{
+  "scene_name": "NTPU",
+  "scene_key": "NTPU",
+  "model_url": "/generated-scenes/NTPU/NTPU.glb",
+  "lat": 24.943476,
+  "lon": 121.370054,
+  "zoom": 16,
+  "area_m": 512.0,
+  "bbox_mode": "fixed_meters",
+  "bbox_size_m": [
+    512.0,
+    512.0
+  ],
+  "bbox_min_lat_used": 24.94117546081543,
+  "bbox_max_lat_used": 24.945775985717773,
+  "bbox_min_lon_used": 121.36751556396484,
+  "bbox_max_lon_used": 121.37258911132812,
+  "status": "completed",
+  "frame": {
+    "frame_version": 1,
+    "frame_id": "scene-ntpu",
+    "origin": {
+      "lat": 24.943476,
+      "lon": 121.370054,
+      "alt_m": 0.0
+    },
+    "alt_mode": "amsl",
+    "axis": "ENU",
+    "units": "m",
+    "extent": {
+      "min_e": -256.0,
+      "max_e": 256.0,
+      "min_n": -256.0,
+      "max_n": 256.0
+    },
+    "display_margin_m": 32.0,
+    "grid": {
+      "rows": 128,
+      "cols": 128,
+      "pixel_size_e_m": 4.0,
+      "pixel_size_n_m": 4.0
+    }
+  },
+  "blosm_layers": {
+    "buildings": true,
+    "highways": true,
+    "railways": true,
+    "water": false,
+    "forests": false,
+    "vegetation": false
+  },
+  "blosm_mode": "3Dsimple",
+  "osm_server_used": "private.coffee",
+  "osm_server_attempts": [
+    "private.coffee",
+    "overpass-api.de",
+    "vk maps"
+  ],
+  "excluded_layer_detected": {
+    "water": 0,
+    "forests": 0,
+    "vegetation": 0
+  },
+  "excluded_layer_removed": {
+    "water": 0,
+    "forests": 0,
+    "vegetation": 0
+  },
+  "basemap_fit_mode": "solid_fixed_fallback",
+  "basemap_scale_mode": "fixed_meters",
+  "basemap_applied_size": [
+    512.0,
+    512.0
+  ],
+  "basemap_plane_scale": [
+    512.0,
+    512.0,
+    1.0
+  ],
+  "xml_file": "backend\\app\\static\\scenes\\NTPU\\NTPU.xml",
+  "mesh_dir": "backend\\app\\static\\scenes\\NTPU\\mesh",
+  "building_count": 31,
+  "sionna_mesh_count": 32,
+  "sionna_meshes": [
+    {
+      "id": "mesh-ground",
+      "filename": "mesh/ground.ply",
+      "material": "mat-itu_wet_ground",
+      "vertices": 4,
+      "faces": 2
+    },
+    {
+      "id": "mesh-building_0",
+      "filename": "mesh/building_0.ply",
+      "material": "mat-itu_marble",
+      "vertices": 64,
+      "faces": 94
+    },
+    {
+      "id": "mesh-building_1",
+      "filename": "mesh/building_1.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    },
+    {
+      "id": "mesh-building_2",
+      "filename": "mesh/building_2.ply",
+      "material": "mat-itu_marble",
+      "vertices": 16,
+      "faces": 20
+    },
+    {
+      "id": "mesh-building_3",
+      "filename": "mesh/building_3.ply",
+      "material": "mat-itu_marble",
+      "vertices": 18,
+      "faces": 23
+    },
+    {
+      "id": "mesh-building_4",
+      "filename": "mesh/building_4.ply",
+      "material": "mat-itu_marble",
+      "vertices": 16,
+      "faces": 18
+    },
+    {
+      "id": "mesh-building_5",
+      "filename": "mesh/building_5.ply",
+      "material": "mat-itu_marble",
+      "vertices": 16,
+      "faces": 20
+    },
+    {
+      "id": "mesh-building_6",
+      "filename": "mesh/building_6.ply",
+      "material": "mat-itu_marble",
+      "vertices": 20,
+      "faces": 28
+    },
+    {
+      "id": "mesh-building_7",
+      "filename": "mesh/building_7.ply",
+      "material": "mat-itu_marble",
+      "vertices": 56,
+      "faces": 82
+    },
+    {
+      "id": "mesh-building_8",
+      "filename": "mesh/building_8.ply",
+      "material": "mat-itu_marble",
+      "vertices": 16,
+      "faces": 22
+    },
+    {
+      "id": "mesh-building_9",
+      "filename": "mesh/building_9.ply",
+      "material": "mat-itu_marble",
+      "vertices": 20,
+      "faces": 26
+    },
+    {
+      "id": "mesh-building_10",
+      "filename": "mesh/building_10.ply",
+      "material": "mat-itu_marble",
+      "vertices": 6,
+      "faces": 5
+    },
+    {
+      "id": "mesh-building_11",
+      "filename": "mesh/building_11.ply",
+      "material": "mat-itu_marble",
+      "vertices": 14,
+      "faces": 19
+    },
+    {
+      "id": "mesh-building_12",
+      "filename": "mesh/building_12.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    },
+    {
+      "id": "mesh-building_13",
+      "filename": "mesh/building_13.ply",
+      "material": "mat-itu_marble",
+      "vertices": 18,
+      "faces": 23
+    },
+    {
+      "id": "mesh-building_14",
+      "filename": "mesh/building_14.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 8
+    },
+    {
+      "id": "mesh-building_15",
+      "filename": "mesh/building_15.ply",
+      "material": "mat-itu_marble",
+      "vertices": 12,
+      "faces": 12
+    },
+    {
+      "id": "mesh-building_16",
+      "filename": "mesh/building_16.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 8
+    },
+    {
+      "id": "mesh-building_17",
+      "filename": "mesh/building_17.ply",
+      "material": "mat-itu_marble",
+      "vertices": 10,
+      "faces": 11
+    },
+    {
+      "id": "mesh-building_18",
+      "filename": "mesh/building_18.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    },
+    {
+      "id": "mesh-building_19",
+      "filename": "mesh/building_19.ply",
+      "material": "mat-itu_marble",
+      "vertices": 18,
+      "faces": 23
+    },
+    {
+      "id": "mesh-building_20",
+      "filename": "mesh/building_20.ply",
+      "material": "mat-itu_marble",
+      "vertices": 18,
+      "faces": 25
+    },
+    {
+      "id": "mesh-building_21",
+      "filename": "mesh/building_21.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    },
+    {
+      "id": "mesh-building_22",
+      "filename": "mesh/building_22.ply",
+      "material": "mat-itu_marble",
+      "vertices": 16,
+      "faces": 22
+    },
+    {
+      "id": "mesh-building_23",
+      "filename": "mesh/building_23.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    },
+    {
+      "id": "mesh-building_24",
+      "filename": "mesh/building_24.ply",
+      "material": "mat-itu_marble",
+      "vertices": 12,
+      "faces": 16
+    },
+    {
+      "id": "mesh-building_25",
+      "filename": "mesh/building_25.ply",
+      "material": "mat-itu_marble",
+      "vertices": 12,
+      "faces": 16
+    },
+    {
+      "id": "mesh-building_26",
+      "filename": "mesh/building_26.ply",
+      "material": "mat-itu_marble",
+      "vertices": 30,
+      "faces": 43
+    },
+    {
+      "id": "mesh-building_27",
+      "filename": "mesh/building_27.ply",
+      "material": "mat-itu_marble",
+      "vertices": 12,
+      "faces": 14
+    },
+    {
+      "id": "mesh-building_28",
+      "filename": "mesh/building_28.ply",
+      "material": "mat-itu_marble",
+      "vertices": 36,
+      "faces": 50
+    },
+    {
+      "id": "mesh-building_29",
+      "filename": "mesh/building_29.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    },
+    {
+      "id": "mesh-building_30",
+      "filename": "mesh/building_30.ply",
+      "material": "mat-itu_marble",
+      "vertices": 8,
+      "faces": 10
+    }
+  ],
+  "glb_file": "backend\\app\\static\\scenes\\NTPU\\NTPU.glb",
+  "blend_file": "backend\\app\\static\\scenes\\NTPU\\NTPU.blend",
+  "blosm_enabled": true,
+  "import_result": [
+    "FINISHED"
+  ],
+  "import_error": null,
+  "objects_before": 2,
+  "objects_after": 53,
+  "objects_imported": 51,
+  "meshes_before": 0,
+  "meshes_after": 33,
+  "meshes_imported": 33,
+  "basemap_added": false,
+  "basemap_error": "Error: Cannot read 'backend\\app\\static\\scenes\\NTPU\\osm_basemap_bbox_16.png': No such file or directory\n",
+  "note": "Blosm enabled and OSM import finished."
+}

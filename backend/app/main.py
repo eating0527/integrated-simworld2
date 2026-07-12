@@ -41,6 +41,7 @@ from app.capture_jobs import (
     CaptureStore,
     CaptureUnavailableError,
 )
+from app.coordinate_frame import SceneFrame, enu_to_sionna, scene_frame_from_metadata
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -931,6 +932,10 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
         inferred_error = metadata.get("import_error") or metadata.get("error")
     elif _task_scene_key(task):
         if metadata.get("status") == "completed" and glb_path.exists() and xml_path.exists():
+            try:
+                scene_frame_from_metadata(metadata)
+            except ValueError:
+                return task
             inferred_status = "completed"
     elif glb_path.exists() or metadata.get("status") == "completed":
         inferred_status = "completed"
@@ -1036,6 +1041,7 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     if metadata_path.exists():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            scene_frame_from_metadata(metadata)
             if metadata.get("status") == "failed":
                 return {
                     "success": False,
@@ -1046,6 +1052,17 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
                     "modelUrl": _artifact_url(artifact_paths["glb"]),
                     "sionnaSceneXml": str(artifact_paths["xml"]),
                 }
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_type": "scene_frame_invalid",
+                "outputDir": str(out_dir),
+                "blenderPath": blender_exe,
+                "sceneKey": scene_key,
+                "modelUrl": _artifact_url(artifact_paths["glb"]),
+                "sionnaSceneXml": str(artifact_paths["xml"]),
+            }
         except Exception:
             # If metadata can't be parsed, keep subprocess success result.
             pass
@@ -1332,7 +1349,10 @@ async def get_scene_task_metadata(task_id: str):
     
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        scene_frame_from_metadata(metadata)
         return {"success": True, "metadata": metadata}
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc), "error_type": "scene_frame_invalid"}, status_code=409)
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -1406,12 +1426,16 @@ BUILTIN_SCENE_NAMES = {
     "nycu": "NYCU",
 }
 
+class ENUIn(BaseModel):
+    east_m: float
+    north_m: float
+    up_m: float
+
+
 class DeviceIn(BaseModel):
     name: str
     role: str
-    x: float
-    y: float
-    z: float
+    enu: ENUIn
     power_dbm: Optional[float] = Field(default=None)
 
 
@@ -2214,25 +2238,27 @@ def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
     tx_list = []
     for d in tx_devices:
         power_dbm = _device_power_dbm(d)
+        position = enu_to_sionna(d.enu.east_m, d.enu.north_m, d.enu.up_m)
         tx_list.append((
             d.name,
-            [d.x, -d.z, d.y],
+            list(position),
             [0.0, 0.0, 0.0],
             "desired",
             power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["tx"],
         ))
     for d in jammer_devices:
         power_dbm = _device_power_dbm(d)
+        position = enu_to_sionna(d.enu.east_m, d.enu.north_m, d.enu.up_m)
         tx_list.append((
             d.name,
-            [d.x, -d.z, d.y],
+            list(position),
             [0.0, 0.0, 0.0],
             "jammer",
             power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["jammer"],
         ))
 
     rx = rx_devices[0]
-    return tx_list, (rx.name, [rx.x, -rx.z, rx.y])
+    return tx_list, (rx.name, list(enu_to_sionna(rx.enu.east_m, rx.enu.north_m, rx.enu.up_m)))
 
 
 @app.post("/api/sionna/cfr-plot")
@@ -2395,9 +2421,11 @@ async def simulate(req: SimulateRequest):
         device_payload = {
             "name": d.name,
             "role": d.role,
-            "x": d.x,
-            "y": d.y,
-            "z": d.z,
+            "enu": {
+                "east_m": d.enu.east_m,
+                "north_m": d.enu.north_m,
+                "up_m": d.enu.up_m,
+            },
         }
         if power_dbm is not None:
             device_payload["power_dbm"] = power_dbm

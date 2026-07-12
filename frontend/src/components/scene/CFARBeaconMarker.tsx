@@ -1,5 +1,6 @@
 import { Html } from '@react-three/drei';
 import type { CFARBeacon } from '../../types/cfar';
+import { enuToThree } from '../../utils/geo';
 
 interface CFARBeaconMarkerProps {
   beacon: CFARBeacon;
@@ -44,7 +45,7 @@ export function CFARBeaconMarker({ beacon, index }: CFARBeaconMarkerProps) {
   const label_2 = `座標：${formatCoord(beacon.lat)}, ${formatCoord(beacon.lon)}`;
 
   return (
-    <group position={[beacon.world_x, 0, beacon.world_z]}>
+    <group position={enuToThree(beacon.enu)}>
       <mesh position={[0, height / 2, 0]}>
         <cylinderGeometry args={[radius * 0.34, radius * 0.34, height, 48, 1, true]} />
         <meshBasicMaterial color="#ff1717" transparent opacity={0.34} depthWrite={false} />

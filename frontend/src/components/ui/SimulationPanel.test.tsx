@@ -5,6 +5,28 @@ import userEvent from '@testing-library/user-event';
 
 import { SimulationPanel } from './SimulationPanel';
 
+const testFrame = {
+  frame_id: 'scene-test',
+  origin: { lat: 24, lon: 121, alt_m: 0 },
+  alt_mode: 'amsl' as const,
+  extent: { min_e: -256, max_e: 256, min_n: -256, max_n: 256 },
+  display_margin_m: 32,
+  grid: { rows: 128, cols: 128, pixel_size_e_m: 4, pixel_size_n_m: 4 },
+};
+
+function routePoint(east: number, north: number, up: number, extra: Record<string, unknown> = {}) {
+  return {
+    lat: 24,
+    lon: 121,
+    alt: up,
+    alt_mode: 'relative' as const,
+    frame_id: 'scene-test',
+    enu: { east_m: east, north_m: north, up_m: up },
+    grid: { row: 64, col: 64, inside_extent: true, displayable: true },
+    ...extra,
+  };
+}
+
 function successfulPngResponse() {
   return Promise.resolve({
     ok: true,
@@ -32,11 +54,11 @@ function successfulIssUnetResponse() {
       },
       route: {
         all_points: [
-          { lat: 24, lon: 121, alt: 1, row: 64, col: 64, world_x: 2, world_z: -2 },
-          { lat: 24.00003, lon: 121.00003, alt: 2, row: 63, col: 65, world_x: 6, world_z: -6 },
+          routePoint(2, 2, 1),
+          routePoint(6, 6, 2),
         ],
         aligned_points: [
-          { lat: 24, lon: 121, alt: 1, row: 64, col: 64, world_x: 2, world_z: -2, noise_floor_db: -80 },
+          routePoint(2, 2, 1, { noise_floor_db: -80 }),
         ],
         sparse_points: [],
       },
@@ -46,6 +68,9 @@ function successfulIssUnetResponse() {
         rows: 128,
         cols: 128,
         area_m: 512,
+        frame_id: 'scene-test',
+        frame: testFrame,
+        grid: { rows: 128, cols: 128, pixel_size_e_m: 4, pixel_size_n_m: 4 },
         vmin_dbm: -90,
         vmax_dbm: -15,
       },
@@ -67,8 +92,13 @@ function successfulIssUnetResponse() {
             peak_power_dbm: -42.5,
             mean_power_dbm: -45,
             size: 9,
-            world_x: 2,
-            world_z: -2,
+            frame_id: 'scene-test',
+            enu: { east_m: 2, north_m: 2, up_m: 0 },
+            grid: { row: 64, col: 64, inside_extent: true, displayable: true },
+            lat: 24,
+            lon: 121,
+            alt: 0,
+            alt_mode: 'amsl',
           },
         ],
       },
@@ -366,8 +396,7 @@ describe('SimulationPanel UI', () => {
         peak_pixel_row: 64,
         peak_pixel_col: 64,
         peak_power_dbm: -42.5,
-        world_x: 2,
-        world_z: -2,
+        enu: { east_m: 2, north_m: 2, up_m: 0 },
       }),
     ]));
   });
@@ -435,7 +464,7 @@ describe('SimulationPanel UI', () => {
     await waitFor(() => expect(onRouteOverlayChange).toHaveBeenCalledWith(
       expect.objectContaining({
         routeMode: 'all',
-        routePoints: expect.arrayContaining([expect.objectContaining({ world_x: 2 })]),
+        routePoints: expect.arrayContaining([expect.objectContaining({ enu: { east_m: 2, north_m: 2, up_m: 1 } })]),
         samplePoints: expect.arrayContaining([expect.objectContaining({ noise_floor_db: -80 })]),
       }),
     ));
@@ -445,7 +474,7 @@ describe('SimulationPanel UI', () => {
     await waitFor(() => expect(onRouteOverlayChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         routeMode: 'aligned',
-        alignedPoints: expect.arrayContaining([expect.objectContaining({ world_x: 2 })]),
+        alignedPoints: expect.arrayContaining([expect.objectContaining({ enu: { east_m: 2, north_m: 2, up_m: 1 } })]),
       }),
     ));
   });

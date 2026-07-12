@@ -8,12 +8,12 @@ import {
 } from '../../utils/issUnetRequest';
 import type { CFARCluster } from '../../types/cfar';
 import type {
-  HeatmapGridBounds,
   HeatmapOverlayConfig,
   ISSRouteOverlayConfig,
   ISSRoutePoint,
   ISSSamplePoint,
 } from '../../types/heatmap';
+import { createSceneFrame, type SceneFrame } from '../../types/sceneFrame';
 import type { GpsReplayRate } from '../../utils/gpsReplay';
 import { MinPanel } from './MinPanel';
 
@@ -71,7 +71,9 @@ interface ISSUNetOverlayResponse {
   rows: number;
   cols: number;
   area_m: number;
-  grid_bounds?: HeatmapGridBounds;
+  frame_id: string;
+  frame: SceneFrame;
+  grid: { rows: number; cols: number; pixel_size_e_m: number; pixel_size_n_m: number };
   width_m?: number;
   height_m?: number;
   vmin_dbm: number;
@@ -116,6 +118,7 @@ const ISS_UNET_RESOLUTION_OPTIONS: Array<{ value: ISSUNetPixelSizeM; label: stri
 interface SimulationPanelProps {
   sceneId?: string | null;
   generatedScene?: boolean;
+  sceneFrame?: SceneFrame;
   onCfarClustersChange?: (clusters: CFARCluster[]) => void;
   onHeatmapOverlayChange?: (overlay: HeatmapOverlayConfig | null) => void;
   onRouteOverlayChange?: (overlay: ISSRouteOverlayConfig | null) => void;
@@ -130,6 +133,7 @@ interface SimulationPanelProps {
 export function SimulationPanel({
   sceneId = 'NTPU',
   generatedScene = false,
+  sceneFrame = createSceneFrame('scene-default', { lat: 0, lon: 0, alt_m: 0 }),
   onCfarClustersChange,
   onHeatmapOverlayChange,
   onRouteOverlayChange,
@@ -220,7 +224,9 @@ export function SimulationPanel({
       rows: issUnetOverlay.rows,
       cols: issUnetOverlay.cols,
       areaM: issUnetOverlay.area_m,
-      gridBounds: issUnetOverlay.grid_bounds,
+      frame_id: issUnetOverlay.frame_id,
+      frame: issUnetOverlay.frame,
+      grid: issUnetOverlay.grid,
       opacity: heatmapOpacity,
       vminDbm: issUnetOverlay.vmin_dbm,
       vmaxDbm: issUnetOverlay.vmax_dbm,
@@ -271,7 +277,7 @@ export function SimulationPanel({
     try {
       let res;
       const requestSceneId = sceneId ?? 'NTPU';
-      const devicePayload = getCurrentDevicePayload();
+      const devicePayload = getCurrentDevicePayload(sceneFrame);
 
       if (key === 'cfr') {
         res = await fetch(`${API}/api/sionna/cfr-plot`, {
@@ -453,7 +459,7 @@ export function SimulationPanel({
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
-  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay, clearIssOverlays]);
+  }, [sinrParams, sceneId, sceneFrame, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay, clearIssOverlays]);
 
   const generateStatistics = useCallback(async () => {
     if (generatedScene && !sceneId) {
@@ -474,7 +480,7 @@ export function SimulationPanel({
         applyBuildingMask: issUnetParams.apply_building_mask,
         gpsFile: issUnetParams.gpsFile,
         noiseFile: issUnetParams.noiseFile,
-        devices: getCurrentDevicePayload(),
+        devices: getCurrentDevicePayload(sceneFrame),
       });
       const res = await fetch(`${API}/api/iss-unet/statistics/upload`, {
         method: 'POST',
@@ -497,7 +503,7 @@ export function SimulationPanel({
       const msg = err instanceof Error ? err.message : String(err);
       setIssUnetStatistics({ loading: false, imageUrl: null, error: msg, rows: [] });
     }
-  }, [generatedScene, sceneId, issUnetParams]);
+  }, [generatedScene, sceneId, sceneFrame, issUnetParams]);
 
   const cur = status[tab];
   const hasStatisticsResult = tab === 'iss_unet'

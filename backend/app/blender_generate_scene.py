@@ -6,6 +6,13 @@ import urllib.request
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+# Blender runs this file with backend/app on sys.path, not the backend package root.
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.coordinate_frame import MAX_E, MAX_N, MIN_E, MIN_N, SceneFrame
+
 
 def _clamp(value, low, high):
     return max(low, min(high, value))
@@ -132,12 +139,18 @@ def _bbox_by_center_meters(lat: float, lon: float, area_m: float) -> tuple[float
     return min_lat, max_lat, min_lon, max_lon
 
 
+def scene_frame_metadata(scene_key: str, lat: float, lon: float, alt_m: float = 0.0) -> dict:
+    return SceneFrame(
+        frame_id=f"scene-{scene_key.lower()}",
+        origin_lat=float(lat),
+        origin_lon=float(lon),
+        origin_alt_m=float(alt_m),
+    ).to_dict()
+
+
 def _basemap_size_for_imported_bounds(area_m: float, imported_width: float, imported_height: float) -> tuple[float, float, str]:
     base_size = max(1.0, float(area_m))
-    width = max(base_size, float(imported_width))
-    height = max(base_size, float(imported_height))
-    mode = "imported_bounds" if width > base_size or height > base_size else "fixed_area"
-    return width, height, mode
+    return base_size, base_size, "fixed_area"
 
 
 def _plane_scale_for_unit_size(width: float, height: float) -> tuple[float, float]:
@@ -153,6 +166,38 @@ def _match_excluded_layer(name: str) -> str | None:
     if any(k in n for k in ["vegetation", "grass", "bush", "shrub"]):
         return "vegetation"
     return None
+
+
+def _clip_meshes_to_scene_frame(objects) -> None:
+    import bmesh
+    from mathutils import Matrix
+
+    planes = (
+        ((MIN_E, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+        ((MAX_E, 0.0, 0.0), (1.0, 0.0, 0.0)),
+        ((0.0, MIN_N, 0.0), (0.0, -1.0, 0.0)),
+        ((0.0, MAX_N, 0.0), (0.0, 1.0, 0.0)),
+    )
+    for obj in objects:
+        if getattr(obj, "type", None) != "MESH":
+            continue
+        for vertex in obj.data.vertices:
+            vertex.co = obj.matrix_world @ vertex.co
+        obj.matrix_world = Matrix.Identity(4)
+        mesh = bmesh.new()
+        mesh.from_mesh(obj.data)
+        for plane_co, plane_no in planes:
+            bmesh.ops.bisect_plane(
+                mesh,
+                geom=list(mesh.verts) + list(mesh.edges) + list(mesh.faces),
+                plane_co=plane_co,
+                plane_no=plane_no,
+                clear_outer=True,
+                clear_inner=False,
+            )
+        mesh.to_mesh(obj.data)
+        mesh.free()
+        obj.data.update()
 
 
 def _world_bounds_xy(objects) -> tuple[float, float, float, float, float]:
@@ -270,7 +315,7 @@ def parse_args(argv):
 
 def main():
     args = parse_args(sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else [])
-    args.area_m = max(1.0, float(args.area_m))
+    args.area_m = GENERATED_SCENE_AREA_M
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     scene_key = args.scene_key.upper()
@@ -291,6 +336,7 @@ def main():
         "bbox_min_lon_used": bbox_min_lon,
         "bbox_max_lon_used": bbox_max_lon,
         "status": "started",
+        "frame": scene_frame_metadata(scene_key, args.lat, args.lon),
     }
 
     # This script runs inside Blender's Python runtime.
@@ -614,6 +660,7 @@ def main():
                 imported_mesh_objects = kept_meshes
                 metadata["excluded_layer_detected"] = detected_excluded
                 metadata["excluded_layer_removed"] = removed_excluded
+                _clip_meshes_to_scene_frame(imported_mesh_objects)
             except Exception as exc:
                 import_error = str(exc)
 
@@ -679,8 +726,10 @@ def main():
                 ground_z = min_z - 0.05
 
                 # Build a single basemap image for the entire bbox to avoid visible tile splitting.
-                world_cx = (min_x + max_x) * 0.5
-                world_cy = (min_y + max_y) * 0.5
+                # SceneFrame is centered at (0, 0); keep the basemap anchored there
+                # even when imported OSM bounds are slightly asymmetric.
+                world_cx = 0.0
+                world_cy = 0.0
                 coverage_padding = BASEMAP_COVER_PADDING
                 geo_center_lat = (geo_min_lat + geo_max_lat) * 0.5
                 meters_per_deg_lat, meters_per_deg_lon = _degree_to_meter_scales(geo_center_lat)
@@ -833,6 +882,28 @@ def main():
                 metadata["basemap_tile_file"] = tile_infos[0]["file"]
         except Exception as exc:
             basemap_error = str(exc)
+
+        if ground_object is None and imported_mesh_objects:
+            try:
+                for stale_ground in list(bpy.data.objects):
+                    if stale_ground.name.startswith("OSM_BaseMap"):
+                        bpy.data.objects.remove(stale_ground, do_unlink=True)
+                min_z = _world_bounds_xy(imported_mesh_objects)[4]
+                bpy.ops.mesh.primitive_plane_add(size=1.0, location=(0.0, 0.0, min_z - 0.05))
+                ground = bpy.context.active_object
+                ground.name = "OSM_BaseMap"
+                scale_x, scale_y = _plane_scale_for_unit_size(args.area_m, args.area_m)
+                ground.scale = (scale_x, scale_y, 1.0)
+                material = bpy.data.materials.new(name="OSM_BaseMap_Fallback_Mat")
+                material.diffuse_color = (0.12, 0.16, 0.14, 1.0)
+                ground.data.materials.append(material)
+                ground_object = ground
+                metadata["basemap_fit_mode"] = "solid_fixed_fallback"
+                metadata["basemap_scale_mode"] = "fixed_meters"
+                metadata["basemap_applied_size"] = [args.area_m, args.area_m]
+                metadata["basemap_plane_scale"] = [scale_x, scale_y, 1.0]
+            except Exception as exc:
+                basemap_error = f"{basemap_error or ''}; solid fallback failed: {exc}"
 
         sionna_mesh_entries = []
         building_objects = []

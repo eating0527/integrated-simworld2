@@ -16,6 +16,7 @@ export interface GPSDevice {
   lat: number;
   lon: number;
   alt: number;
+  alt_mode: 'amsl' | 'relative';
   accuracy: number;
   deviceId: string;
   deviceName: string;
@@ -90,7 +91,7 @@ function hasMoved(
 // ────────────────────────────── Hook ───────────────────────────────
 
 export function useGPSSync(
-  localGPS: { lat: number; lon: number; alt: number; accuracy: number }
+  localGPS: { lat: number; lon: number; alt: number; accuracy: number; alt_mode: 'amsl' | 'relative' }
 ): GPSSyncResult {
   const [myDeviceId] = useState(getSessionId);
   const [deviceName, setDeviceName] = useState(getDeviceName);
@@ -122,6 +123,7 @@ export function useGPSSync(
           const next = new Map(prev);
           next.set(incoming.deviceId, {
             ...incoming,
+            alt_mode: incoming.alt_mode === 'relative' ? 'relative' : 'amsl',
             lastUpdateTime: Date.now(),
           });
           return next;
@@ -199,6 +201,7 @@ export function useGPSSync(
           lat: gps.lat,
           lon: gps.lon,
           alt: gps.alt,
+          alt_mode: gps.alt_mode,
           accuracy: gps.accuracy,
           deviceId: myDeviceId,
           deviceType: 'mobile',

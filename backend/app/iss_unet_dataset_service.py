@@ -9,6 +9,17 @@ from typing import Any
 import numpy as np
 from matplotlib.path import Path as MplPath
 
+from app.coordinate_frame import (
+    MAX_E,
+    MAX_N,
+    MIN_E,
+    MIN_N,
+    PIXEL_SIZE_E_M,
+    PIXEL_SIZE_N_M,
+    SceneFrame,
+    enu_to_sionna,
+    scene_frame_from_metadata,
+)
 from app.iss_unet_service import (
     ISS_MAX_DBM,
     ISS_MIN_DBM,
@@ -121,14 +132,13 @@ def _iter_scene_ply_paths(scene_xml: Path) -> list[Path]:
 
 
 def _legacy_grid_bounds(area_m: float = AREA_M, grid_res: int = GRID_RES) -> dict[str, float]:
-    half = float(area_m) / 2.0
     return {
-        "min_x": -half,
-        "max_x": half,
-        "min_y": -half,
-        "max_y": half,
-        "pixel_size_x_m": float(area_m) / float(grid_res),
-        "pixel_size_y_m": float(area_m) / float(grid_res),
+        "min_x": MIN_E,
+        "max_x": MAX_E,
+        "min_y": MIN_N,
+        "max_y": MAX_N,
+        "pixel_size_x_m": (MAX_E - MIN_E) / float(grid_res),
+        "pixel_size_y_m": (MAX_N - MIN_N) / float(grid_res),
     }
 
 
@@ -161,29 +171,19 @@ def _mesh_vertices_and_height(mesh: Any) -> tuple[np.ndarray, float] | None:
 
 
 def compute_scene_grid_bounds(scene_xml: Path, grid_res: int = GRID_RES, area_m: float = AREA_M) -> dict[str, float]:
-    min_x = np.inf
-    max_x = -np.inf
-    min_y = np.inf
-    max_y = -np.inf
-    for mesh in _load_scene_meshes(scene_xml):
-        parsed = _mesh_vertices_and_height(mesh)
-        if parsed is None:
-            continue
-        vertices, _height = parsed
-        min_x = min(min_x, float(np.min(vertices[:, 0])))
-        max_x = max(max_x, float(np.max(vertices[:, 0])))
-        min_y = min(min_y, float(np.min(vertices[:, 1])))
-        max_y = max(max_y, float(np.max(vertices[:, 1])))
-    if not all(np.isfinite(value) for value in (min_x, max_x, min_y, max_y)) or max_x <= min_x or max_y <= min_y:
-        return _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
-    return {
-        "min_x": float(min_x),
-        "max_x": float(max_x),
-        "min_y": float(min_y),
-        "max_y": float(max_y),
-        "pixel_size_x_m": float((max_x - min_x) / float(grid_res)),
-        "pixel_size_y_m": float((max_y - min_y) / float(grid_res)),
-    }
+    return _legacy_grid_bounds(grid_res=grid_res)
+
+
+def _load_scene_frame(scene_dir: Path) -> SceneFrame:
+    dataset_meta = scene_dir / "iss_unet_data" / "scene_meta.json"
+    metadata_path = dataset_meta if dataset_meta.exists() else scene_dir / "scene_metadata.json"
+    if not metadata_path.exists():
+        raise ValueError(f"SceneFrame metadata is required: {metadata_path}")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Invalid scene metadata: {metadata_path}") from exc
+    return scene_frame_from_metadata(metadata)
 
 
 def _rasterize_polygon(
@@ -297,12 +297,13 @@ def run_sionna_dataset_maps(
     pixel_size = area_m / grid_res
     for index, tx_cfg in enumerate(transmitters):
         x_px, y_px = tx_cfg.position_px
-        x_m = (x_px - grid_res / 2.0) * pixel_size
-        y_m = -(y_px - grid_res / 2.0) * pixel_size
+        east_m = (x_px - grid_res / 2.0) * pixel_size
+        north_m = -(y_px - grid_res / 2.0) * pixel_size
+        x_m, y_m, z_m = enu_to_sionna(east_m, north_m, tx_cfg.height_m)
         scene.add(
             Transmitter(
                 name=f"tx_{index}_{tx_cfg.role}",
-                position=[x_m, y_m, tx_cfg.height_m],
+                position=[x_m, y_m, z_m],
                 orientation=[0.0, 0.0, 0.0],
             )
         )
@@ -362,6 +363,7 @@ def prepare_iss_unet_dataset(
     if pixel_size_m is not None:
         grid_res = pixel_size_to_grid_res(pixel_size_m)
     scene_name, scene_xml = resolve_scene_xml(scene, scene_dir=scene_dir)
+    frame = _load_scene_frame(scene_xml.parent)
     scaled_jammer_positions = None if jammer_positions is None else [_scale_position_px(position, grid_res) for position in jammer_positions]
     transmitters = default_transmitters(
         bs_pos=_scale_position_px(bs_pos, grid_res),
@@ -378,12 +380,7 @@ def prepare_iss_unet_dataset(
     if building_map.shape != (grid_res, grid_res):
         raise ValueError(f"building map must be {grid_res}x{grid_res}, got {building_map.shape}")
     np.save(data_dir / _building_filename(grid_res), building_map.astype(np.float32))
-    grid_bounds = _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
-    if _iter_scene_ply_paths(scene_xml):
-        try:
-            grid_bounds = compute_scene_grid_bounds(scene_xml, grid_res=grid_res, area_m=area_m)
-        except RuntimeError:
-            grid_bounds = _legacy_grid_bounds(area_m=area_m, grid_res=grid_res)
+    grid_bounds = compute_scene_grid_bounds(scene_xml, grid_res=grid_res, area_m=area_m)
 
     radio_maps = run_sionna_dataset_maps(scene_xml, transmitters, rx_height=rx_height, area_m=area_m, grid_res=grid_res)
     _save_radio_map(data_dir / _radio_filename("dss", grid_res), radio_maps["DSS"], grid_res)
@@ -393,6 +390,7 @@ def prepare_iss_unet_dataset(
     meta = {
         "scene": scene_name,
         "scene_xml": str(scene_xml),
+        "frame": frame.to_dict(),
         "grid_res": grid_res,
         "area_m": area_m,
         "pixel_size_m": area_m / grid_res,

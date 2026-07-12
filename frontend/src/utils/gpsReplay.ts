@@ -8,6 +8,7 @@ export interface GpsReplayPoint {
   lat: number;
   lon: number;
   alt: number;
+  altMode: 'amsl' | 'relative';
 }
 
 export function getGpsReplayIntervalMs(rate: GpsReplayRate) {
@@ -27,6 +28,7 @@ export function parseGpsReplayCsv(text: string): GpsReplayPoint[] {
   const latIndex = headers.indexOf('lat');
   const lonIndex = headers.indexOf('lon');
   const altIndex = headers.indexOf('alt');
+  const altModeIndex = headers.indexOf('alt_mode');
   if (timeIndex < 0 || latIndex < 0 || lonIndex < 0) return [];
 
   return lines
@@ -47,6 +49,7 @@ export function parseGpsReplayCsv(text: string): GpsReplayPoint[] {
         lat,
         lon,
         alt: Number.isFinite(alt) ? alt : 0,
+        altMode: cells[altModeIndex]?.trim() === 'amsl' ? 'amsl' : 'relative',
       };
     })
     .filter((point): point is GpsReplayPoint => point !== null)

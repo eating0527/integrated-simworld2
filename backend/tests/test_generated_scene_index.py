@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from app import main
 from app import blender_generate_scene
+from app.coordinate_frame import SceneFrame
 
 
 def _task(
@@ -236,7 +237,12 @@ class GeneratedSceneIndexTests(unittest.TestCase):
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "T-AAAAAAAAAA.glb").write_bytes(b"glb")
             (out_dir / "T-AAAAAAAAAA.xml").write_text("<scene />", encoding="utf-8")
-            (out_dir / "scene_metadata.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (out_dir / "scene_metadata.json").write_text(
+                json.dumps({"status": "completed", "frame": SceneFrame(
+                    frame_id="scene-test", origin_lat=25.0, origin_lon=121.0, origin_alt_m=0.0
+                ).to_dict()}),
+                encoding="utf-8",
+            )
 
             class Result:
                 returncode = 0
@@ -265,16 +271,28 @@ class GeneratedSceneIndexTests(unittest.TestCase):
 
         self.assertEqual(args.area_m, 512.0)
 
-    def test_basemap_size_expands_to_cover_imported_blender_bounds(self):
+    def test_blender_scene_metadata_uses_fixed_scene_frame(self):
+        frame = blender_generate_scene.scene_frame_metadata("T-AAAAAAAAAA", 25.0, 121.0)
+
+        self.assertEqual(frame["frame_id"], "scene-t-aaaaaaaaaa")
+        self.assertEqual(frame["extent"], {
+            "min_e": -256.0, "max_e": 256.0, "min_n": -256.0, "max_n": 256.0,
+        })
+        self.assertEqual(frame["grid"], {
+            "rows": 128, "cols": 128, "pixel_size_e_m": 4.0, "pixel_size_n_m": 4.0,
+        })
+        self.assertEqual(frame["display_margin_m"], 32.0)
+
+    def test_basemap_size_stays_fixed_despite_imported_blender_bounds(self):
         width, height, mode = blender_generate_scene._basemap_size_for_imported_bounds(
             area_m=512.0,
             imported_width=593.45,
             imported_height=591.24,
         )
 
-        self.assertEqual(width, 593.45)
-        self.assertEqual(height, 591.24)
-        self.assertEqual(mode, "imported_bounds")
+        self.assertEqual(width, 512.0)
+        self.assertEqual(height, 512.0)
+        self.assertEqual(mode, "fixed_area")
 
     def test_blender_unit_plane_scale_matches_target_size(self):
         scale_x, scale_y = blender_generate_scene._plane_scale_for_unit_size(593.45, 591.24)

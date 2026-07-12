@@ -7,14 +7,8 @@ dependencies — devices are passed directly as plain dicts.
 
 Coordinate convention
 ---------------------
-The frontend (Three.js) uses a Y-up right-handed system:
-  x → east, y → height (up), z → south
-
-Sionna RT (Mitsuba 3) uses a Z-up right-handed system:
-  x → east, y → north, z → height (up)
-
-Conversion: [x_three, y_three, z_three] → [x_three, -z_three, y_three]
-i.e. sionna_x = x, sionna_y = -z, sionna_z = y (height)
+All device inputs are Local ENU metres: east, north, up. Sionna positions
+are produced by the shared ENU adapter.
 
 The RadioMapSolver computes a 2D horizontal map at a given altitude (sionna_z).
 """
@@ -32,6 +26,8 @@ import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 import numpy as np
 from scipy.ndimage import gaussian_filter, maximum_filter
+
+from app.coordinate_frame import enu_to_sionna
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +62,12 @@ except ImportError:
 # Coordinate helpers
 # ---------------------------------------------------------------------------
 
-def threejs_to_sionna(x: float, y: float, z: float):
-    """Convert Three.js (x, y_height, z) → Sionna RT (x, y_north, z_height)."""
-    return [x, -z, y]
+def _device_to_sionna(device: dict) -> tuple[float, float, float]:
+    """Convert one Local ENU device position through the shared adapter."""
+    try:
+        return enu_to_sionna(device["east_m"], device["north_m"], device["up_m"])
+    except KeyError as exc:
+        raise ValueError("Sionna device requires ENU east_m/north_m/up_m") from exc
 
 
 def _load_scene_footprints(scene_xml_path: str) -> tuple[list[dict], Optional[tuple[float, float, float, float]]]:
@@ -258,7 +257,7 @@ def compute_radio_maps(
     idx_jammer: List[int] = []
 
     for d in tx_devices:
-        pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
+        pos_sionna = _device_to_sionna(d)
         power = d.get("power_dbm", DEFAULT_TX_POWER_DBM)
         tx = SionnaTransmitter(
             name=d["name"],
@@ -273,7 +272,7 @@ def compute_radio_maps(
         logger.info("Added TX '%s' at Sionna %s, %.1f dBm", d["name"], pos_sionna, power)
 
     for d in jam_devices:
-        pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
+        pos_sionna = _device_to_sionna(d)
         power = d.get("power_dbm", DEFAULT_JAM_POWER_DBM)
         jammer = SionnaTransmitter(
             name=d["name"],
@@ -287,7 +286,7 @@ def compute_radio_maps(
         idx_jammer.append(len(all_tx_entries) - 1)
         logger.info("Added Jammer '%s' at Sionna %s, %.1f dBm", d["name"], pos_sionna, power)
 
-    rx_pos_sionna = threejs_to_sionna(rx["x"], rx["y"], rx["z"])
+    rx_pos_sionna = _device_to_sionna(rx)
     rx_obj = SionnaReceiver(name=rx["name"], position=rx_pos_sionna)
     scene.add(rx_obj)
     logger.info("Added RX '%s' at Sionna %s", rx["name"], rx_pos_sionna)
@@ -368,8 +367,8 @@ def generate_maps(
     scene_xml_path : str
         Absolute path to the Sionna XML scene file.
     devices : list of dict
-        Each dict: {name, role ('tx'|'rx'|'jammer'), x, y, z, power_dbm?}
-        Coordinates are in Three.js convention.
+        Each dict: {name, role ('tx'|'rx'|'jammer'), east_m, north_m, up_m, power_dbm?}
+        Coordinates are Local ENU metres.
     output_dir : str
         Directory in which to write the PNG (e.g. .../public/maps/ntpu/).
     map_type : str
@@ -446,7 +445,7 @@ def generate_maps(
     idx_jammer: List[int] = []
 
     for i, d in enumerate(tx_devices):
-        pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
+        pos_sionna = _device_to_sionna(d)
         power = d.get("power_dbm", DEFAULT_TX_POWER_DBM)
         tx = SionnaTransmitter(
             name=d["name"],
@@ -461,7 +460,7 @@ def generate_maps(
         logger.info("Added TX '%s' at Sionna %s, %.1f dBm", d["name"], pos_sionna, power)
 
     for i, d in enumerate(jam_devices):
-        pos_sionna = threejs_to_sionna(d["x"], d["y"], d["z"])
+        pos_sionna = _device_to_sionna(d)
         power = d.get("power_dbm", DEFAULT_JAM_POWER_DBM)
         jammer = SionnaTransmitter(
             name=d["name"],
@@ -478,7 +477,7 @@ def generate_maps(
     # -----------------------------------------------------------------------
     # Add receiver
     # -----------------------------------------------------------------------
-    rx_pos_sionna = threejs_to_sionna(rx["x"], rx["y"], rx["z"])
+    rx_pos_sionna = _device_to_sionna(rx)
     rx_obj = SionnaReceiver(name=rx["name"], position=rx_pos_sionna)
     scene.add(rx_obj)
     logger.info("Added RX '%s' at Sionna %s", rx["name"], rx_pos_sionna)
@@ -607,7 +606,7 @@ def generate_maps(
         plot_max_y = max(plot_max_y, scene_bounds[3])
 
     device_xy = [
-        threejs_to_sionna(d["x"], d["y"], d["z"])[:2]
+        _device_to_sionna(d)[:2]
         for d in [*tx_devices, *jam_devices, rx]
     ]
     for x_val, y_val in device_xy:
@@ -647,12 +646,12 @@ def generate_maps(
 
     # Mark TX, Jammer, RX positions on the map
     for d in tx_devices:
-        ps = threejs_to_sionna(d["x"], d["y"], d["z"])
+        ps = _device_to_sionna(d)
         ax.plot(ps[0], ps[1], "b^", markersize=10, label="TX", zorder=5)
     for d in jam_devices:
-        ps = threejs_to_sionna(d["x"], d["y"], d["z"])
+        ps = _device_to_sionna(d)
         ax.plot(ps[0], ps[1], "rs", markersize=10, label="Jammer", zorder=5)
-    rx_ps = threejs_to_sionna(rx["x"], rx["y"], rx["z"])
+    rx_ps = _device_to_sionna(rx)
     ax.plot(rx_ps[0], rx_ps[1], "g*", markersize=12, label="RX (UAV)", zorder=5)
 
     # Overlay CFAR peaks

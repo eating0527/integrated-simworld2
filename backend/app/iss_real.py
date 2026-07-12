@@ -9,6 +9,14 @@ from typing import Any, Iterable, TextIO
 
 import numpy as np
 
+from app.coordinate_frame import (
+    SceneFrame,
+    enu_to_gps,
+    enu_to_grid,
+    gps_to_enu,
+    grid_to_enu,
+    scene_frame_from_metadata,
+)
 from app.iss_unet_service import BUILDING_MAX_M, ISS_MAX_DBM, ISS_MIN_DBM, SceneDataset
 
 
@@ -17,12 +25,6 @@ SAMPLE_DIR = BASE_DIR / "sample"
 SAMPLE_GPS_PATH = SAMPLE_DIR / "gps.csv"
 SAMPLE_NOISE_PATH = SAMPLE_DIR / "noise.csv"
 
-FALLBACK_CENTERS = {
-    "NTPU": (24.943476, 121.370054),
-    "NYCU": (24.967052, 121.536335),
-}
-
-
 @dataclass(frozen=True)
 class GPSPoint:
     time_stamp: datetime
@@ -30,6 +32,8 @@ class GPSPoint:
     lon: float
     alt: float
     raw_columns: set[str] = field(default_factory=set)
+    alt_mode: str = "relative"
+    legacy_alt_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,8 @@ class AlignedNoisePoint:
     lon: float
     alt: float
     noise_floor_db: float
+    alt_mode: str = "relative"
+    legacy_alt_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +118,7 @@ def _require_columns(columns: set[str], required: Iterable[str], source_name: st
 def parse_gps_csv(source: Path | str | bytes | TextIO) -> list[GPSPoint]:
     rows, columns = _read_rows(source)
     _require_columns(columns, ("time_stamp", "lat", "lon", "alt"), "GPS CSV")
+    has_alt_mode = "alt_mode" in columns
     points = [
         GPSPoint(
             time_stamp=_parse_time(row["time_stamp"]),
@@ -119,6 +126,8 @@ def parse_gps_csv(source: Path | str | bytes | TextIO) -> list[GPSPoint]:
             lon=float(row["lon"]),
             alt=float(row["alt"]),
             raw_columns=columns,
+            alt_mode=(row.get("alt_mode") or "relative").strip().lower() if has_alt_mode else "relative",
+            legacy_alt_mode=not has_alt_mode,
         )
         for row in rows
         if row.get("time_stamp")
@@ -169,6 +178,8 @@ def align_noise_to_gps(
                 lon=gps.lon,
                 alt=gps.alt,
                 noise_floor_db=noise.noise_floor_db,
+                alt_mode=gps.alt_mode,
+                legacy_alt_mode=gps.legacy_alt_mode,
             )
         )
     return aligned, skipped
@@ -181,111 +192,58 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def resolve_scene_center(dataset: SceneDataset) -> tuple[float, float] | None:
-    if dataset.meta_path:
-        meta = _read_json(dataset.meta_path)
-        if meta.get("center_lat") is not None and meta.get("center_lon") is not None:
-            return float(meta["center_lat"]), float(meta["center_lon"])
-    sibling_meta = dataset.data_dir.parent / "scene_metadata.json"
-    if sibling_meta.exists():
-        meta = _read_json(sibling_meta)
-        if meta.get("lat") is not None and meta.get("lon") is not None:
-            return float(meta["lat"]), float(meta["lon"])
-    return FALLBACK_CENTERS.get(dataset.scene)
+def resolve_scene_frame(dataset: SceneDataset) -> SceneFrame:
+    if dataset.meta_path is None:
+        raise ValueError(f"SceneFrame metadata is required for {dataset.scene}")
+    return scene_frame_from_metadata(_read_json(dataset.meta_path))
+
+
+def resolve_scene_center(dataset: SceneDataset) -> tuple[float, float]:
+    frame = resolve_scene_frame(dataset)
+    return frame.origin_lat, frame.origin_lon
 
 
 def _scene_area_m(dataset: SceneDataset) -> float:
-    if dataset.meta_path:
-        meta = _read_json(dataset.meta_path)
-        if meta.get("area_m") is not None:
-            return float(meta["area_m"])
+    resolve_scene_frame(dataset)
     return 512.0
 
 
 def _scene_grid_bounds(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, float] | None:
-    if not dataset.meta_path:
-        return None
+    resolve_scene_frame(dataset)
     rows, cols = shape
-    raw_bounds = _read_json(dataset.meta_path).get("grid_bounds")
-    if not isinstance(raw_bounds, dict):
-        return None
-    try:
-        min_x = float(raw_bounds["min_x"])
-        max_x = float(raw_bounds["max_x"])
-        min_y = float(raw_bounds["min_y"])
-        max_y = float(raw_bounds["max_y"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    if not all(math.isfinite(value) for value in (min_x, max_x, min_y, max_y)) or max_x <= min_x or max_y <= min_y:
-        return None
     return {
-        "min_x": min_x,
-        "max_y": max_y,
-        "pixel_size_x_m": float((max_x - min_x) / float(cols)),
-        "pixel_size_y_m": float((max_y - min_y) / float(rows)),
+        "min_x": -256.0,
+        "max_x": 256.0,
+        "min_y": -256.0,
+        "max_y": 256.0,
+        "pixel_size_x_m": 512.0 / float(cols),
+        "pixel_size_y_m": 512.0 / float(rows),
     }
 
 
-def _latlon_to_pixel(
-    lat: float,
-    lon: float,
-    center_lat: float,
-    center_lon: float,
-    area_m: float,
-    shape: tuple[int, int],
-) -> tuple[int, int] | None:
-    rows, cols = shape
-    meters_per_deg_lat = 111320.0
-    meters_per_deg_lon = max(1.0, meters_per_deg_lat * math.cos(math.radians(center_lat)))
-    east_m = (lon - center_lon) * meters_per_deg_lon
-    north_m = (lat - center_lat) * meters_per_deg_lat
-    pixel_x_m = area_m / cols
-    pixel_y_m = area_m / rows
-    col = int(math.floor((east_m + area_m / 2.0) / pixel_x_m))
-    row = int(math.floor((area_m / 2.0 - north_m) / pixel_y_m))
-    if 0 <= row < rows and 0 <= col < cols:
-        return row, col
-    return None
-
-
-def _pixel_to_world(
-    row: int,
-    col: int,
-    area_m: float,
-    shape: tuple[int, int],
-    grid_bounds: dict[str, float] | None = None,
-) -> tuple[float, float]:
-    if grid_bounds is not None:
-        world_x = grid_bounds["min_x"] + (float(col) + 0.5) * grid_bounds["pixel_size_x_m"]
-        north_m = grid_bounds["max_y"] - (float(row) + 0.5) * grid_bounds["pixel_size_y_m"]
-        return float(world_x), float(-north_m)
-    rows, cols = shape
-    pixel_x_m = area_m / cols
-    pixel_y_m = area_m / rows
-    world_x = -area_m / 2.0 + (float(col) + 0.5) * pixel_x_m
-    north_m = area_m / 2.0 - (float(row) + 0.5) * pixel_y_m
-    return float(world_x), float(-north_m)
+def _latlon_to_grid(point: GPSPoint | AlignedNoisePoint, frame: SceneFrame):
+    east_m, north_m, up_m = gps_to_enu(point.lat, point.lon, point.alt, frame, point.alt_mode)
+    return enu_to_grid(east_m, north_m, up_m, frame), (east_m, north_m, up_m)
 
 
 def _route_point_payload(
     point: GPSPoint | AlignedNoisePoint,
-    row: int,
-    col: int,
-    area_m: float,
-    shape: tuple[int, int],
-    grid_bounds: dict[str, float] | None = None,
+    frame: SceneFrame,
 ) -> dict[str, Any]:
-    world_x, world_z = _pixel_to_world(row, col, area_m, shape, grid_bounds)
+    grid, enu = _latlon_to_grid(point, frame)
+    lat, lon, alt = enu_to_gps(*enu, frame, point.alt_mode)
     payload: dict[str, Any] = {
         "time_stamp": point.time_stamp.isoformat(),
-        "lat": float(point.lat),
-        "lon": float(point.lon),
-        "alt": float(point.alt),
-        "row": int(row),
-        "col": int(col),
-        "world_x": world_x,
-        "world_z": world_z,
-        "in_bounds": True,
+        "lat": lat,
+        "lon": lon,
+        "alt": alt,
+        "alt_mode": point.alt_mode,
+        "legacy_alt_mode": point.legacy_alt_mode,
+        "frame_id": frame.frame_id,
+        "enu": {"east_m": enu[0], "north_m": enu[1], "up_m": enu[2]},
+        "grid": grid.to_dict(),
+        "inside_extent": grid.inside_extent,
+        "displayable": grid.displayable,
     }
     if isinstance(point, AlignedNoisePoint):
         payload["noise_floor_db"] = float(point.noise_floor_db)
@@ -324,16 +282,12 @@ def create_route_sparse_sample(
     if mode == "gps_n" and noise_points is None:
         noise_points = parse_noise_csv(SAMPLE_NOISE_PATH)
 
-    center = resolve_scene_center(dataset)
-    if center is None:
-        raise ValueError("scene center is required for GPS ISS_UNET mode")
+    frame = resolve_scene_frame(dataset)
 
     building = arrays["building"]
     sparse_mask = np.zeros_like(building, dtype=np.float32)
     outdoor_mask = (building <= 3.0).astype(np.float32)
     iss_sparse_dbm = np.full_like(building, ISS_MIN_DBM, dtype=np.float32)
-    area_m = _scene_area_m(dataset)
-    grid_bounds = _scene_grid_bounds(dataset, building.shape)
     route_points, aligned_noise, skipped_noise = _route_points_for_mode(mode, gps_points, noise_points)
     out_of_bounds = 0
     indoor_filtered = 0
@@ -345,18 +299,15 @@ def create_route_sparse_sample(
     projected_sparse_points: list[dict[str, Any]] = []
 
     for gps_point in gps_points:
-        pixel = _latlon_to_pixel(gps_point.lat, gps_point.lon, center[0], center[1], area_m, building.shape)
-        if pixel is not None:
-            row, col = pixel
-            projected_route_points.append(_route_point_payload(gps_point, row, col, area_m, building.shape, grid_bounds))
+        projected_route_points.append(_route_point_payload(gps_point, frame))
 
     for point in route_points:
-        pixel = _latlon_to_pixel(point.lat, point.lon, center[0], center[1], area_m, building.shape)
-        if pixel is None:
+        grid, _enu = _latlon_to_grid(point, frame)
+        payload = _route_point_payload(point, frame)
+        if not grid.inside_extent or grid.row is None or grid.col is None:
             out_of_bounds += 1
             continue
-        row, col = pixel
-        payload = _route_point_payload(point, row, col, area_m, building.shape, grid_bounds)
+        row, col = grid.row, grid.col
         if isinstance(point, AlignedNoisePoint):
             projected_aligned_points.append(payload)
         if apply_building_mask and outdoor_mask[row, col] < 0.5:

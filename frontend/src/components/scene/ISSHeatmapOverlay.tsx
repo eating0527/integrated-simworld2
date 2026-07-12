@@ -12,24 +12,17 @@ interface OverlayGridResponse {
   values: number[][];
 }
 
-export function getHeatmapOverlayPlaneConfig(overlay: Pick<HeatmapOverlayConfig, 'areaM' | 'gridBounds'>) {
-  const bounds = overlay.gridBounds;
-  if (!bounds) {
-    return {
-      width: overlay.areaM,
-      height: overlay.areaM,
-      position: [0, 0.12, 0] as [number, number, number],
-    };
-  }
-  const width = bounds.max_x - bounds.min_x;
-  const height = bounds.max_y - bounds.min_y;
+export function getHeatmapOverlayPlaneConfig(overlay: Pick<HeatmapOverlayConfig, 'areaM' | 'frame'>) {
+  const bounds = overlay.frame.extent;
+  const width = bounds.max_e - bounds.min_e;
+  const height = bounds.max_n - bounds.min_n;
   return {
-    width,
-    height,
+    width: width || overlay.areaM,
+    height: height || overlay.areaM,
     position: [
-      bounds.min_x + width / 2,
+      bounds.min_e + width / 2,
       0.12,
-      -(bounds.min_y + height / 2),
+      -(bounds.min_n + height / 2) || 0,
     ] as [number, number, number],
   };
 }

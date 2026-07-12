@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { parseSceneFrame, type SceneFrame } from '../types/sceneFrame';
 
 const API = import.meta.env.VITE_API_URL || '';
 const RECENT_TASK_ID_KEY = 'recent-generated-scene-task-id';
@@ -19,6 +20,7 @@ interface SceneTask {
   modelUrl?: string;
   createdAt?: string;
   location?: SceneTaskLocation | null;
+  frame?: unknown;
 }
 
 export interface GeneratedSceneOption {
@@ -32,6 +34,7 @@ export interface GeneratedSceneOption {
     lon?: number;
     placeName?: string | null;
   };
+  frame?: SceneFrame;
 }
 
 interface GeneratedScenesState {
@@ -72,6 +75,7 @@ function normalizeTask(task: SceneTask): GeneratedSceneOption | null {
           placeName: task.location.place_name ?? null,
         }
       : undefined,
+    frame: parseSceneFrame(task.frame) ?? undefined,
   };
 }
 
@@ -86,9 +90,20 @@ async function fetchGeneratedSceneIndex(rebuildIndex: boolean): Promise<Generate
 
   const payload = await res.json();
   const tasks = Array.isArray(payload?.scenes) ? payload.scenes as SceneTask[] : [];
-  return tasks
+  const scenes = tasks
     .map(normalizeTask)
     .filter((scene): scene is GeneratedSceneOption => Boolean(scene));
+  const loaded = await Promise.all(scenes.map(async (scene) => {
+    if (scene.frame) return scene;
+    try {
+      const frameRes = await fetch(`${API}/generated-scenes/${scene.sceneKey}/scene_metadata.json`);
+      if (!frameRes.ok) return scene;
+      return { ...scene, frame: parseSceneFrame(await frameRes.json()) ?? undefined };
+    } catch (_) {
+      return scene;
+    }
+  }));
+  return loaded.filter((scene): scene is GeneratedSceneOption & { frame: SceneFrame } => Boolean(scene.frame));
 }
 
 async function fetchSceneTasks(): Promise<SceneTask[]> {

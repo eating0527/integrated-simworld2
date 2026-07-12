@@ -18,7 +18,14 @@ describe('device payload', () => {
       powerDbm: 77,
     });
 
-    const payload = getCurrentDevicePayload();
+    const payload = getCurrentDevicePayload({
+      frame_id: 'scene-test',
+      origin: { lat: 24, lon: 121, alt_m: 0 },
+      alt_mode: 'amsl',
+      extent: { min_e: -256, max_e: 256, min_n: -256, max_n: 256 },
+      display_margin_m: 32,
+      grid: { rows: 128, cols: 128, pixel_size_e_m: 4, pixel_size_n_m: 4 },
+    });
     const updatedJammer = payload.find((device) => device.role === 'jammer');
 
     assert.deepEqual(
@@ -26,9 +33,7 @@ describe('device payload', () => {
       {
         name: jammer.name,
         role: 'jammer',
-        x: 321,
-        y: 12,
-        z: -45,
+        enu: { east_m: 321, north_m: 45, up_m: 12 },
         power_dbm: 77,
       },
     );

@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import type { ISSRouteOverlayConfig, ISSRoutePoint } from '../../types/heatmap';
+import { enuToThree } from '../../utils/geo';
 
-const MIN_HEIGHT = 4;
 const NOISE_MIN_DBM = -90;
 const NOISE_MAX_DBM = -15;
 
@@ -11,13 +11,12 @@ function clamp01(value: number) {
 }
 
 function pointToScene(point: ISSRoutePoint): [number, number, number] | null {
-  const x = Number(point.world_x);
-  const z = Number(point.world_z);
-  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+  if (point.grid?.displayable === false) {
     return null;
   }
-  const alt = Number(point.alt);
-  return [x, Math.max(Number.isFinite(alt) ? alt : 0, MIN_HEIGHT), z];
+  const { east_m, north_m, up_m } = point.enu;
+  if (![east_m, north_m, up_m].every(Number.isFinite)) return null;
+  return enuToThree(point.enu);
 }
 
 export function getIssRouteLinePoints(overlay: ISSRouteOverlayConfig): [number, number, number][] {

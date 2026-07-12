@@ -8,23 +8,23 @@ describe('ISS route overlay helpers', () => {
     const overlay = {
       routeMode: 'all',
       routePoints: [
-        { lat: 0, lon: 0, alt: 2, row: 0, col: 0, world_x: 10, world_z: 20 },
-        { lat: 0, lon: 0, alt: 9, row: 0, col: 0, world_x: Number.NaN, world_z: 30 },
-        { lat: 0, lon: 0, alt: 8, row: 0, col: 0, world_x: 30, world_z: 40 },
+        { lat: 0, lon: 0, alt: 2, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: 10, north_m: 20, up_m: 2 }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
+        { lat: 0, lon: 0, alt: 9, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: Number.NaN, north_m: 30, up_m: 9 }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
+        { lat: 0, lon: 0, alt: 8, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: 30, north_m: 40, up_m: 8 }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
       ],
       alignedPoints: [
-        { lat: 0, lon: 0, alt: 1, row: 0, col: 0, world_x: 50, world_z: 60 },
+        { lat: 0, lon: 0, alt: 1, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: 50, north_m: 60, up_m: 1 }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
       ],
       samplePoints: [],
     };
 
     assert.deepEqual(getIssRouteLinePoints(overlay), [
-      [10, 4, 20],
-      [30, 8, 40],
+      [10, 2, -20],
+      [30, 8, -40],
     ]);
 
     assert.deepEqual(getIssRouteLinePoints({ ...overlay, routeMode: 'aligned' }), [
-      [50, 4, 60],
+      [50, 1, -60],
     ]);
   });
 
@@ -42,25 +42,25 @@ describe('ISS route overlay helpers', () => {
     assert.equal(getIssNoiseColor(Number.POSITIVE_INFINITY), '#000080');
   });
 
-  it('uses minimum height for non-finite altitude', () => {
+  it('filters non-finite ENU coordinates', () => {
     const overlay = {
       routeMode: 'all',
       routePoints: [
-        { lat: 0, lon: 0, alt: Number.POSITIVE_INFINITY, row: 0, col: 0, world_x: 10, world_z: 20 },
+        { lat: 0, lon: 0, alt: Number.POSITIVE_INFINITY, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: 10, north_m: 20, up_m: Number.POSITIVE_INFINITY }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
       ],
       alignedPoints: [],
       samplePoints: [],
     };
 
-    assert.deepEqual(getIssRouteLinePoints(overlay), [[10, 4, 20]]);
+    assert.deepEqual(getIssRouteLinePoints(overlay), []);
   });
 
   it('keeps fewer than two valid line points for the renderer to skip', () => {
     const overlay = {
       routeMode: 'all',
       routePoints: [
-        { lat: 0, lon: 0, alt: 8, row: 0, col: 0, world_x: 10, world_z: 20 },
-        { lat: 0, lon: 0, alt: 8, row: 0, col: 0, world_x: Number.NaN, world_z: 20 },
+        { lat: 0, lon: 0, alt: 8, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: 10, north_m: 20, up_m: 8 }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
+        { lat: 0, lon: 0, alt: 8, alt_mode: 'relative', frame_id: 'scene-test', enu: { east_m: Number.NaN, north_m: 20, up_m: 8 }, grid: { row: 0, col: 0, inside_extent: true, displayable: true } },
       ],
       alignedPoints: [],
       samplePoints: [],
