@@ -296,6 +296,18 @@ def _normalize_live_devices(devices: list[Any] | None) -> list[dict[str, Any]]:
                 },
                 "power_dbm": getattr(device, "power_dbm", None),
             }
+        if all(key in payload for key in ("east_m", "north_m", "up_m")):
+            normalized.append(
+                {
+                    "name": payload["name"],
+                    "role": payload["role"],
+                    "east_m": float(payload["east_m"]),
+                    "north_m": float(payload["north_m"]),
+                    "up_m": float(payload["up_m"]),
+                    "power_dbm": None if payload.get("power_dbm") is None else float(payload["power_dbm"]),
+                }
+            )
+            continue
         enu = payload.get("enu")
         if not isinstance(enu, dict):
             raise ValueError("device enu coordinates are required")

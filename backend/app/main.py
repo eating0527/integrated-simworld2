@@ -2421,11 +2421,9 @@ async def simulate(req: SimulateRequest):
         device_payload = {
             "name": d.name,
             "role": d.role,
-            "enu": {
-                "east_m": d.enu.east_m,
-                "north_m": d.enu.north_m,
-                "up_m": d.enu.up_m,
-            },
+            "east_m": d.enu.east_m,
+            "north_m": d.enu.north_m,
+            "up_m": d.enu.up_m,
         }
         if power_dbm is not None:
             device_payload["power_dbm"] = power_dbm

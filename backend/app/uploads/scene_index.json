@@ -1,5 +1,23 @@
 [
   {
+    "id": "task-4c1d2a9fe9",
+    "sceneKey": "T-83BBCDF26C",
+    "sceneName": "picked_2026-07-12_09_15_26",
+    "location": {
+      "lat": 24.943840584875833,
+      "lon": 121.37068748474123,
+      "zoom": 18,
+      "requested_zoom": 18,
+      "place_name": "龍學里",
+      "location_id": "loc-f72ed3bddf"
+    },
+    "modelUrl": "/generated-scenes/T-83BBCDF26C/T-83BBCDF26C.glb",
+    "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-83BBCDF26C\\T-83BBCDF26C.xml",
+    "createdAt": "2026-07-12T17:15:23.971136",
+    "updatedAt": "2026-07-12T17:16:05.490321",
+    "indexedAt": "2026-07-12T17:31:15.001074"
+  },
+  {
     "id": "task-eb9b0dd4b5",
     "sceneKey": "T-D3465EF47E",
     "sceneName": "picked_2026-07-09_08_56_25",
@@ -15,7 +33,7 @@
     "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-D3465EF47E\\T-D3465EF47E.xml",
     "createdAt": "2026-07-09T16:56:25.271823",
     "updatedAt": "2026-07-09T16:57:13.714112",
-    "indexedAt": "2026-07-11T21:48:55.167373"
+    "indexedAt": "2026-07-12T17:31:15.001074"
   },
   {
     "id": "task-d2e527631e",
@@ -33,7 +51,7 @@
     "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-CE536C15D9\\T-CE536C15D9.xml",
     "createdAt": "2026-07-09T16:45:43.151820",
     "updatedAt": "2026-07-09T16:46:41.607358",
-    "indexedAt": "2026-07-11T21:48:55.167373"
+    "indexedAt": "2026-07-12T17:31:15.001074"
   },
   {
     "id": "task-de31ade75c",
@@ -51,6 +69,6 @@
     "sionnaSceneXml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\T-C48D06AE5A\\T-C48D06AE5A.xml",
     "createdAt": "2026-06-25T12:34:29.184546",
     "updatedAt": "2026-06-25T12:35:23.152060",
-    "indexedAt": "2026-07-11T21:48:55.167373"
+    "indexedAt": "2026-07-12T17:31:15.001074"
   }
 ]

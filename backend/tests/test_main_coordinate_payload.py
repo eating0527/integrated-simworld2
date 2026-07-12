@@ -7,7 +7,7 @@ from app import main
 
 
 class SimulateCoordinatePayloadTests(unittest.TestCase):
-    def test_simulate_forwards_nested_enu_devices_to_map_generator(self):
+    def test_simulate_forwards_flat_enu_devices_to_map_generator(self):
         request = main.SimulateRequest(
             scene="NTPU",
             map_type="iss",
@@ -31,7 +31,9 @@ class SimulateCoordinatePayloadTests(unittest.TestCase):
         self.assertEqual(devices, [{
             "name": "rx-0",
             "role": "rx",
-            "enu": {"east_m": 12.0, "north_m": -8.0, "up_m": 3.5},
+            "east_m": 12.0,
+            "north_m": -8.0,
+            "up_m": 3.5,
             "power_dbm": 9.0,
         }])
 
