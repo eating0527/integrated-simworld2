@@ -33,6 +33,18 @@ Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id> | ConvertTo-Js
 Invoke-RestMethod http://127.0.0.1:8888/api/scene-tasks/<task_id>/metadata | ConvertTo-Json -Depth 8
 ```
 
+## 裝置座標輸入
+
+`Device.x/y/z` 是裝置位置唯一的 canonical 資料。`DevicePanel` 只在面板內維護 GPS 或 xyz 的文字草稿，按 `套用位置` 後才呼叫 store 更新位置。
+
+座標轉換沿用 `frontend/src/utils/geo.ts`：
+
+```text
+GPS ↔ ENU ↔ Three.js xyz
+```
+
+GPS 模式使用目前 `activeFrame` 與 `alt_mode` 轉換；xyz 模式則直接轉成 ENU。兩種模式都會透過 `enuToGrid(...).inside_extent` 驗證目前 `SceneFrame.extent`，超出 scene 範圍不更新 store。切換模式、scene frame 或 canonical xyz 改變時，欄位會重新由已套用位置產生。
+
 ## Blender / blosm 策略
 
 - 以 `建模選點` 地圖點選座標為中心建模。

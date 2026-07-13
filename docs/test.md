@@ -17,6 +17,24 @@ cd ..
 
 `npm run build` 會產生 `frontend/dist/`；它只供 build 驗證，開發伺服器使用 Vite，不需要保留這個目錄。
 
+### 裝置座標面板回歸測試
+
+```powershell
+cd frontend
+npm test -- src/components/ui/DevicePanel.test.tsx
+cd ..
+```
+
+回歸範圍包含：
+
+- GPS／xyz 模式切換與預設 GPS 模式。
+- 切換時由已套用 xyz 重新綁定，捨棄未套用草稿。
+- TX、RX、Jammer 的 GPS 套用與 RX UAV 同步。
+- 不完整、無效或超出目前 scene extent 的座標不可更新 store。
+- extent 邊界、鍵盤操作與 `aria-pressed`、`aria-label`、`aria-controls`。
+
+目前完整前端驗證結果：18 個測試檔、81 個測試通過；`npm run build` 通過。
+
 ## 後端
 
 ```powershell
