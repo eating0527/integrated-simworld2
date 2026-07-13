@@ -80,8 +80,9 @@ describe('DevicePanel coordinate modes', () => {
         y: expected[1],
         z: expected[2],
       });
-      if (id === 'dev-tx-0') expect(onApplyRxPosition).not.toHaveBeenCalled();
-      if (id === 'dev-jam-0') expect(onApplyRxPosition).not.toHaveBeenCalled();
+      if (id === 'dev-tx-0') expect(onApplyRxPosition).toHaveBeenCalledTimes(0);
+      if (id === 'dev-rx-0') expect(onApplyRxPosition).toHaveBeenCalledTimes(1);
+      if (id === 'dev-jam-0') expect(onApplyRxPosition).toHaveBeenCalledTimes(1);
     }
   });
 
