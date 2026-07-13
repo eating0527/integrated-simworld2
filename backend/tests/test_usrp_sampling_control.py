@@ -464,6 +464,40 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertIn("--noise-csv /home/user/rx_sampling/noise.csv", retry)
         self.assertIn("--api-url http://127.0.0.1:8888/api/usrp/upload-noise-csv", retry)
 
+    def test_remote_stop_converts_recording_state_to_pending_upload(self):
+        from app import usrp_ctl
+
+        calls: list[str] = []
+        mission_path = "/var/lib/simworld/capture/flight_recording/mission.json"
+        env_path = "/run/simworld/usrp.env"
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            calls.append(command)
+            if command == "systemctl stop drone":
+                return 0, "", ""
+            if command == "systemctl is-active drone":
+                return 3, "inactive", ""
+            if command == f"cat {mission_path}":
+                return 0, '{"mission_id":"flight_recording","state":"starting","upload_state":"recording"}', ""
+            if command == f"cat {env_path}":
+                return 0, "MISSION_ID=flight_recording\nUPLOAD_API_URL=http://192.168.50.70:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv", ""
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
+                return 0, "uploaded", ""
+            if command.startswith("systemctl status") or command.startswith("journalctl"):
+                return 0, "Active: inactive", ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.stop_capture_job("usrp", "flight_recording")
+
+        self.assertEqual(result["mission_state"]["upload_state"], "uploaded")
+        retry = next(
+            command
+            for command in calls
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py ")
+        )
+        self.assertIn("--mission-id flight_recording", retry)
+
     def test_remote_stop_raises_when_retry_write_back_fails(self):
         from app import usrp_ctl
 
