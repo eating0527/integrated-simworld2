@@ -1,13 +1,13 @@
 import React from 'react';
 import { useDeviceStore } from '../../store/useDeviceStore';
 import type { Device, DeviceRole } from '../../types/device';
-import { createSceneFrame, type SceneFrame } from '../../types/sceneFrame';
+import type { SceneFrame } from '../../types/sceneFrame';
 import { enuToGps, enuToGrid, enuToThree, gpsToEnu, threeToEnu } from '../../utils/geo';
 import { MinPanel } from './MinPanel';
 
-export type CoordMode = 'gps' | 'xyz';
-export type Position = [number, number, number];
-export type PositionDraft = Record<'lat' | 'lon' | 'alt' | 'x' | 'y' | 'z', string>;
+type CoordMode = 'gps' | 'xyz';
+type Position = [number, number, number];
+type PositionDraft = Record<'lat' | 'lon' | 'alt' | 'x' | 'y' | 'z', string>;
 
 type CoordAxis = keyof PositionDraft;
 
@@ -268,23 +268,18 @@ function Section({
 }
 
 interface DevicePanelProps {
-  coordMode?: CoordMode;
-  sceneFrame?: SceneFrame;
+  sceneFrame: SceneFrame;
   onApplyRxPosition?: (position: Position) => void;
 }
 
-const defaultSceneFrame = createSceneFrame('device-panel', { lat: 0, lon: 0, alt_m: 0 });
-
 export function DevicePanel({
-  coordMode,
-  sceneFrame = defaultSceneFrame,
+  sceneFrame,
   onApplyRxPosition,
-}: DevicePanelProps = {}) {
+}: DevicePanelProps) {
   const devices = useDeviceStore((state) => state.devices);
-  const [localCoordMode, setLocalCoordMode] = React.useState<CoordMode>(coordMode ?? 'gps');
-  const activeCoordMode = coordMode ?? localCoordMode;
+  const [coordMode, setCoordMode] = React.useState<CoordMode>('gps');
   const coordinateInputsId = React.useId();
-  const nextCoordMode = activeCoordMode === 'gps' ? 'xyz' : 'gps';
+  const nextCoordMode = coordMode === 'gps' ? 'xyz' : 'gps';
 
   const txDevices = devices.filter((device) => device.role === 'tx');
   const rxDevices = devices.filter((device) => device.role === 'rx');
@@ -294,16 +289,16 @@ export function DevicePanel({
     <MinPanel as="aside" className="device-panel" title="裝置設定" defaultMinimized>
       <div className="dp-header">裝置設定</div>
       <div className="dp-coordinate-toolbar">
-        <span>{activeCoordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}</span>
+        <span>{coordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}</span>
         <button
           type="button"
           className="dp-coordinate-toggle"
           aria-label={`切換為 ${nextCoordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}`}
-          aria-pressed={activeCoordMode === 'gps'}
+          aria-pressed={coordMode === 'gps'}
           aria-controls={coordinateInputsId}
-          onClick={() => setLocalCoordMode(nextCoordMode)}
+          onClick={() => setCoordMode(nextCoordMode)}
         >
-          {activeCoordMode === 'gps' ? 'XYZ' : 'GPS'}
+          {coordMode === 'gps' ? 'XYZ' : 'GPS'}
         </button>
       </div>
       <div id={coordinateInputsId}>
@@ -311,7 +306,7 @@ export function DevicePanel({
           title="TX（發射器）"
           role="tx"
           devices={txDevices}
-          coordMode={activeCoordMode}
+          coordMode={coordMode}
           sceneFrame={sceneFrame}
           coordinateInputsId={coordinateInputsId}
           canAdd
@@ -321,7 +316,7 @@ export function DevicePanel({
           title="RX（UAV）"
           role="rx"
           devices={rxDevices}
-          coordMode={activeCoordMode}
+          coordMode={coordMode}
           sceneFrame={sceneFrame}
           coordinateInputsId={coordinateInputsId}
           onApplyRxPosition={onApplyRxPosition}
@@ -330,7 +325,7 @@ export function DevicePanel({
           title="Jammer（干擾源）"
           role="jammer"
           devices={jammerDevices}
-          coordMode={activeCoordMode}
+          coordMode={coordMode}
           sceneFrame={sceneFrame}
           coordinateInputsId={coordinateInputsId}
           canAdd
