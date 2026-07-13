@@ -441,6 +441,7 @@ canvas {
 .dp-btn-add {
   font-size: 11px;
   padding: 2px 8px;
+  min-height: 44px;
   background: transparent;
   color: var(--accent);
   border: 1px solid var(--accent);
@@ -532,12 +533,19 @@ canvas {
 }
 
 .dp-btn-remove {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
   background: transparent;
   border: none;
   color: var(--danger);
   cursor: pointer;
   font-size: 12px;
-  padding: 0 4px;
+  padding: 0;
   line-height: 1;
   opacity: 0.7;
   transition: opacity 0.15s;
@@ -548,6 +556,7 @@ canvas {
 .dp-btn-apply {
   font-size: 11px;
   padding: 3px 10px;
+  min-height: 44px;
   background: rgba(0, 200, 150, 0.12);
   color: #00c896;
   border: 1px solid rgba(0, 200, 150, 0.4);
@@ -580,6 +589,7 @@ canvas {
   font-size: 11px;
   font-weight: 600;
   padding: 3px 5px;
+  min-height: 44px;
   transition: background 0.15s, border-color 0.15s;
   white-space: nowrap;
 }

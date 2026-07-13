@@ -139,18 +139,21 @@ function DeviceRow({
     ? [['lat', `緯度 ${device.name}`], ['lon', `經度 ${device.name}`], ['alt', `高度 ${device.name}`]]
     : [['x', `X ${device.name}`], ['y', `Y ${device.name}`], ['z', `Z ${device.name}`]];
   const errorId = `${coordinateInputsId}-error`;
+  const nameInputId = `${coordinateInputsId}-name`;
+  const powerInputId = `${coordinateInputsId}-power`;
 
   return (
     <div className="dp-device-row">
       <div className="dp-field-row">
-        <label className="dp-label">名稱</label>
+        <label className="dp-label" htmlFor={nameInputId}>名稱</label>
         <input
+          id={nameInputId}
           className="dp-input"
           value={device.name}
           onChange={(event) => onUpdate({ name: event.target.value })}
         />
         {onRemove && (
-          <button className="dp-btn-remove" onClick={onRemove} title="刪除">
+          <button className="dp-btn-remove" onClick={onRemove} title="刪除" aria-label="刪除裝置">
             ✕
           </button>
         )}
@@ -175,8 +178,9 @@ function DeviceRow({
 
       {showPower && (
         <div className="dp-field-row">
-          <label className="dp-label">功率</label>
+          <label className="dp-label" htmlFor={powerInputId}>功率</label>
           <input
+            id={powerInputId}
             type="number"
             className="dp-input dp-input-sm"
             value={device.powerDbm ?? 0}
@@ -189,7 +193,7 @@ function DeviceRow({
       <div className="dp-field-row">
         <button
           className="dp-btn-apply"
-          disabled={candidate === null}
+          disabled={error !== null}
           onClick={() => {
             if (candidate !== null && error === null) onApplyPosition(candidate);
           }}
@@ -297,6 +301,7 @@ export function DevicePanel({
   const [coordMode, setCoordMode] = React.useState<CoordMode>('gps');
   const coordinateInputsId = React.useId();
   const nextCoordMode = coordMode === 'gps' ? 'xyz' : 'gps';
+  const toggleLabel = `切換為 ${nextCoordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}`;
 
   const txDevices = devices.filter((device) => device.role === 'tx');
   const rxDevices = devices.filter((device) => device.role === 'rx');
@@ -309,7 +314,8 @@ export function DevicePanel({
         <button
           type="button"
           className="dp-coordinate-toggle"
-          aria-label={`切換為 ${nextCoordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}`}
+          aria-label={toggleLabel}
+          title={toggleLabel}
           aria-pressed={coordMode === 'gps'}
           aria-controls={coordinateInputsId}
           onClick={() => setCoordMode(nextCoordMode)}
