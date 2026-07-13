@@ -300,8 +300,10 @@ export function DevicePanel({
   const devices = useDeviceStore((state) => state.devices);
   const [coordMode, setCoordMode] = React.useState<CoordMode>('gps');
   const coordinateInputsId = React.useId();
+  const currentCoordModeLabel = coordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標';
   const nextCoordMode = coordMode === 'gps' ? 'xyz' : 'gps';
-  const toggleLabel = `切換為 ${nextCoordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}`;
+  const nextCoordModeLabel = nextCoordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標';
+  const toggleLabel = `目前為 ${currentCoordModeLabel}，切換為 ${nextCoordModeLabel}`;
 
   const txDevices = devices.filter((device) => device.role === 'tx');
   const rxDevices = devices.filter((device) => device.role === 'rx');

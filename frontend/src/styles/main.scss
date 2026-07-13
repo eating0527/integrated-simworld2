@@ -514,6 +514,8 @@ canvas {
   font-size: 12px;
   padding: 3px 6px;
   width: 100%;
+  min-width: 0;
+  min-height: 44px;
   outline: none;
   transition: border-color 0.15s;
 
