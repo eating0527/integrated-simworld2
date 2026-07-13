@@ -122,9 +122,9 @@ class GeneratedSceneIndexTests(unittest.TestCase):
 
         prepare_calls = []
 
-        def fake_prepare(scene, scene_dir):
-            prepare_calls.append((scene, scene_dir))
-            return {"available": True}
+        def fake_prepare(scene, scene_dir, pixel_size_m):
+            prepare_calls.append((scene, scene_dir, pixel_size_m))
+            return {"available": True, "pixel_size_m": pixel_size_m}
 
         with patch.object(main, "_run_blender_task_sync", return_value={
             "success": True,
@@ -137,10 +137,40 @@ class GeneratedSceneIndexTests(unittest.TestCase):
                 asyncio.run(main._process_scene_task("task-ok"))
 
         updated = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
-        self.assertEqual(prepare_calls, [("T-AAAAAAAAAA", self.scene_dir)])
+        self.assertEqual(
+            prepare_calls,
+            [
+                ("T-AAAAAAAAAA", self.scene_dir, 1),
+                ("T-AAAAAAAAAA", self.scene_dir, 2),
+                ("T-AAAAAAAAAA", self.scene_dir, 4),
+            ],
+        )
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(updated["stage"], "iss_unet_dataset_prepared")
         self.assertTrue(updated["issUnetDataset"]["available"])
+        self.assertEqual(updated["issUnetDataset"]["pixel_size_m"], 4)
+        self.assertEqual(set(updated["issUnetDataset"]["resolutions"]), {"1m", "2m", "4m"})
+
+    def test_prepare_iss_unet_dataset_generates_all_resolutions_and_keeps_4m_top_level(self):
+        prepare_calls = []
+
+        def fake_prepare(scene, scene_dir, pixel_size_m):
+            prepare_calls.append((scene, scene_dir, pixel_size_m))
+            return {"available": True, "pixel_size_m": pixel_size_m}
+
+        with patch("app.iss_unet_dataset_service.prepare_iss_unet_dataset", side_effect=fake_prepare):
+            result = main._prepare_iss_unet_dataset_for_scene_task("NTPU")
+
+        self.assertEqual([call[2] for call in prepare_calls], [1, 2, 4])
+        self.assertEqual(result["issUnetDataset"]["pixel_size_m"], 4)
+        self.assertEqual(
+            result["issUnetDataset"]["resolutions"],
+            {
+                "1m": {"available": True, "pixel_size_m": 1},
+                "2m": {"available": True, "pixel_size_m": 2},
+                "4m": {"available": True, "pixel_size_m": 4},
+            },
+        )
 
     def test_completed_scene_task_records_dataset_prepare_failure_without_crashing(self):
         task = _task("task-ok", "T-AAAAAAAAAA", status="running")
@@ -270,6 +300,15 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         ])
 
         self.assertEqual(args.area_m, 512.0)
+
+    def test_blender_output_dir_is_absolute(self):
+        args = blender_generate_scene.parse_args([
+            "--lat", "25.0",
+            "--lon", "121.0",
+            "--output-dir", "~\\scene-output",
+        ])
+
+        self.assertTrue(Path(args.output_dir).is_absolute())
 
     def test_blender_scene_metadata_uses_fixed_scene_frame(self):
         frame = blender_generate_scene.scene_frame_metadata("T-AAAAAAAAAA", 25.0, 121.0)

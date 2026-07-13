@@ -4,7 +4,7 @@
   "model_url": "/generated-scenes/NYCU/NYCU.glb",
   "lat": 24.967052,
   "lon": 121.536335,
-  "zoom": 16,
+  "zoom": 18,
   "area_m": 512.0,
   "bbox_mode": "fixed_meters",
   "bbox_size_m": [
@@ -66,8 +66,16 @@
     "forests": 0,
     "vegetation": 0
   },
-  "basemap_fit_mode": "solid_fixed_fallback",
+  "basemap_fit_mode": "geo_bbox_single_image",
   "basemap_scale_mode": "fixed_meters",
+  "imported_bounds_xy": {
+    "min_x": -427.5376281738281,
+    "max_x": 229.0028839111328,
+    "min_y": -275.9388732910156,
+    "max_y": 533.0809936523438,
+    "width": 656.5405120849609,
+    "height": 809.0198669433594
+  },
   "basemap_applied_size": [
     512.0,
     512.0
@@ -77,8 +85,40 @@
     512.0,
     1.0
   ],
-  "xml_file": "backend\\app\\static\\scenes\\NYCU\\NYCU.xml",
-  "mesh_dir": "backend\\app\\static\\scenes\\NYCU\\mesh",
+  "basemap_alignment_mode": "fixed_area",
+  "basemap_cover_padding": 1.0,
+  "basemap_tile_strategy": "single_image_bbox",
+  "geo_bbox_world_size": [
+    512.0082972197562,
+    511.91810607910156
+  ],
+  "generation_quality": "quality",
+  "basemap_tile_count": 1,
+  "basemap_size_mode": "fixed_meters",
+  "basemap_tiles": [
+    {
+      "x": 219572,
+      "y": 112287,
+      "zoom": 18,
+      "source": "satellite_export",
+      "url": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=121.53379821777344,24.964752197265625,121.53887176513672,24.969350814819336&bboxSR=4326&imageSR=4326&size=1536,1536&format=png32&f=image",
+      "file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\osm_basemap_bbox_18.png",
+      "geo_bounds": {
+        "min_lat": 24.964752197265625,
+        "max_lat": 24.969350814819336,
+        "min_lon": 121.53379821777344,
+        "max_lon": 121.53887176513672
+      }
+    }
+  ],
+  "basemap_tile_url": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=121.53379821777344,24.964752197265625,121.53887176513672,24.969350814819336&bboxSR=4326&imageSR=4326&size=1536,1536&format=png32&f=image",
+  "basemap_tile_source": "satellite_export",
+  "basemap_tile_zoom": 18,
+  "basemap_tile_x": 219572,
+  "basemap_tile_y": 112287,
+  "basemap_tile_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\osm_basemap_bbox_18.png",
+  "xml_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\NYCU.xml",
+  "mesh_dir": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\mesh",
   "building_count": 53,
   "sionna_mesh_count": 54,
   "sionna_meshes": [
@@ -461,8 +501,8 @@
       "faces": 16
     }
   ],
-  "glb_file": "backend\\app\\static\\scenes\\NYCU\\NYCU.glb",
-  "blend_file": "backend\\app\\static\\scenes\\NYCU\\NYCU.blend",
+  "glb_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\NYCU.glb",
+  "blend_file": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\NYCU.blend",
   "blosm_enabled": true,
   "import_result": [
     "FINISHED"
@@ -474,7 +514,6 @@
   "meshes_before": 0,
   "meshes_after": 54,
   "meshes_imported": 54,
-  "basemap_added": false,
-  "basemap_error": "Error: Cannot read 'backend\\app\\static\\scenes\\NYCU\\osm_basemap_bbox_16.png': No such file or directory\n",
+  "basemap_added": true,
   "note": "Blosm enabled and OSM import finished."
 }

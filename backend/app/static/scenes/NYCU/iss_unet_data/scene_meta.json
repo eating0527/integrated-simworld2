@@ -1,6 +1,6 @@
 {
   "scene": "NYCU",
-  "scene_xml": "app\\static\\scenes\\NYCU\\NYCU.xml",
+  "scene_xml": "C:\\Users\\pinkie\\Documents\\integrated-simworld2\\backend\\app\\static\\scenes\\NYCU\\NYCU.xml",
   "frame": {
     "frame_version": 1,
     "frame_id": "scene-nycu",
@@ -69,5 +69,5 @@
     "iss": "sionna_iss.npy",
     "tss": "sionna_tss.npy"
   },
-  "prepared_at": "2026-07-12T15:38:36.815308"
+  "prepared_at": "2026-07-13T10:57:01.335757"
 }

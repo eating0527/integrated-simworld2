@@ -1097,7 +1097,15 @@ def _prepare_iss_unet_dataset_for_scene_task(scene_key: str) -> Dict[str, Any]:
     from app.iss_unet_dataset_service import prepare_iss_unet_dataset
 
     try:
-        result = prepare_iss_unet_dataset(scene_key, scene_dir=SCENE_DIR)
+        resolutions = {}
+        for pixel_size_m in (1, 2, 4):
+            resolutions[f"{pixel_size_m}m"] = prepare_iss_unet_dataset(
+                scene_key,
+                scene_dir=SCENE_DIR,
+                pixel_size_m=pixel_size_m,
+            )
+        result = dict(resolutions["4m"])
+        result["resolutions"] = resolutions
         return {
             "stage": "iss_unet_dataset_prepared",
             "note": "Blender stage completed and ISS_UNET dataset prepared",

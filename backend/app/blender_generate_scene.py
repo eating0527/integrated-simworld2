@@ -308,7 +308,11 @@ def parse_args(argv):
     parser.add_argument("--area-m", type=float, default=GENERATED_SCENE_AREA_M)
     parser.add_argument("--scene-name", type=str, default="custom_scene")
     parser.add_argument("--scene-key", type=str, default="CUSTOM")
-    parser.add_argument("--output-dir", type=str, required=True)
+    parser.add_argument(
+        "--output-dir",
+        type=lambda value: str(Path(value).expanduser().resolve()),
+        required=True,
+    )
     parser.add_argument("--basemap-style", type=str, default="satellite", choices=["satellite", "osm"])
     return parser.parse_args(argv)
 
