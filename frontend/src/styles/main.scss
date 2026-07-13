@@ -365,7 +365,9 @@ canvas {
   left: 0;
   bottom: 0;
   z-index: 100;
-  width: 260px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   background: var(--panel-bg);
   border-right: 1px solid var(--panel-border);
   backdrop-filter: blur(12px);
@@ -379,14 +381,41 @@ canvas {
   &::-webkit-scrollbar { display: none; }
 }
 
-.dp-header {
-  padding: 14px 16px 10px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--panel-border);
+.dp-coordinate-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  color: var(--accent-cyan);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.dp-coordinate-toggle {
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  color: var(--accent-cyan);
+  background: var(--input-bg);
+  border: 1px solid var(--accent-cyan);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(0, 212, 255, 0.14);
+  }
 }
 
 .dp-section {
@@ -444,14 +473,36 @@ canvas {
   min-width: 30px;
 }
 
-.dp-coord-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  display: flex;
-  flex-direction: column;
+.dp-coordinate-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  min-width: 0;
+}
+
+.dp-coordinate-field {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2px;
-  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+
+  > span {
+    min-width: 0;
+  }
+
+  .dp-input {
+    min-width: 0;
+  }
+}
+
+.dp-coordinate-error {
+  min-width: 0;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 .dp-input {
@@ -465,7 +516,7 @@ canvas {
   outline: none;
   transition: border-color 0.15s;
 
-  &:focus { border-color: var(--accent); }
+  &:focus-visible { border-color: var(--accent-cyan); }
 
   &.dp-input-sm {
     padding: 2px 4px;
@@ -546,6 +597,20 @@ canvas {
   &:active {
     background: rgba(150, 150, 150, 0.4);
   }
+}
+
+.device-panel button:focus-visible,
+.device-panel input:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.device-panel button:disabled {
+  color: var(--text-muted);
+  background: var(--input-bg);
+  border-color: var(--panel-border);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .dp-btn-apply-default {

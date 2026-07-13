@@ -51,6 +51,23 @@ function isInsideScene(position: Position, frame: SceneFrame): boolean {
   return enuToGrid(threeToEnu(position), frame).inside_extent;
 }
 
+function GlobeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.2 2.4 3.3 5.4 3.3 9s-1.1 6.6-3.3 9c-2.2-2.4-3.3-5.4-3.3-9S9.8 5.4 12 3Z" />
+    </svg>
+  );
+}
+
+function AxesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M5 19V5M5 19h14M5 19l5-5M5 5l4 4M19 19l-4-4M19 5l-4 4" />
+    </svg>
+  );
+}
+
 function CoordinateInput({
   label,
   value,
@@ -139,10 +156,10 @@ function DeviceRow({
         )}
       </div>
 
-      <div className="dp-field-row" id={coordinateInputsId}>
+      <div className="dp-coordinate-fields" id={coordinateInputsId}>
         {fields.map(([axis, label]) => (
-          <label key={axis} className="dp-coord-label">
-            {label.split(' ')[0]}
+          <label key={axis} className="dp-coordinate-field">
+            <span>{label.split(' ')[0]}</span>
             <CoordinateInput
               label={label}
               value={draft[axis]}
@@ -153,7 +170,7 @@ function DeviceRow({
             />
           </label>
         ))}
-        {error && <span id={errorId}>{error}</span>}
+        {error && <span id={errorId} className="dp-coordinate-error">{error}</span>}
       </div>
 
       {showPower && (
@@ -287,7 +304,6 @@ export function DevicePanel({
 
   return (
     <MinPanel as="aside" className="device-panel" title="裝置設定" defaultMinimized>
-      <div className="dp-header">裝置設定</div>
       <div className="dp-coordinate-toolbar">
         <span>{coordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}</span>
         <button
@@ -298,7 +314,7 @@ export function DevicePanel({
           aria-controls={coordinateInputsId}
           onClick={() => setCoordMode(nextCoordMode)}
         >
-          {coordMode === 'gps' ? 'XYZ' : 'GPS'}
+          {coordMode === 'gps' ? <GlobeIcon /> : <AxesIcon />}
         </button>
       </div>
       <div id={coordinateInputsId}>
