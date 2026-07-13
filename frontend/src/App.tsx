@@ -497,7 +497,7 @@ export function App() {
       )}
       left={!isMobile && (
         <>
-          <DevicePanel onApplyRxPosition={(pos) => setUavPosition(pos)} />
+          <DevicePanel sceneFrame={activeFrame} onApplyRxPosition={(pos) => setUavPosition(pos)} />
           <UAVControlPanel
             auto={auto}
             uavAnimation={uavAnimation}
