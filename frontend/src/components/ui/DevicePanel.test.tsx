@@ -60,7 +60,8 @@ beforeEach(() => {
 
 describe('DevicePanel coordinate modes', () => {
   it('applies GPS positions to TX, RX, and Jammer canonical xyz', async () => {
-    renderPanel();
+    const onApplyRxPosition = vi.fn();
+    renderPanel(onApplyRxPosition);
     const user = await openPanel();
     const positions = [
       ['dev-tx-0', 'tx-0', { lat: 24.001, lon: 121.001, alt: 110 }],
@@ -79,6 +80,7 @@ describe('DevicePanel coordinate modes', () => {
         y: expected[1],
         z: expected[2],
       });
+      if (id === 'dev-tx-0') expect(onApplyRxPosition).not.toHaveBeenCalled();
     }
   });
 
@@ -99,6 +101,7 @@ describe('DevicePanel coordinate modes', () => {
 
     const rx = getDevice('dev-rx-0');
     expect(rx).toMatchObject({ x: expected[0], y: expected[1], z: expected[2] });
+    expect(onApplyRxPosition).toHaveBeenCalledTimes(1);
     expect(onApplyRxPosition).toHaveBeenCalledWith(expected);
   });
 
@@ -180,23 +183,51 @@ describe('DevicePanel coordinate modes', () => {
     const z = within(row).getByRole('textbox', { name: 'Z tx-0' });
 
     await user.clear(x);
-    await user.type(x, '47.9');
+    await user.type(x, '-32');
     await user.clear(z);
-    await user.type(z, '-39.9');
+    await user.type(z, '24');
     await user.click(apply);
-    expect(getDevice('dev-tx-0')).toMatchObject({ x: 47.9, z: -39.9 });
+    expect(getDevice('dev-tx-0')).toMatchObject({ x: -32, z: 24 });
 
     await user.clear(x);
     await user.type(x, '48');
     await user.click(apply);
-    expect(getDevice('dev-tx-0')).toMatchObject({ x: 47.9, z: -39.9 });
+    expect(getDevice('dev-tx-0')).toMatchObject({ x: -32, z: 24 });
 
     await user.clear(x);
-    await user.type(x, '47.9');
+    await user.type(x, '-32');
     await user.clear(z);
     await user.type(z, '-40');
     await user.click(apply);
-    expect(getDevice('dev-tx-0')).toMatchObject({ x: 47.9, z: -39.9 });
+    expect(getDevice('dev-tx-0')).toMatchObject({ x: -32, z: 24 });
+  });
+
+  it('validates GPS drafts against a non-default scene extent', async () => {
+    const gpsFrame = {
+      ...createSceneFrame('scene-gps-extent-test', { lat: 25, lon: 120, alt_m: 50 }),
+      extent: { min_e: -20, max_e: 30, min_n: -10, max_n: 25 },
+    };
+    const insideGps = enuToGps({ east_m: 12, north_m: 10, up_m: 7 }, gpsFrame, gpsFrame.alt_mode);
+    const outsideGps = enuToGps({ east_m: 31, north_m: 10, up_m: 7 }, gpsFrame, gpsFrame.alt_mode);
+
+    renderPanel(vi.fn(), gpsFrame);
+    const user = await openPanel();
+    const row = getRow('tx-0');
+    const apply = within(row).getByRole('button', { name: applyPositionLabel });
+
+    await fillGps(user, row, 'tx-0', insideGps);
+    await user.click(apply);
+    const expectedInside = enuToThree(gpsToEnu(insideGps, gpsFrame, gpsFrame.alt_mode));
+    const applied = getDevice('dev-tx-0');
+    expect(applied).toMatchObject({
+      x: expectedInside[0],
+      y: expectedInside[1],
+      z: expectedInside[2],
+    });
+
+    await fillGps(user, row, 'tx-0', outsideGps);
+    await user.click(apply);
+    expect(getDevice('dev-tx-0')).toEqual(applied);
   });
 
   it('exposes a keyboard-operable coordinate mode button to assistive technology', async () => {
