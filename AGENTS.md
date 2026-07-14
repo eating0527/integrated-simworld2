@@ -77,3 +77,17 @@ Keep secrets in `.env` or `frontend/.env.local`. Existing rules already ignore d
 - Level 3 納入版本控制：source、tests、docs/specs、lockfiles/manifests、example configs、operational scripts、刻意保留 fixtures 與 canonical assets。
 
 `.gitignore` 只影響未追蹤檔；既有 tracked 的 Level 1/2 檔案仍需另用 `git rm --cached <path>` 移出 index，本次規則不會自動修改 staging。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live in GitHub Issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repo using root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
