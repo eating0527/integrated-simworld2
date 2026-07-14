@@ -41,10 +41,16 @@ incoming/mission_*/
 
 # Runtime-generated logs and temp files
 .logs/
+.playwright-cli/
+.test_tmp/
 .test_tmp/
 backend/.tmp/
 backend/.pip-cache/
 frontend/.npm-cache/
+
+# 本機代理與工具狀態
+.claude/worktrees/
+.superpowers/
 
 # Generated simulation map images
 backend/app/static/maps/
@@ -56,11 +62,14 @@ backend/app/model_artifacts/
 *.pt
 *.pth
 
+# 模型 artifacts
+backend/app/model_artifacts/
+
 # Local Android platform-tools install for AP3 telemetry bridge
 tools/platform-tools/
 tools/platform-tools-latest-windows.zip
 
-# Genrated simulation scenes
+# Generated simulation scenes
 backend/app/static/scenes/T-*
 backend/app/uploads/scene_index.json
 docs/plans/
