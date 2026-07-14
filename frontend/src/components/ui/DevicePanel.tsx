@@ -51,23 +51,6 @@ function isInsideScene(position: Position, frame: SceneFrame): boolean {
   return enuToGrid(threeToEnu(position), frame).inside_extent;
 }
 
-function GlobeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3 12h18M12 3c2.2 2.4 3.3 5.4 3.3 9s-1.1 6.6-3.3 9c-2.2-2.4-3.3-5.4-3.3-9S9.8 5.4 12 3Z" />
-    </svg>
-  );
-}
-
-function AxesIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-      <path d="M5 19V5M5 19h14M5 19l5-5M5 5l4 4M19 19l-4-4M19 5l-4 4" />
-    </svg>
-  );
-}
-
 function CoordinateInput({
   label,
   value,
@@ -144,7 +127,7 @@ function DeviceRow({
 
   return (
     <div className="dp-device-row">
-      <div className="dp-field-row">
+      <div className="dp-field-row dp-input-row">
         <label className="dp-label" htmlFor={nameInputId}>名稱</label>
         <input
           id={nameInputId}
@@ -177,7 +160,7 @@ function DeviceRow({
       </div>
 
       {showPower && (
-        <div className="dp-field-row">
+        <div className="dp-field-row dp-input-row">
           <label className="dp-label" htmlFor={powerInputId}>功率</label>
           <input
             id={powerInputId}
@@ -316,13 +299,16 @@ export function DevicePanel({
         <button
           type="button"
           className="dp-coordinate-toggle"
+          data-mode={coordMode}
           aria-label={toggleLabel}
           title={toggleLabel}
           aria-pressed={coordMode === 'gps'}
           aria-controls={coordinateInputsId}
           onClick={() => setCoordMode(nextCoordMode)}
         >
-          {coordMode === 'gps' ? <GlobeIcon /> : <AxesIcon />}
+          <span className={`dp-coordinate-option ${coordMode === 'gps' ? 'is-active' : ''}`}>GPS</span>
+          <span className={`dp-coordinate-option ${coordMode === 'xyz' ? 'is-active' : ''}`}>XYZ</span>
+          <span className="dp-coordinate-thumb" aria-hidden="true" />
         </button>
       </div>
       <div id={coordinateInputsId}>

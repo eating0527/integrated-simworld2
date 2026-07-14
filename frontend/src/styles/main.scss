@@ -395,27 +395,53 @@ canvas {
 }
 
 .dp-coordinate-toggle {
+  position: relative;
   display: grid;
-  flex: 0 0 44px;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  padding: 0;
+  flex: 0 0 132px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  width: 132px;
+  height: 36px;
+  padding: 3px;
   color: var(--accent-cyan);
   background: var(--input-bg);
   border: 1px solid var(--accent-cyan);
-  border-radius: 5px;
+  border-radius: 999px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 
-  svg {
-    width: 20px;
-    height: 20px;
+  &[data-mode='xyz'] .dp-coordinate-thumb {
+    transform: translateX(100%);
   }
 
   &:hover:not(:disabled) {
     background: rgba(0, 212, 255, 0.14);
   }
+}
+
+.dp-coordinate-option {
+  position: relative;
+  z-index: 1;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 28px;
+  text-align: center;
+  transition: color 0.15s;
+
+  &.is-active { color: #07131d; }
+}
+
+.dp-coordinate-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.35);
+  transition: transform 0.2s ease;
 }
 
 .dp-section {
@@ -441,7 +467,7 @@ canvas {
 .dp-btn-add {
   font-size: 11px;
   padding: 2px 8px;
-  min-height: 44px;
+  min-height: 24px;
   background: transparent;
   color: var(--accent);
   border: 1px solid var(--accent);
@@ -468,10 +494,16 @@ canvas {
   &:last-child { margin-bottom: 0; }
 }
 
+.dp-input-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
 .dp-label {
   font-size: 11px;
   color: var(--text-muted);
-  min-width: 30px;
+  min-width: 0;
 }
 
 .dp-coordinate-fields {
@@ -515,7 +547,7 @@ canvas {
   padding: 3px 6px;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
+  min-height: 24px;
   outline: none;
   transition: border-color 0.15s;
 
@@ -541,7 +573,7 @@ canvas {
   width: 44px;
   min-width: 44px;
   height: 44px;
-  min-height: 44px;
+  min-height: 24px;
   background: transparent;
   border: none;
   color: var(--danger);
@@ -558,7 +590,7 @@ canvas {
 .dp-btn-apply {
   font-size: 11px;
   padding: 3px 10px;
-  min-height: 44px;
+  min-height: 24px;
   background: rgba(0, 200, 150, 0.12);
   color: #00c896;
   border: 1px solid rgba(0, 200, 150, 0.4);
@@ -591,7 +623,7 @@ canvas {
   font-size: 11px;
   font-weight: 600;
   padding: 3px 5px;
-  min-height: 44px;
+  min-height: 24px;
   transition: background 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
@@ -1235,7 +1267,7 @@ canvas {
 }
 
 .workspace__statusbar .status-panel .min-panel__bar {
-  min-height: 44px;
+  min-height: 24px;
   padding: 0 12px;
 }
 
