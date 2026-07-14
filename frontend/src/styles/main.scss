@@ -1162,6 +1162,74 @@ canvas {
   border-radius: 6px;
 }
 
+.trajectory-history-panel__icon-btn,
+.trajectory-history-panel__link-btn {
+  border: 1px solid rgba(120, 180, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 9px;
+}
+
+.trajectory-history-panel__icon-btn:hover,
+.trajectory-history-panel__link-btn:hover {
+  background: rgba(74, 158, 255, 0.18);
+  border-color: rgba(74, 158, 255, 0.34);
+}
+
+.trajectory-history-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 280px;
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.trajectory-history-panel__list::-webkit-scrollbar {
+  display: none;
+}
+
+.trajectory-history-panel__item {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.trajectory-history-panel__item:hover,
+.trajectory-history-panel__item.is-active {
+  border-color: rgba(0, 212, 255, 0.34);
+  background: rgba(0, 212, 255, 0.1);
+}
+
+.trajectory-history-panel__item-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trajectory-history-panel__item-meta {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 // Workspace owns desktop panel placement; component-level positions only apply outside it.
 .workspace {
   --rail-width: clamp(292px, 23vw, 360px);

@@ -68,6 +68,8 @@ PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
 SCENE_INDEX_JSON = UPLOAD_DIR / "scene_index.json"
+TRAJECTORY_EVENTS_DIR = UPLOAD_DIR / "trajectory_events"
+TRAJECTORY_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
 SCENE_DIR = BASE_DIR / "static" / "scenes"
 GENERATED_SCENES_DIR = SCENE_DIR / "generated"
 GENERATED_SCENES_DIR.mkdir(parents=True, exist_ok=True)
@@ -128,6 +130,9 @@ class GPSConnectionManager:
         self.gps_data: Dict[str, dict] = {}
         # { deviceId: deviceName }
         self.names: Dict[str, str] = {}
+        # { deviceId: [{ lat, lon, alt, accuracy, timestamp, ... }] }
+        self.trajectories: Dict[str, List[Dict[str, Any]]] = {}
+        self.trajectory_started_at = datetime.now().isoformat()
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
@@ -145,6 +150,74 @@ class GPSConnectionManager:
 
     def update_gps(self, device_id: str, data: dict):
         self.gps_data[device_id] = data
+        self.record_trajectory_point(device_id, data)
+
+    def record_trajectory_point(self, device_id: str, data: dict):
+        try:
+            lat = float(data["lat"])
+            lon = float(data["lon"])
+            alt = float(data.get("alt", 0))
+        except (KeyError, TypeError, ValueError):
+            return
+
+        points = self.trajectories.setdefault(device_id, [])
+        if points:
+            last = points[-1]
+            if (
+                abs(float(last.get("lat", 0)) - lat) <= 0.000001
+                and abs(float(last.get("lon", 0)) - lon) <= 0.000001
+                and abs(float(last.get("alt", 0)) - alt) <= 0.1
+            ):
+                return
+
+        points.append({
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
+            "accuracy": data.get("accuracy", 999),
+            "timestamp": data.get("timestamp", time.time()),
+            "deviceId": data.get("deviceId", device_id),
+            "deviceName": data.get("deviceName") or self.names.get(device_id, ""),
+            "deviceType": data.get("deviceType", "unknown"),
+        })
+
+    def snapshot_trajectory_event(self, mission_id: str = "") -> Dict[str, Any]:
+        devices: List[Dict[str, Any]] = []
+        for device_id, points in self.trajectories.items():
+            if not points:
+                continue
+            devices.append({
+                "deviceId": device_id,
+                "deviceName": self.names.get(device_id) or points[-1].get("deviceName", ""),
+                "deviceType": points[-1].get("deviceType", "unknown"),
+                "pointCount": len(points),
+                "startTimestamp": points[0].get("timestamp"),
+                "endTimestamp": points[-1].get("timestamp"),
+                "points": points,
+            })
+
+        point_count = sum(device["pointCount"] for device in devices)
+        event_id = f"trajectory-{datetime.now().strftime('%Y%m%d_%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        safe_mission_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", mission_id.strip()) if mission_id else ""
+        filename = f"{safe_mission_id + '_' if safe_mission_id else ''}{event_id}.json"
+        event = {
+            "id": event_id,
+            "missionId": mission_id or None,
+            "createdAt": datetime.now().isoformat(),
+            "startedAt": self.trajectory_started_at,
+            "endedAt": datetime.now().isoformat(),
+            "deviceCount": len(devices),
+            "pointCount": point_count,
+            "devices": devices,
+        }
+
+        if point_count > 0:
+            path = TRAJECTORY_EVENTS_DIR / filename
+            path.write_text(json.dumps(event, ensure_ascii=False, indent=2), encoding="utf-8")
+            event["path"] = str(path)
+            event["url"] = f"/uploads/trajectory_events/{filename}"
+
+        return event
 
     async def broadcast(self, message: str):
         """廣播給所有已連線裝置"""
@@ -470,6 +543,65 @@ async def get_devices():
         for did, data in gps_manager.gps_data.items()
     }
     return {"devices": result, "count": len(result)}
+
+
+@app.post("/api/trajectory-events/snapshot")
+async def snapshot_trajectory_event(mission_id: str = ""):
+    event = gps_manager.snapshot_trajectory_event(mission_id)
+    return {
+        "success": True,
+        "saved": event.get("pointCount", 0) > 0,
+        "event": event,
+    }
+
+
+def _trajectory_event_summary(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        event = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(event, dict):
+            return None
+        return {
+            "id": event.get("id") or path.stem,
+            "missionId": event.get("missionId"),
+            "createdAt": event.get("createdAt"),
+            "startedAt": event.get("startedAt"),
+            "endedAt": event.get("endedAt"),
+            "deviceCount": event.get("deviceCount", 0),
+            "pointCount": event.get("pointCount", 0),
+            "filename": path.name,
+            "url": f"/uploads/trajectory_events/{path.name}",
+        }
+    except Exception:
+        return None
+
+
+@app.get("/api/trajectory-events")
+async def list_trajectory_events():
+    events = [
+        summary
+        for summary in (
+            _trajectory_event_summary(path)
+            for path in TRAJECTORY_EVENTS_DIR.glob("*.json")
+        )
+        if summary is not None
+    ]
+    events.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+    return {"success": True, "events": events, "count": len(events)}
+
+
+@app.get("/api/trajectory-events/{event_id}")
+async def get_trajectory_event(event_id: str):
+    safe_event_id = event_id.strip()
+    for path in TRAJECTORY_EVENTS_DIR.glob("*.json"):
+        try:
+            event = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if event.get("id") == safe_event_id or path.stem == safe_event_id:
+            event["filename"] = path.name
+            event["url"] = f"/uploads/trajectory_events/{path.name}"
+            return {"success": True, "event": event}
+    return JSONResponse({"success": False, "error": f"trajectory event not found: {event_id}"}, status_code=404)
 
 
 # ──────────────────────────────────────────────

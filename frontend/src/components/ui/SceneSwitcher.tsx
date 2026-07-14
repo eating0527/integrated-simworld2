@@ -12,6 +12,7 @@ interface SceneSwitcherProps {
   generatedStatus?: 'idle' | 'loading' | 'polling' | 'error';
   onSelectPreset: (id: SceneId) => void;
   onSelectGenerated: (taskId: string) => void;
+  onBackToMap: () => void;
 }
 
 export function SceneSwitcher({
@@ -20,6 +21,7 @@ export function SceneSwitcher({
   generatedStatus = 'idle',
   onSelectPreset,
   onSelectGenerated,
+  onBackToMap,
 }: SceneSwitcherProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLElement | null>(null);
@@ -42,7 +44,7 @@ export function SceneSwitcher({
   }, [open]);
 
   return (
-    <nav ref={containerRef} className="scene-switcher" aria-label="場景選擇">
+    <nav ref={containerRef} className="scene-switcher" aria-label="Scene switcher">
       <button
         type="button"
         className="scene-switcher__toggle"
@@ -94,6 +96,16 @@ export function SceneSwitcher({
           {generatedStatus === 'loading' && (
             <span className="scene-switcher__empty">Loading scenes...</span>
           )}
+          <button
+            type="button"
+            className="scene-switcher__option"
+            onClick={() => {
+              setOpen(false);
+              onBackToMap();
+            }}
+          >
+            Return to map
+          </button>
         </div>
       )}
     </nav>

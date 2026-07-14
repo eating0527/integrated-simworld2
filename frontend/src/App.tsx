@@ -26,6 +26,7 @@ import { UAVControlPanel } from './components/ui/UAVControlPanel';
 import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
 import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { Workspace } from './components/ui/Workspace';
+import { TrajectoryHistoryPanel, type TrajectoryEvent } from './components/ui/TrajectoryHistoryPanel';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
@@ -104,6 +105,9 @@ export function App() {
     const search = new URLSearchParams(window.location.search);
     return search.get('fromMap') === '1';
   });
+  const handleBackToMap = useCallback(() => {
+    window.location.assign(`${window.location.origin}/my_map.html`);
+  }, []);
 
   // ── 入口策略：預設先進地圖頁，只有從 my_map.html 回來才進 React ─────────
   const needsMapSelection = !fromMap;
@@ -460,6 +464,7 @@ export function App() {
   const [cfarClusters, setCfarClusters] = useState<CFARCluster[]>([]);
   const [heatmapOverlay, setHeatmapOverlay] = useState<HeatmapOverlayConfig | null>(null);
   const [issRouteOverlay, setIssRouteOverlay] = useState<ISSRouteOverlayConfig | null>(null);
+  const [selectedTrajectoryEvent, setSelectedTrajectoryEvent] = useState<TrajectoryEvent | null>(null);
   const cfarBeacons = useMemo<CFARBeacon[]>(() => (
     cfarClusters.map((cluster) => {
       const gps = worldXZToLatLon(cluster.world_x, cluster.world_z, activeOrigin);
@@ -477,6 +482,32 @@ export function App() {
     setHeatmapOverlay(null);
     setIssRouteOverlay(null);
   }, [activeOriginKey, simulationSceneId]);
+
+  const historicalPaths = useMemo(() => {
+    if (!selectedTrajectoryEvent) return [];
+    const colors = ['#f59e0b', '#38bdf8', '#f472b6', '#a3e635', '#c084fc', '#fb7185'];
+    return selectedTrajectoryEvent.devices
+      .map((device, index) => {
+        const path = device.points
+          .map((point) => {
+            if (!isFiniteNumber(point.lat) || !isFiniteNumber(point.lon)) return null;
+            const [ex, ez, ealt] = latLonToENU(point.lat, point.lon, point.alt ?? activeOrigin.alt, activeOrigin);
+            return {
+              x: ex * SCALE,
+              y: Math.max(ealt * ALT_GAIN, 12),
+              z: ez * SCALE,
+            };
+          })
+          .filter((point): point is { x: number; y: number; z: number } => Boolean(point));
+        return {
+          id: `${selectedTrajectoryEvent.id}:${device.deviceId}`,
+          label: device.deviceName || device.deviceId,
+          color: colors[index % colors.length],
+          path,
+        };
+      })
+      .filter(track => track.path.length >= 2);
+  }, [activeOrigin, selectedTrajectoryEvent]);
 
   const aircraftPanel = (
     <AircraftTelemetry
@@ -519,6 +550,7 @@ export function App() {
             selectedScene={selectedScene}
             generatedScenes={generatedScenes.scenes}
             generatedStatus={generatedScenes.status}
+            onBackToMap={handleBackToMap}
             onSelectPreset={(id) => {
               setLastPresetSceneId(id);
               setSelectedScene({ source: 'preset', id });
@@ -563,6 +595,10 @@ export function App() {
             onGpsReplayStop={handleGpsReplayStop}
             onGpsReplayRateChange={setGpsReplayRate}
           />
+          <TrajectoryHistoryPanel
+            selectedEventId={selectedTrajectoryEvent?.id ?? null}
+            onSelectEvent={setSelectedTrajectoryEvent}
+          />
           <PhotoViewer photos={photos} onDelete={handleDelete} />
         </>
       )}
@@ -578,6 +614,7 @@ export function App() {
         onManualMoveDone={handleManualMoveDone}
         uavAnimation={uavAnimation}
         otherUavs={otherUavs}
+        historicalPaths={historicalPaths}
         cfarBeacons={cfarBeacons}
         heatmapOverlay={heatmapOverlay}
         issRouteOverlay={issRouteOverlay}

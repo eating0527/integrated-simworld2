@@ -42,6 +42,7 @@ function Loader({ label }: { label: string }) {
 interface MainSceneProps {
   uavPosition?: [number, number, number];
   uavPath?: Array<{ x: number; y: number; z: number }>;
+  historicalPaths?: Array<{ id: string; label: string; color: string; path: Array<{ x: number; y: number; z: number }> }>;
   sceneId?: SceneId;
   auto?: boolean;
   manualDirection?: UAVManualDirection;
@@ -58,6 +59,7 @@ interface MainSceneProps {
 export function MainScene({
   uavPosition = [0, 10, 0],
   uavPath = [],
+  historicalPaths = [],
   sceneId = DEFAULT_SCENE_ID,
   auto = false,
   manualDirection = null,
@@ -154,6 +156,10 @@ export function MainScene({
         </Suspense>
 
         <UAVPath path={uavPath} color="#00ff00" lineWidth={3} />
+
+        {historicalPaths.map((track) => (
+          <UAVPath key={track.id} path={track.path} color={track.color} lineWidth={2} />
+        ))}
 
         {/* 其他連線裝置——每台一架無人機 + 軌跡 */}
         {otherUavs.map((uav, i) => {

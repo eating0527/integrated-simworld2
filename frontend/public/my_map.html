@@ -242,6 +242,7 @@
                 </div>
 
                 <button id="apply-location-btn" class="action-btn">送出 Blender 任務並返回 React</button>
+                <button id="direct-react-btn" class="action-btn secondary">直接進入 React 專案頁面</button>
                 <button id="manual-redirect-btn" class="action-btn secondary" style="display:none;">手動返回 React 頁面</button>
                 <div id="apply-location-result" class="result-text"></div>
             </div>
@@ -451,6 +452,7 @@
 
         // ----------------------------
         const manualRedirectBtn = document.getElementById('manual-redirect-btn');
+        const directReactBtn = document.getElementById('direct-react-btn');
         const applyLocationBtn = document.getElementById('apply-location-btn');
         const applyLocationResult = document.getElementById('apply-location-result');
         const pickedLatEl = document.getElementById('picked-lat');
@@ -507,6 +509,12 @@
             }
 
             return res.json();
+        }
+
+        if (directReactBtn) {
+            directReactBtn.addEventListener('click', () => {
+                window.location.href = '/?fromMap=1';
+            });
         }
 
         // Manual redirect button

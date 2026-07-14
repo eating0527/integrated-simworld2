@@ -4,6 +4,7 @@
 #        .\start.ps1 -NoAP3
 #        .\start.ps1 -NoGpsCsv
 #        .\start.ps1 -Reload
+#        .\start.ps1 -Ap3MavlinkUrl tcp:192.168.50.137:5760
 
 param(
     [switch]$NoTunnel,
@@ -13,7 +14,8 @@ param(
     [switch]$GpsCsv,
     [string]$GpsMissionId = "",
     [string]$GpsAltitude = "relative",
-    [string]$GpsMavlinkUrl = ""
+    [string]$GpsMavlinkUrl = "",
+    [string]$Ap3MavlinkUrl = ""
 )
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -260,10 +262,14 @@ function Start-Ap3Bridge {
         [string]$BridgeScript,
         [string]$WebsocketUrl,
         [string]$WorkingDir,
-        [string]$LogPath
+        [string]$LogPath,
+        [string]$MavlinkUrl
     )
 
     $bridgeArgs = @("-u", $BridgeScript, "--websocket-url", $WebsocketUrl)
+    if ($MavlinkUrl) {
+        $bridgeArgs += @("--mavlink-url", $MavlinkUrl)
+    }
     return Start-Process -FilePath $PythonExe `
         -ArgumentList $bridgeArgs `
         -WorkingDirectory $WorkingDir `
@@ -310,21 +316,26 @@ if (-not $NoAP3) {
     if (-not (Test-Path $adbExe)) {
         $adbExe = Join-Path $ToolsDir "scrcpy\scrcpy-win64-v3.3.4\adb.exe"
     }
-    if ((Test-Path $adbExe) -and (Test-Path $ap3BridgeScript)) {
+    if ((Test-Path $ap3BridgeScript) -and ($Ap3MavlinkUrl -or (Test-Path $adbExe))) {
         Info "Starting ALIGN AP3 telemetry bridge..."
         $ap3BridgeJob = Start-Ap3Bridge `
             -PythonExe $pythonExe `
             -BridgeScript $ap3BridgeScript `
             -WebsocketUrl "ws://127.0.0.1:8888/ws/gps" `
             -WorkingDir $ScriptDir `
-            -LogPath $ap3BridgeLog
+            -LogPath $ap3BridgeLog `
+            -MavlinkUrl $Ap3MavlinkUrl
         $jobs += $ap3BridgeJob
         Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
-        try {
-            & $adbExe forward tcp:15760 tcp:5760 | Out-Null
-            Info "   AP3 MAVLink via USB ADB forward: tcp:127.0.0.1:15760"
-        } catch {
-            Warn "Initial ADB forward failed; the bridge will keep waiting and retrying."
+        if ($Ap3MavlinkUrl) {
+            Info "   AP3 MAVLink direct URL: $Ap3MavlinkUrl"
+        } else {
+            try {
+                & $adbExe forward tcp:15760 tcp:5760 | Out-Null
+                Info "   AP3 MAVLink via USB ADB forward: tcp:127.0.0.1:15760"
+            } catch {
+                Warn "Initial ADB forward failed; the bridge will keep waiting and retrying."
+            }
         }
         if ($ap3BridgeJob.HasExited) {
             Warn "AP3 bridge exited immediately; it will be restarted by the monitor loop."
@@ -332,7 +343,7 @@ if (-not $NoAP3) {
             Info "   AP3 bridge auto-restart monitor enabled"
         }
     } else {
-        Warn "ADB or AP3 bridge script not found, skipping AP3 bridge"
+        Warn "ADB or AP3 bridge script not found, skipping AP3 bridge. Use -Ap3MavlinkUrl for direct Wi-Fi/TCP/UDP MAVLink."
     }
 }
 
@@ -402,7 +413,8 @@ try {
                     -BridgeScript $ap3BridgeScript `
                     -WebsocketUrl "ws://127.0.0.1:8888/ws/gps" `
                     -WorkingDir $ScriptDir `
-                    -LogPath $ap3BridgeLog
+                    -LogPath $ap3BridgeLog `
+                    -MavlinkUrl $Ap3MavlinkUrl
                 $jobs += $ap3BridgeJob
                 Info "   AP3 bridge PID: $($ap3BridgeJob.Id)  log: .logs\ap3_bridge.log"
             }
@@ -432,6 +444,18 @@ try {
         }
     }
 } finally {
+    Info "Saving trajectory event snapshot..."
+    try {
+        $snapshotUrl = "http://127.0.0.1:8888/api/trajectory-events/snapshot?mission_id=$([System.Uri]::EscapeDataString($GpsMissionId))"
+        $snapshot = Invoke-RestMethod -Method Post -Uri $snapshotUrl -TimeoutSec 5
+        if ($snapshot.saved) {
+            Info "   Saved trajectory event: $($snapshot.event.path)"
+        } else {
+            Info "   No trajectory points recorded for this run."
+        }
+    } catch {
+        Warn "   Failed to save trajectory event snapshot: $($_.Exception.Message)"
+    }
     Info "Stopping all services..."
     $jobs | ForEach-Object {
         if (-not $_.HasExited) { $_.Kill() }
