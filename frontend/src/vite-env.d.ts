@@ -1,9 +1,6 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_ORIGIN_LAT?: string;
-  readonly VITE_ORIGIN_LON?: string;
-  readonly VITE_ORIGIN_ALT?: string;
   readonly VITE_NTPU_ORIGIN_LAT?: string;
   readonly VITE_NTPU_ORIGIN_LON?: string;
   readonly VITE_NTPU_ORIGIN_ALT?: string;
