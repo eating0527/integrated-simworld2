@@ -42,7 +42,6 @@ export function SceneSwitcher({
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const actionRef = useRef<HTMLButtonElement | null>(null);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
-  const dialogRef = useRef<HTMLFormElement | null>(null);
   const isBuilding = generatedScenes.some(isSceneBuilding);
   useEffect(() => {
     if (!open) return;
@@ -220,7 +219,6 @@ export function SceneSwitcher({
       {dialog && (
         <div className="sim-modal__overlay scene-dialog" role="presentation">
           <form
-            ref={dialogRef}
             className="sim-modal__content scene-dialog__content"
             role="dialog"
             aria-modal="true"

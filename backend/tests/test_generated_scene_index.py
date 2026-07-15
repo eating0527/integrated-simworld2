@@ -97,6 +97,7 @@ class GeneratedSceneIndexTests(unittest.TestCase):
 
     def test_get_generated_scenes_returns_cached_index(self):
         cached = [_task("task-ok", "T-AAAAAAAAAA")]
+        self._write_tasks(cached)
         self.index_json.write_text(json.dumps(cached), encoding="utf-8")
 
         response = asyncio.run(main.list_generated_scenes())
@@ -144,6 +145,13 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         indexed = json.loads(self.index_json.read_text(encoding="utf-8"))[0]
         self.assertEqual(persisted["displayName"], "新場景名稱")
         self.assertEqual(indexed["displayName"], "新場景名稱")
+
+    def test_display_name_length_is_checked_after_trimming(self):
+        name = "新" * 80
+
+        request = main.SceneDisplayNameRequest(display_name=f" {name} ")
+
+        self.assertEqual(request.display_name.strip(), name)
 
     def test_admin_delete_removes_scene_data_but_keeps_generated_images(self):
         task = _task("task-ok", "T-AAAAAAAAAA")
@@ -217,6 +225,32 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         self.assertTrue(response["success"])
         self.assertFalse((self.scene_dir / "T-AAAAAAAAAA").exists())
         self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "deleted")
+        visible = asyncio.run(main.list_generated_scenes())
+        self.assertEqual(visible["scenes"], [])
+
+    def test_rename_uses_task_name_when_index_refresh_fails(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+        (self.scene_dir / "T-AAAAAAAAAA" / "scene_metadata.json").write_text(
+            json.dumps({"frame": SceneFrame(
+                frame_id="scene-test", origin_lat=24.1, origin_lon=121.1, origin_alt_m=0.0
+            ).to_dict()}),
+            encoding="utf-8",
+        )
+        main.rebuild_scene_index()
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            with patch.object(main, "rebuild_scene_index", side_effect=OSError("index unavailable")):
+                response = asyncio.run(main.update_scene_display_name(
+                    "task-ok",
+                    main.SceneDisplayNameRequest(display_name="新名稱"),
+                    "secret-token",
+                ))
+
+        self.assertTrue(response["success"])
+        visible = asyncio.run(main.list_generated_scenes())
+        self.assertEqual(visible["scenes"][0]["displayName"], "新名稱")
 
     def test_delete_rejects_presets_and_path_traversal_scene_keys(self):
         protected = self.root / "protected.txt"

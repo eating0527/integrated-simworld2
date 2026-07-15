@@ -605,7 +605,7 @@ class SceneTaskCreateRequest(BaseModel):
 
 
 class SceneDisplayNameRequest(BaseModel):
-    display_name: str = Field(..., min_length=1, max_length=80)
+    display_name: str
 
 
 class BuildingCheckRequest(BaseModel):
@@ -1367,7 +1367,23 @@ async def list_scene_tasks():
 
 @app.get("/api/generated-scenes")
 async def list_generated_scenes():
-    scenes = _read_scene_index()
+    with SCENE_TASKS_LOCK:
+        tasks = {
+            task.get("id"): task
+            for task in _read_json_list(SCENE_TASKS_JSON)
+            if task.get("status") == "completed"
+        }
+    scenes = []
+    for cached in _read_scene_index():
+        task = tasks.get(cached.get("id"))
+        if not task:
+            continue
+        scene = {**cached}
+        if task.get("displayName"):
+            scene["displayName"] = task["displayName"]
+        else:
+            scene.pop("displayName", None)
+        scenes.append(scene)
     return {"success": True, "scenes": scenes, "count": len(scenes)}
 
 
