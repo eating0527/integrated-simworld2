@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import hashlib
 import logging
 import math
@@ -575,6 +576,106 @@ def _trajectory_event_summary(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _read_gps_csv_trajectory(csv_path: Path) -> Optional[Dict[str, Any]]:
+    mission_id = csv_path.parent.name
+    digest = hashlib.sha1(csv_path.read_bytes()).hexdigest()[:12]
+    event_id = f"incoming-{mission_id}-{digest}"
+    points: List[Dict[str, Any]] = []
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            try:
+                lat = float(row.get("lat", ""))
+                lon = float(row.get("lon", ""))
+                alt = float(row.get("alt") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(alt)):
+                continue
+            timestamp = row.get("time_stamp") or row.get("timestamp") or None
+            point: Dict[str, Any] = {
+                "lat": lat,
+                "lon": lon,
+                "alt": alt,
+                "deviceId": f"incoming-{mission_id}",
+                "deviceName": mission_id,
+                "deviceType": "uav",
+            }
+            if timestamp:
+                point["timestamp"] = timestamp
+            points.append(point)
+
+    if not points:
+        return None
+
+    return {
+        "id": event_id,
+        "missionId": mission_id,
+        "source": "incoming-gps-csv",
+        "sourcePath": str(csv_path.relative_to(REPO_ROOT)),
+        "createdAt": datetime.fromtimestamp(csv_path.stat().st_mtime).isoformat(),
+        "importedAt": datetime.now().isoformat(),
+        "startedAt": points[0].get("timestamp"),
+        "endedAt": points[-1].get("timestamp"),
+        "deviceCount": 1,
+        "pointCount": len(points),
+        "devices": [
+            {
+                "deviceId": f"incoming-{mission_id}",
+                "deviceName": mission_id,
+                "deviceType": "uav",
+                "pointCount": len(points),
+                "startTimestamp": points[0].get("timestamp"),
+                "endTimestamp": points[-1].get("timestamp"),
+                "points": points,
+            }
+        ],
+    }
+
+
+def _import_incoming_gps_csv(force: bool = False) -> Dict[str, Any]:
+    imported: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    errors: List[Dict[str, str]] = []
+
+    for csv_path in sorted(INCOMING_CSV_DIR.glob("*/gps.csv")):
+        try:
+            event = _read_gps_csv_trajectory(csv_path)
+            if event is None:
+                skipped.append({"path": str(csv_path.relative_to(REPO_ROOT)), "reason": "no valid gps points"})
+                continue
+            target = TRAJECTORY_EVENTS_DIR / f"{event['id']}.json"
+            if target.exists() and not force:
+                skipped.append({
+                    "path": str(csv_path.relative_to(REPO_ROOT)),
+                    "reason": "already imported",
+                    "eventId": event["id"],
+                    "filename": target.name,
+                })
+                continue
+            target.write_text(json.dumps(event, ensure_ascii=False, indent=2), encoding="utf-8")
+            imported.append({
+                "path": str(csv_path.relative_to(REPO_ROOT)),
+                "eventId": event["id"],
+                "filename": target.name,
+                "pointCount": event["pointCount"],
+            })
+        except Exception as exc:
+            logger.exception("Failed to import GPS CSV: %s", csv_path)
+            errors.append({"path": str(csv_path), "error": str(exc)})
+
+    return {
+        "success": len(errors) == 0,
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "importedCount": len(imported),
+        "skippedCount": len(skipped),
+        "errorCount": len(errors),
+    }
+
+
 @app.get("/api/trajectory-events")
 async def list_trajectory_events():
     events = [
@@ -587,6 +688,13 @@ async def list_trajectory_events():
     ]
     events.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
     return {"success": True, "events": events, "count": len(events)}
+
+
+@app.post("/api/trajectory-events/import-incoming")
+async def import_incoming_trajectory_events(force: bool = False):
+    result = _import_incoming_gps_csv(force=force)
+    status_code = 200 if result["success"] else 207
+    return JSONResponse(result, status_code=status_code)
 
 
 @app.get("/api/trajectory-events/{event_id}")

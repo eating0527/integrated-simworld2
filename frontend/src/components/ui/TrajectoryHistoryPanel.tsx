@@ -67,6 +67,12 @@ async function fetchEvent(id: string): Promise<TrajectoryEvent> {
   return payload.event as TrajectoryEvent;
 }
 
+async function importIncomingEvents(): Promise<{ imported?: Array<{ eventId: string }> }> {
+  const res = await fetch(`${API}/api/trajectory-events/import-incoming`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to import incoming GPS CSV: ${res.status}`);
+  return await res.json();
+}
+
 export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: TrajectoryHistoryPanelProps) {
   const [events, setEvents] = useState<TrajectoryEventSummary[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -101,6 +107,23 @@ export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: Traje
     }
   }, [onSelectEvent]);
 
+  const importIncoming = useCallback(async () => {
+    setStatus('loading');
+    setError(null);
+    try {
+      const result = await importIncomingEvents();
+      setEvents(await fetchEvents());
+      const firstImported = result.imported?.[0]?.eventId;
+      if (firstImported) {
+        onSelectEvent(await fetchEvent(firstImported));
+      }
+      setStatus('idle');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStatus('error');
+    }
+  }, [onSelectEvent]);
+
   const selected = events.find(event => event.id === selectedEventId) ?? null;
 
   return (
@@ -109,9 +132,14 @@ export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: Traje
       className="panel-ui trajectory-history-panel"
       defaultMinimized
       actions={
-        <button type="button" className="trajectory-history-panel__icon-btn" onClick={() => void refresh()}>
-          Refresh
-        </button>
+        <>
+          <button type="button" className="trajectory-history-panel__icon-btn" onClick={() => void importIncoming()}>
+            Import incoming
+          </button>
+          <button type="button" className="trajectory-history-panel__icon-btn" onClick={() => void refresh()}>
+            Refresh
+          </button>
+        </>
       }
     >
       <PanelGrid>
