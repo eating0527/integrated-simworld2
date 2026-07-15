@@ -11,16 +11,18 @@ const generatedScene: GeneratedSceneOption = {
   label: '自訂場景',
   modelPath: '/scene.glb',
   createdAt: '2026-07-10',
+  status: 'completed',
+  ready: true,
 };
 
-function renderSceneSwitcher() {
+function renderSceneSwitcher(generatedScenes = [generatedScene]) {
   const onSelectPreset = vi.fn();
   const onSelectGenerated = vi.fn();
 
   render(
     <SceneSwitcher
       selectedScene={{ source: 'preset', id: 'ntpu' }}
-      generatedScenes={[generatedScene]}
+      generatedScenes={generatedScenes}
       onSelectPreset={onSelectPreset}
       onSelectGenerated={onSelectGenerated}
     />,
@@ -41,6 +43,8 @@ describe('SceneSwitcher', () => {
     expect(screen.getByRole('button', { name: 'NTPU' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'NYCU' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '自訂場景' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '建立新場景' })).toHaveClass('scene-switcher__create');
+    expect(screen.getByRole('link', { name: '建立新場景' })).toHaveAttribute('href', '/my_map.html');
 
     await user.click(screen.getByRole('button', { name: 'NYCU' }));
     expect(onSelectPreset).toHaveBeenCalledWith('nycu');
@@ -59,5 +63,25 @@ describe('SceneSwitcher', () => {
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('listbox', { name: 'Scene options' })).not.toBeInTheDocument();
+  });
+
+  it('disables scene creation and unfinished scenes while showing build status', async () => {
+    const user = userEvent.setup();
+    const pendingScene = {
+      ...generatedScene,
+      taskId: 'task-pending',
+      label: '正在建立的場景',
+      status: 'running',
+      stage: 'running_blender_generation',
+      ready: false,
+    } as GeneratedSceneOption;
+    renderSceneSwitcher([pendingScene]);
+
+    await user.click(screen.getByRole('button', { name: 'SCENE' }));
+
+    const scene = screen.getByRole('button', { name: /正在建立的場景/ });
+    expect(scene).toBeDisabled();
+    expect(scene).toHaveTextContent('正在建立 3D 場景');
+    expect(screen.getByRole('button', { name: '建立新場景' })).toBeDisabled();
   });
 });

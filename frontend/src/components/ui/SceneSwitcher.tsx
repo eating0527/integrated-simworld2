@@ -1,5 +1,5 @@
 import { SCENES, type SceneId } from '@/config/scenes.config';
-import { type GeneratedSceneOption } from '@/hooks/useGeneratedScene';
+import { getBuildLabel, isSceneBuilding, type GeneratedSceneOption } from '@/hooks/useGeneratedScene';
 import { useEffect, useRef, useState } from 'react';
 
 export type SelectedScene =
@@ -23,6 +23,7 @@ export function SceneSwitcher({
 }: SceneSwitcherProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLElement | null>(null);
+  const isBuilding = generatedScenes.some(isSceneBuilding);
   useEffect(() => {
     if (!open) return;
 
@@ -76,21 +77,33 @@ export function SceneSwitcher({
           })}
           {generatedScenes.map(scene => {
             const selected = selectedScene.source === 'generated' && selectedScene.taskId === scene.taskId;
+            const statusLabel = getBuildLabel(scene);
             return (
               <button
                 key={scene.taskId}
                 type="button"
                 className={`scene-switcher__option${selected ? ' is-selected' : ''}`}
                 aria-selected={selected}
+                disabled={Boolean(statusLabel)}
                 onClick={() => {
                   onSelectGenerated(scene.taskId);
                   setOpen(false);
                 }}
               >
                 {scene.label}
+                {statusLabel && <span className="scene-switcher__subtitle">{statusLabel}</span>}
               </button>
             );
           })}
+          {isBuilding ? (
+            <button type="button" className="scene-switcher__option scene-switcher__create" disabled>
+              <span aria-hidden="true">+</span> 建立新場景
+            </button>
+          ) : (
+            <a className="scene-switcher__option scene-switcher__create" href="/my_map.html">
+              <span aria-hidden="true">+</span> 建立新場景
+            </a>
+          )}
           {generatedStatus === 'loading' && (
             <span className="scene-switcher__empty">Loading scenes...</span>
           )}

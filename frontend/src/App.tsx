@@ -75,43 +75,6 @@ function isFiniteNumber(value: unknown): value is number {
 // ── App ─────────────────────────────────────────────────────────────
 export function App() {
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  const [fromMap] = useState(() => {
-    const search = new URLSearchParams(window.location.search);
-    return search.get('fromMap') === '1';
-  });
-
-  // ── 入口策略：預設先進地圖頁，只有從 my_map.html 回來才進 React ─────────
-  const needsMapSelection = !fromMap;
-
-  useEffect(() => {
-    if (!needsMapSelection) return;
-    window.location.replace(`${window.location.origin}/my_map.html`);
-  }, [needsMapSelection]);
-
-  // 自動重定向期間顯示提示
-  if (needsMapSelection) {
-    return (
-      <div style={{
-        width: '100vw',
-        height: '100dvh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)',
-        color: 'white',
-        fontSize: '18px',
-        flexDirection: 'column',
-        gap: '20px',
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <h1 style={{ marginBottom: '10px' }}>🗺️ 場景生成系統</h1>
-          <p>正在前往地圖選點頁面...</p>
-          <p style={{ fontSize: '14px', opacity: 0.7 }}>選完後會自動建立 blosm 任務並回到 React</p>
-        </div>
-      </div>
-    );
-  }
-
   // ── UAV Control Panel 狀態 ───────────────────────────────────────
   const [auto, setAuto] = useState(false);
   const [uavAnimation, setUavAnimation] = useState(false);

@@ -225,12 +225,13 @@ canvas {
   font: inherit;
   font-size: 12px;
   font-weight: 500;
+  text-decoration: none;
   text-align: left;
   text-overflow: ellipsis;
   transition: background 0.15s, border-color 0.15s;
   white-space: nowrap;
 
-  &:hover,
+  &:hover:not(:disabled),
   &.is-selected {
     background: rgba(0, 212, 255, 0.14);
     border-color: var(--panel-border);
@@ -239,6 +240,16 @@ canvas {
   &.is-selected {
     font-weight: 700;
   }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+.scene-switcher__create {
+  color: var(--accent-cyan);
+  font-weight: 700;
 }
 
 .scene-switcher__button:focus-visible,
