@@ -66,6 +66,8 @@ backend/app/static/images/iss_unet_*
 backend/app/static/scenes/generated/
 backend/app/static/scenes/T-*
 backend/app/uploads/scene_index.json
+backend/app/uploads/scene_tasks.json
+backend/app/uploads/selected_locations.json
 
 # Level 3：source、tests、docs/specs、lockfiles/manifests、example configs、
 # operational scripts、fixtures、canonical assets 不加 ignore 規則。
