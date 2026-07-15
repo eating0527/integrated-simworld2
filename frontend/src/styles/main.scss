@@ -247,6 +247,37 @@ canvas {
   }
 }
 
+.scene-switcher__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.scene-switcher__action {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px 6px;
+  color: var(--accent-cyan);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+
+  &:hover,
+  &:focus-visible {
+    background: rgba(0, 212, 255, 0.1);
+    outline: none;
+    border-color: var(--accent-cyan);
+  }
+
+  &.is-danger {
+    color: var(--danger);
+  }
+}
+
 .scene-switcher__create {
   color: var(--accent-cyan);
   font-weight: 700;
@@ -914,6 +945,65 @@ canvas {
   transition: background 0.15s;
 
   &:hover { background: rgba(255, 255, 255, 0.07); }
+}
+
+.scene-dialog {
+  z-index: 1100;
+}
+
+.scene-dialog__content {
+  width: min(440px, 100%);
+}
+
+.scene-dialog__body {
+  display: grid;
+  gap: 14px;
+  align-items: stretch;
+  justify-content: stretch;
+
+  label {
+    display: grid;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  input {
+    width: 100%;
+    min-width: 0;
+    padding: 9px 10px;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--panel-border);
+    border-radius: 5px;
+    font: inherit;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+  }
+}
+
+.scene-dialog__error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.scene-dialog__confirm {
+  min-height: 36px;
+  padding: 6px 18px;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+
+  &:disabled {
+    cursor: wait;
+    opacity: 0.6;
+  }
 }
 
 .controller-screen-panel {

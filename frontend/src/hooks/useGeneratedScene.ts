@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { parseSceneFrame, type SceneFrame } from '../types/sceneFrame';
 
 const API = import.meta.env.VITE_API_URL || '';
-const RECENT_TASK_ID_KEY = 'recent-generated-scene-task-id';
 
 type SceneTaskStatus = 'idle' | 'loading' | 'polling' | 'error';
 export type GeneratedSceneStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -17,6 +16,7 @@ interface SceneTask {
   id?: string;
   sceneKey?: string;
   sceneName?: string;
+  displayName?: string;
   status?: string;
   stage?: string;
   modelUrl?: string;
@@ -49,8 +49,15 @@ interface GeneratedScenesState {
   error: string | null;
 }
 
+export interface SceneMutationResult {
+  ok: boolean;
+  status: number;
+  error?: string;
+}
+
 function getSceneLabel(task: SceneTask, taskId: string, sceneKey: string): string {
   return (
+    task.displayName?.trim() ||
     task.location?.place_name?.trim() ||
     task.sceneName?.trim() ||
     sceneKey ||
@@ -159,17 +166,9 @@ export function useGeneratedScenes() {
       const scenes = await fetchGeneratedSceneIndex(
         Boolean(options?.rebuildIndex || watchedTask?.status === 'completed'),
       );
-      const recentTaskId = localStorage.getItem(RECENT_TASK_ID_KEY);
       const taskScenes = tasks
-        .map(normalizeTask)
-        .filter((scene): scene is GeneratedSceneOption => Boolean(
-          scene && (
-            scene.status === 'queued'
-            || scene.status === 'running'
-            || ([recentTaskId, state.pollingTaskId].includes(scene.taskId)
-              && (scene.status === 'completed' || scene.status === 'failed'))
-          )
-        ));
+        .map(task => normalizeTask(task))
+        .filter((scene): scene is GeneratedSceneOption => Boolean(scene));
       const completedIds = new Set(scenes.map(scene => scene.taskId));
       const visibleTaskScenes = taskScenes.filter(scene => !completedIds.has(scene.taskId));
       const nextPollingTaskId = visibleTaskScenes.find(isSceneBuilding)?.taskId ?? null;
@@ -205,8 +204,53 @@ export function useGeneratedScenes() {
     return () => window.clearInterval(interval);
   }, [refreshScenes, state.pollingTaskId]);
 
+  const renameScene = useCallback(async (
+    taskId: string,
+    displayName: string,
+    token: string,
+  ): Promise<SceneMutationResult> => {
+    try {
+      const res = await fetch(`${API}/api/scene-tasks/${encodeURIComponent(taskId)}/display-name`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Scene-Admin-Token': token,
+        },
+        body: JSON.stringify({ display_name: displayName }),
+      });
+      if (!res.ok) {
+        return { ok: false, status: res.status, error: `更新場景名稱失敗 (${res.status})` };
+      }
+      await refreshScenes({ rebuildIndex: true });
+      return { ok: true, status: res.status };
+    } catch (_) {
+      return { ok: false, status: 0, error: '無法連線至後端' };
+    }
+  }, [refreshScenes]);
+
+  const deleteScene = useCallback(async (
+    taskId: string,
+    token: string,
+  ): Promise<SceneMutationResult> => {
+    try {
+      const res = await fetch(`${API}/api/scene-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'DELETE',
+        headers: { 'X-Scene-Admin-Token': token },
+      });
+      if (!res.ok) {
+        return { ok: false, status: res.status, error: `刪除場景失敗 (${res.status})` };
+      }
+      await refreshScenes({ rebuildIndex: true });
+      return { ok: true, status: res.status };
+    } catch (_) {
+      return { ok: false, status: 0, error: '無法連線至後端' };
+    }
+  }, [refreshScenes]);
+
   return {
     ...state,
     refreshScenes,
+    renameScene,
+    deleteScene,
   };
 }

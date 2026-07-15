@@ -5,6 +5,7 @@ import math
 import os
 import re
 import json
+import secrets
 import time
 import uuid
 import shutil
@@ -29,7 +30,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List, Any, Literal
 
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
@@ -603,6 +604,10 @@ class SceneTaskCreateRequest(BaseModel):
     auto_run: bool = True
 
 
+class SceneDisplayNameRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=80)
+
+
 class BuildingCheckRequest(BaseModel):
     lat: float = Field(..., ge=-90.0, le=90.0)
     lon: float = Field(..., ge=-180.0, le=180.0)
@@ -874,6 +879,7 @@ def _scene_index_entry(task: Dict[str, Any], indexed_at: str) -> Optional[Dict[s
         "id": task.get("id"),
         "sceneKey": scene_key,
         "sceneName": task.get("sceneName"),
+        "displayName": task.get("displayName"),
         "location": task.get("location"),
         "modelUrl": task.get("modelUrl") or _artifact_url(artifact_paths["glb"]),
         "sionnaSceneXml": task.get("sionnaSceneXml") or str(artifact_paths["xml"]),
@@ -896,6 +902,49 @@ def rebuild_scene_index() -> List[Dict[str, Any]]:
     ]
     _write_json_list(SCENE_INDEX_JSON, scenes)
     return scenes
+
+
+def _scene_admin_error(token: Optional[str]) -> Optional[JSONResponse]:
+    configured = os.environ.get("SCENE_ADMIN_TOKEN", "")
+    if not configured:
+        return JSONResponse({"success": False, "error": "Scene administration is unavailable"}, status_code=503)
+    if not token or not secrets.compare_digest(token, configured):
+        return JSONResponse({"success": False, "error": "Invalid scene administration token"}, status_code=403)
+    return None
+
+
+def _scene_task_ready(task: Dict[str, Any]) -> bool:
+    if _scene_index_entry(task, datetime.now().isoformat()) is None:
+        return False
+    scene_dir = _generated_scene_dir(task)
+    if not scene_dir:
+        return False
+    metadata_path = scene_dir / "scene_metadata.json"
+    try:
+        scene_frame_from_metadata(json.loads(metadata_path.read_text(encoding="utf-8")))
+        return True
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _generated_scene_dir(task: Dict[str, Any]) -> Optional[Path]:
+    scene_key = _task_scene_key(task)
+    if not scene_key:
+        return None
+    root = SCENE_DIR.resolve()
+    target = (SCENE_DIR / scene_key).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+    return target
+
+
+async def _refresh_scene_index_after_mutation() -> None:
+    try:
+        await asyncio.to_thread(rebuild_scene_index)
+    except Exception:
+        logger.exception("Scene mutation succeeded, but the generated scene index could not be refreshed")
 
 
 def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -1307,7 +1356,7 @@ async def create_scene_task(req: SceneTaskCreateRequest):
 @app.get("/api/scene-tasks")
 async def list_scene_tasks():
     with SCENE_TASKS_LOCK:
-        tasks = _read_json_list(SCENE_TASKS_JSON)
+        tasks = [task for task in _read_json_list(SCENE_TASKS_JSON) if task.get("status") != "deleted"]
     # Reconcile stale running/queued tasks by checking generated artifacts.
     reconciled_tasks = [
         _reconcile_task_from_artifacts(task) if task.get("status") in {"running", "queued"} else task
@@ -1326,6 +1375,64 @@ async def list_generated_scenes():
 async def refresh_generated_scenes():
     scenes = await asyncio.to_thread(rebuild_scene_index)
     return {"success": True, "scenes": scenes, "count": len(scenes)}
+
+
+@app.patch("/api/scene-tasks/{task_id}/display-name")
+async def update_scene_display_name(
+    task_id: str,
+    req: SceneDisplayNameRequest,
+    x_scene_admin_token: Optional[str] = Header(default=None),
+):
+    if error := _scene_admin_error(x_scene_admin_token):
+        return error
+
+    display_name = req.display_name.strip()
+    if not display_name or len(display_name) > 80:
+        return JSONResponse({"success": False, "error": "Display name must be 1-80 characters"}, status_code=422)
+
+    task = _get_task(task_id)
+    if not task:
+        return JSONResponse({"success": False, "error": f"task not found: {task_id}"}, status_code=404)
+    if task.get("status") != "completed" or not _scene_task_ready(task):
+        return JSONResponse({"success": False, "error": "Only ready scenes can be renamed"}, status_code=409)
+
+    updated = await asyncio.to_thread(_update_task, task_id, {"displayName": display_name})
+    await _refresh_scene_index_after_mutation()
+    return {"success": True, "task": updated}
+
+
+@app.delete("/api/scene-tasks/{task_id}")
+async def delete_scene_task(
+    task_id: str,
+    x_scene_admin_token: Optional[str] = Header(default=None),
+):
+    if error := _scene_admin_error(x_scene_admin_token):
+        return error
+
+    task = _get_task(task_id)
+    if not task:
+        return JSONResponse({"success": False, "error": f"task not found: {task_id}"}, status_code=404)
+    if task.get("status") not in {"completed", "failed"}:
+        return JSONResponse({"success": False, "error": "Only completed or failed scenes can be deleted"}, status_code=409)
+
+    scene_dir = _generated_scene_dir(task)
+    if not scene_dir:
+        return JSONResponse({"success": False, "error": "Invalid generated scene path"}, status_code=409)
+    try:
+        if scene_dir.exists():
+            await asyncio.wait_for(asyncio.to_thread(shutil.rmtree, scene_dir), timeout=30)
+    except Exception as exc:
+        return JSONResponse({"success": False, "error": f"Failed to delete scene data: {exc}"}, status_code=500)
+
+    deleted_at = datetime.now().isoformat()
+    updated = await asyncio.to_thread(_update_task, task_id, {
+        "status": "deleted",
+        "stage": "deleted",
+        "deletedAt": deleted_at,
+        "note": "Scene data deleted",
+    })
+    await _refresh_scene_index_after_mutation()
+    return {"success": True, "task": updated}
 
 
 @app.get("/api/scene-tasks/{task_id}")

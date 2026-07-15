@@ -451,6 +451,8 @@ export function App() {
             onSelectGenerated={(taskId) => {
               setSelectedScene({ source: 'generated', taskId });
             }}
+            onRenameGenerated={generatedScenes.renameScene}
+            onDeleteGenerated={generatedScenes.deleteScene}
           />
           <div className="workspace__statusbar-items">
             {aircraftPanel}

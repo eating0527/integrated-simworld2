@@ -1,10 +1,12 @@
 import json
 import asyncio
 import math
+import os
 import shutil
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import main
@@ -113,6 +115,120 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         self.assertEqual(response["count"], 1)
         self.assertEqual(response["scenes"][0]["id"], "task-ok")
         self.assertEqual(json.loads(self.index_json.read_text(encoding="utf-8")), response["scenes"])
+
+    def test_admin_can_update_completed_scene_display_name(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+        (self.scene_dir / "T-AAAAAAAAAA" / "scene_metadata.json").write_text(
+            json.dumps({"frame": SceneFrame(
+                frame_id="scene-test", origin_lat=24.1, origin_lon=121.1, origin_alt_m=0.0
+            ).to_dict()}),
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            response = asyncio.run(
+                main.update_scene_display_name(
+                    "task-ok",
+                    SimpleNamespace(display_name="  新場景名稱  "),
+                    "secret-token",
+                )
+            )
+
+        payload = response["task"]
+        self.assertEqual(payload["displayName"], "新場景名稱")
+        self.assertEqual(payload["sceneKey"], "T-AAAAAAAAAA")
+        self.assertEqual(payload["sceneName"], task["sceneName"])
+        persisted = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
+        indexed = json.loads(self.index_json.read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted["displayName"], "新場景名稱")
+        self.assertEqual(indexed["displayName"], "新場景名稱")
+
+    def test_admin_delete_removes_scene_data_but_keeps_generated_images(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+        scene_path = self.scene_dir / "T-AAAAAAAAAA"
+        (scene_path / "iss_unet_data").mkdir()
+        (scene_path / "iss_unet_data" / "sionna_iss.npy").write_bytes(b"npy")
+        (scene_path / "osm_basemap_bbox_18.png").write_bytes(b"texture")
+        maps_path = self.root / "maps" / "t-aaaaaaaaaa"
+        maps_path.mkdir(parents=True)
+        result_image = maps_path / "iss_unet_t-aaaaaaaaaa_comparison.png"
+        result_image.write_bytes(b"png")
+        main.rebuild_scene_index()
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            response = asyncio.run(main.delete_scene_task("task-ok", "secret-token"))
+
+        self.assertTrue(response["success"])
+        self.assertFalse(scene_path.exists())
+        self.assertTrue(result_image.exists())
+        persisted = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted["status"], "deleted")
+        self.assertIn("deletedAt", persisted)
+        self.assertEqual(json.loads(self.index_json.read_text(encoding="utf-8")), [])
+
+    def test_deleted_scene_tombstones_are_hidden_from_task_list(self):
+        deleted = _task("task-deleted", "T-AAAAAAAAAA", status="deleted")
+        available = _task("task-ok", "T-BBBBBBBBBB")
+        self._write_tasks([deleted, available])
+
+        response = asyncio.run(main.list_scene_tasks())
+
+        self.assertEqual([task["id"] for task in response["tasks"]], ["task-ok"])
+        self.assertEqual(response["count"], 1)
+
+    def test_scene_admin_endpoints_require_configured_valid_token(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+
+        with patch.dict(os.environ, {}, clear=True):
+            unavailable = asyncio.run(main.delete_scene_task("task-ok", "secret-token"))
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            forbidden = asyncio.run(main.delete_scene_task("task-ok", "wrong-token"))
+
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "completed")
+
+    def test_running_scene_cannot_be_deleted(self):
+        task = _task("task-running", "T-AAAAAAAAAA", status="running")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            response = asyncio.run(main.delete_scene_task("task-running", "secret-token"))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue((self.scene_dir / "T-AAAAAAAAAA").exists())
+        self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "running")
+
+    def test_delete_still_reports_success_when_index_refresh_fails(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            with patch.object(main, "rebuild_scene_index", side_effect=OSError("index unavailable")):
+                response = asyncio.run(main.delete_scene_task("task-ok", "secret-token"))
+
+        self.assertTrue(response["success"])
+        self.assertFalse((self.scene_dir / "T-AAAAAAAAAA").exists())
+        self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "deleted")
+
+    def test_delete_rejects_presets_and_path_traversal_scene_keys(self):
+        protected = self.root / "protected.txt"
+        protected.write_text("keep", encoding="utf-8")
+
+        for scene_key in ("NTPU", "../T-AAAAAAAAAA"):
+            with self.subTest(scene_key=scene_key):
+                self._write_tasks([_task("task-bad", scene_key)])
+                with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+                    response = asyncio.run(main.delete_scene_task("task-bad", "secret-token"))
+                self.assertEqual(response.status_code, 409)
+                self.assertTrue(protected.exists())
 
     def test_completed_scene_task_prepares_iss_unet_dataset(self):
         task = _task("task-ok", "T-AAAAAAAAAA", status="running")
