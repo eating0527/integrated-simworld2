@@ -2,7 +2,7 @@ import csv
 import io
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, TextIO
@@ -38,8 +38,8 @@ class GPSPoint:
 
 @dataclass(frozen=True)
 class NoisePoint:
-    time_stamp: datetime
-    noise_floor_db: float
+    time_stamp: datetime | None
+    noise_floor_db: float | None
     raw_columns: set[str] = field(default_factory=set)
 
 
@@ -49,7 +49,7 @@ class AlignedNoisePoint:
     lat: float
     lon: float
     alt: float
-    noise_floor_db: float
+    noise_floor_db: float | None
     alt_mode: str = "relative"
     legacy_alt_mode: bool = False
 
@@ -139,16 +139,20 @@ def parse_gps_csv(source: Path | str | bytes | TextIO) -> list[GPSPoint]:
 def parse_noise_csv(source: Path | str | bytes | TextIO) -> list[NoisePoint]:
     rows, columns = _read_rows(source)
     _require_columns(columns, ("time_stamp", "noise_floor_db"), "Noise CSV")
-    points = [
-        NoisePoint(
-            time_stamp=_parse_time(row["time_stamp"]),
-            noise_floor_db=float(row["noise_floor_db"]),
-            raw_columns=columns,
-        )
-        for row in rows
-        if row.get("time_stamp")
-    ]
-    points.sort(key=lambda point: point.time_stamp)
+    points = []
+    for row in rows:
+        try:
+            time_stamp = _parse_time(row.get("time_stamp", ""))
+        except (TypeError, ValueError):
+            time_stamp = None
+        try:
+            noise_floor_db = float(row.get("noise_floor_db", ""))
+            if not math.isfinite(noise_floor_db):
+                noise_floor_db = None
+        except (TypeError, ValueError):
+            noise_floor_db = None
+        points.append(NoisePoint(time_stamp, noise_floor_db, columns))
+    points.sort(key=lambda point: point.time_stamp or datetime.max.replace(tzinfo=timezone.utc))
     return points
 
 
@@ -160,7 +164,10 @@ def align_noise_to_gps(
     skipped = 0
     gps_index = 0
     gps_sorted = sorted(gps_points, key=lambda point: point.time_stamp)
-    for noise in sorted(noise_points, key=lambda point: point.time_stamp):
+    for noise in sorted(noise_points, key=lambda point: point.time_stamp or datetime.max.replace(tzinfo=timezone.utc)):
+        if noise.time_stamp is None:
+            skipped += 1
+            continue
         while gps_index + 1 < len(gps_sorted) and gps_sorted[gps_index + 1].time_stamp <= noise.time_stamp:
             gps_index += 1
         if not gps_sorted or gps_sorted[gps_index].time_stamp > noise.time_stamp:
@@ -183,6 +190,24 @@ def align_noise_to_gps(
             )
         )
     return aligned, skipped
+
+
+def _prepare_noise_points(
+    noise_points: list[NoisePoint],
+    filter_noise: bool,
+) -> tuple[list[NoisePoint], int]:
+    prepared: list[NoisePoint] = []
+    filtered = 0
+    for point in noise_points:
+        value = point.noise_floor_db
+        invalid = value is None or not math.isfinite(value) or (filter_noise and value >= -1.0)
+        if invalid:
+            if point.time_stamp is not None:
+                filtered += 1
+            prepared.append(replace(point, noise_floor_db=None))
+        else:
+            prepared.append(point)
+    return prepared, filtered
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -246,7 +271,7 @@ def _route_point_payload(
         "displayable": grid.displayable,
     }
     if isinstance(point, AlignedNoisePoint):
-        payload["noise_floor_db"] = float(point.noise_floor_db)
+        payload["noise_floor_db"] = None if point.noise_floor_db is None else float(point.noise_floor_db)
         payload["used_in_sparse"] = False
     return payload
 
@@ -275,12 +300,17 @@ def create_route_sparse_sample(
     gps_points: list[GPSPoint] | None = None,
     noise_points: list[NoisePoint] | None = None,
     apply_building_mask: bool = True,
+    filter_noise: bool = True,
 ) -> RouteSparseResult:
     sample_used = gps_points is None or (mode == "gps_n" and noise_points is None)
     if gps_points is None:
         gps_points = parse_gps_csv(SAMPLE_GPS_PATH)
     if mode == "gps_n" and noise_points is None:
         noise_points = parse_noise_csv(SAMPLE_NOISE_PATH)
+    if mode == "gps_n":
+        noise_points, filtered_noise = _prepare_noise_points(noise_points or [], filter_noise)
+    else:
+        filtered_noise = 0
 
     frame = resolve_scene_frame(dataset)
 
@@ -310,6 +340,8 @@ def create_route_sparse_sample(
         row, col = grid.row, grid.col
         if isinstance(point, AlignedNoisePoint):
             projected_aligned_points.append(payload)
+            if point.noise_floor_db is None:
+                continue
         if apply_building_mask and outdoor_mask[row, col] < 0.5:
             indoor_filtered += 1
             continue
@@ -345,6 +377,7 @@ def create_route_sparse_sample(
         "used_samples": int(sparse_mask.sum()),
         "aligned_noise": aligned_noise,
         "skipped_noise": skipped_noise,
+        "filtered_noise": filtered_noise,
         "sample_used": sample_used,
         "apply_building_mask": apply_building_mask,
         "out_of_bounds": out_of_bounds,

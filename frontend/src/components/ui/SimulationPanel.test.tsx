@@ -326,7 +326,12 @@ describe('SimulationPanel UI', () => {
     await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
     expect(screen.getByText('GPS CSV')).toBeInTheDocument();
     expect(screen.getByText('Noise CSV')).toBeInTheDocument();
+    const noiseFilter = screen.getByRole('checkbox', { name: 'Noise Filter (>= -1 dB)' });
+    expect(noiseFilter).toBeChecked();
     expect(screen.queryByLabelText('Focus Sampling Points')).not.toBeInTheDocument();
+
+    await user.click(noiseFilter);
+    expect(noiseFilter).not.toBeChecked();
 
     await runCurrentTab(user);
 
@@ -340,6 +345,7 @@ describe('SimulationPanel UI', () => {
     const [, init] = vi.mocked(globalThis.fetch).mock.calls.at(-1) ?? [];
     const form = (init as RequestInit).body as FormData;
     expect(form.get('mode')).toBe('gps_n');
+    expect(form.get('filter_noise')).toBe('false');
     expect(form.get('focus_sampling_points')).toBeNull();
     expect(JSON.parse(String(form.get('devices_json')))).toEqual(
       expect.arrayContaining([expect.objectContaining({ role: 'jammer' })]),

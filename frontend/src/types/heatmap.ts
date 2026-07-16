@@ -31,11 +31,12 @@ export interface ISSRoutePoint {
   frame_id: string;
   enu: Enu;
   grid: GridPoint;
+  noise_floor_db?: number | null;
+  used_in_sparse?: boolean;
 }
 
 export interface ISSSamplePoint extends ISSRoutePoint {
   noise_floor_db: number;
-  used_in_sparse?: boolean;
 }
 
 export interface ISSRouteOverlayConfig {

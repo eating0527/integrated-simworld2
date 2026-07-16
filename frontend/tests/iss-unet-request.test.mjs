@@ -36,6 +36,7 @@ describe('ISS_UNET request builders', () => {
       pixelSizeM: 1,
       cfarEnabled: true,
       applyBuildingMask: true,
+      filterNoise: false,
       gpsFile: null,
       noiseFile: null,
       devices: getCurrentDevicePayload(),
@@ -44,6 +45,7 @@ describe('ISS_UNET request builders', () => {
     assert.equal(form.get('scene'), 'NTPU');
     assert.equal(form.get('mode'), 'gps_n');
     assert.equal(form.get('pixel_size_m'), '1');
+    assert.equal(form.get('filter_noise'), 'false');
     assert.equal(form.get('focus_sampling_points'), null);
     assert.equal(typeof form.get('devices_json'), 'string');
     assert.equal(JSON.parse(form.get('devices_json')).some((device) => device.role === 'jammer'), true);
@@ -54,6 +56,7 @@ describe('ISS_UNET request builders', () => {
       scene: 'NTPU',
       pixelSizeM: 4,
       applyBuildingMask: true,
+      filterNoise: false,
       gpsFile: null,
       noiseFile: null,
       devices: getCurrentDevicePayload(),
@@ -62,6 +65,7 @@ describe('ISS_UNET request builders', () => {
     assert.equal(form.get('scene'), 'NTPU');
     assert.equal(form.get('pixel_size_m'), '4');
     assert.equal(form.get('apply_building_mask'), 'true');
+    assert.equal(form.get('filter_noise'), 'false');
     assert.equal(form.get('focus_sampling_points'), null);
     assert.equal(form.get('gps_file'), null);
     assert.equal(form.get('noise_file'), null);

@@ -447,6 +447,91 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertAlmostEqual(aligned[0].lat, 24.1)
         self.assertAlmostEqual(aligned[0].noise_floor_db, -88.5)
 
+    def test_gps_noise_filters_values_at_or_above_minus_one_and_keeps_positions(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        data_dir = self._write_ntpu_dataset()
+        gps_csv = "\n".join(
+            [
+                "time_stamp,lat,lon,alt",
+                "2026-05-27T12:00:00Z,24.0,121.0,0",
+                "2026-05-27T12:00:01Z,24.0000359324461,121.000039446262,0",
+                "2026-05-27T12:00:02Z,24.0000718648922,121.000078892524,0",
+            ]
+        )
+        noise_csv = "\n".join(
+            [
+                "time_stamp,noise_floor_db",
+                "2026-05-27T12:00:00.100Z,-2.0",
+                "2026-05-27T12:00:01.100Z,-1.0",
+                "2026-05-27T12:00:02.100Z,",
+                "not-a-time,-3.0",
+            ]
+        )
+        arrays = {
+            "building": np.zeros((128, 128), dtype=np.float32),
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": np.full((128, 128), -100.0, dtype=np.float32),
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps_n",
+            gps_points=parse_gps_csv(gps_csv),
+            noise_points=parse_noise_csv(noise_csv),
+        )
+
+        self.assertEqual(len(result.aligned_points), 3)
+        self.assertEqual([point["noise_floor_db"] for point in result.aligned_points], [-2.0, None, None])
+        self.assertEqual(len(result.sparse_points), 1)
+        self.assertEqual(result.metrics["filtered_noise"], 2)
+        self.assertEqual(result.metrics["skipped_noise"], 1)
+        self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-2.0])
+
+    def test_gps_noise_filter_can_be_disabled_for_legacy_numeric_values(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        self._write_ntpu_dataset()
+        gps_csv = "\n".join(
+            [
+                "time_stamp,lat,lon,alt",
+                "2026-05-27T12:00:00Z,24.0,121.0,0",
+                "2026-05-27T12:00:01Z,24.0000359324461,121.000039446262,0",
+                "2026-05-27T12:00:02Z,24.0000718648922,121.000078892524,0",
+            ]
+        )
+        noise_csv = "\n".join(
+            [
+                "time_stamp,noise_floor_db",
+                "2026-05-27T12:00:00.100Z,-1.0",
+                "2026-05-27T12:00:01.100Z,0.0",
+                "2026-05-27T12:00:02.100Z,1.0",
+            ]
+        )
+        arrays = {
+            "building": np.zeros((128, 128), dtype=np.float32),
+            "dss": np.full((128, 128), -110.0, dtype=np.float32),
+            "iss": np.full((128, 128), -100.0, dtype=np.float32),
+            "tss": np.full((128, 128), -90.0, dtype=np.float32),
+        }
+
+        result = create_route_sparse_sample(
+            arrays,
+            resolve_scene_dataset("NTPU", scene_dir=self.scene_dir),
+            mode="gps_n",
+            gps_points=parse_gps_csv(gps_csv),
+            noise_points=parse_noise_csv(noise_csv),
+            filter_noise=False,
+        )
+
+        self.assertEqual(result.metrics["filtered_noise"], 0)
+        self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-1.0, 0.0, 0.0])
+        self.assertEqual(len(result.sparse_points), 3)
+
     def test_gps_mode_route_sparse_uses_simulated_iss_and_filters_blocked_pixels(self):
         from app.iss_real import create_route_sparse_sample, parse_gps_csv
         from app.iss_unet_service import resolve_scene_dataset
@@ -1151,6 +1236,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                 main.iss_unet_statistics_upload_post(
                     scene="NTPU",
                     apply_building_mask=True,
+                    filter_noise=False,
                     devices_json="[]",
                     gps_file=FakeUpload(gps_bytes),
                     noise_file=FakeUpload(noise_bytes),
@@ -1161,6 +1247,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(captured["mode"], "gps_n")
         self.assertEqual(captured["gps_csv"], gps_bytes)
         self.assertEqual(captured["noise_csv"], noise_bytes)
+        self.assertEqual(captured["filter_noise"], False)
         self.assertEqual(response["statistics"]["rows"][0]["variable"], "採樣點地圖覆蓋率")
 
     def test_single_input_unet_accepts_three_channels(self):
@@ -1293,6 +1380,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                     main.iss_unet_reconstruct_upload_post(
                         scene="NTPU",
                         mode="gps_n",
+                        filter_noise=True,
                         gps_file=None,
                         noise_file=None,
                     )
@@ -1300,6 +1388,7 @@ class ISSUNetServiceTests(unittest.TestCase):
 
         self.assertEqual(response["success"], True)
         self.assertNotIn("focus_sampling_points", captured)
+        self.assertEqual(captured["filter_noise"], True)
 
     def test_upload_endpoint_forwards_pixel_size(self):
         self._write_ntpu_dataset()

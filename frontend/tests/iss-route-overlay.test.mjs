@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'vitest';
 
-import { getIssNoiseColor, getIssRouteLinePoints } from '../src/components/scene/ISSRouteOverlay.tsx';
+import { getIssNoiseColor, getIssNoiseMarkerKind, getIssRouteLinePoints } from '../src/components/scene/ISSRouteOverlay.tsx';
 
 describe('ISS route overlay helpers', () => {
   it('uses all or aligned route points and filters invalid coordinates', () => {
@@ -40,6 +40,14 @@ describe('ISS route overlay helpers', () => {
     assert.equal(getIssNoiseColor(undefined), '#000080');
     assert.equal(getIssNoiseColor(Number.NaN), '#000080');
     assert.equal(getIssNoiseColor(Number.POSITIVE_INFINITY), '#000080');
+  });
+
+  it('distinguishes measured noise markers from empty positions', () => {
+    assert.equal(getIssNoiseMarkerKind(-2), 'sample');
+    assert.equal(getIssNoiseMarkerKind(-1), 'sample');
+    assert.equal(getIssNoiseMarkerKind(null), 'empty');
+    assert.equal(getIssNoiseMarkerKind(undefined), 'empty');
+    assert.equal(getIssNoiseMarkerKind(Number.NaN), 'empty');
   });
 
   it('filters non-finite ENU coordinates', () => {

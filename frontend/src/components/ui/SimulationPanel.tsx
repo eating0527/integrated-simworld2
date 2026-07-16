@@ -46,6 +46,7 @@ interface ISSUNetParams {
   pixelSizeM: ISSUNetPixelSizeM;
   cfar_enabled: boolean;
   apply_building_mask: boolean;
+  filterNoise: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
 }
@@ -174,6 +175,7 @@ export function SimulationPanel({
     pixelSizeM: 4,
     cfar_enabled: true,
     apply_building_mask: true,
+    filterNoise: true,
     gpsFile: null,
     noiseFile: null,
   });
@@ -318,6 +320,7 @@ export function SimulationPanel({
             pixelSizeM: issUnetParams.pixelSizeM,
             cfarEnabled: issUnetParams.cfar_enabled,
             applyBuildingMask: issUnetParams.apply_building_mask,
+            filterNoise: issUnetParams.filterNoise,
             gpsFile: issUnetParams.gpsFile,
             noiseFile: issUnetParams.noiseFile,
             devices: devicePayload,
@@ -422,7 +425,10 @@ export function SimulationPanel({
         if (route) {
           const routePoints = Array.isArray(route.all_points) ? route.all_points as ISSRoutePoint[] : [];
           const alignedPoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSRoutePoint[] : [];
-          const samplePoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSSamplePoint[] : [];
+          const sparsePoints = Array.isArray(route.sparse_points) ? route.sparse_points as ISSSamplePoint[] : [];
+          const samplePoints = sparsePoints.length > 0
+            ? sparsePoints
+            : alignedPoints.filter(point => typeof point.noise_floor_db === 'number' && Number.isFinite(point.noise_floor_db)) as ISSSamplePoint[];
           setIssRouteOverlay(routePoints.length > 0 || alignedPoints.length > 0
             ? { routePoints, alignedPoints, samplePoints }
             : null);
@@ -478,6 +484,7 @@ export function SimulationPanel({
         scene: requestSceneId,
         pixelSizeM: issUnetParams.pixelSizeM,
         applyBuildingMask: issUnetParams.apply_building_mask,
+        filterNoise: issUnetParams.filterNoise,
         gpsFile: issUnetParams.gpsFile,
         noiseFile: issUnetParams.noiseFile,
         devices: getCurrentDevicePayload(sceneFrame),
@@ -658,6 +665,14 @@ export function SimulationPanel({
                         onChange={file => setIssUnetParams(p => ({ ...p, noiseFile: file }))}
                       />
                       <div />
+                      <Label>Noise Filter (&gt;= -1 dB)</Label>
+                      <ToggleSwitch
+                        ariaLabel="Noise Filter (>= -1 dB)"
+                        checked={issUnetParams.filterNoise}
+                        onChange={v => setIssUnetParams(p => ({ ...p, filterNoise: v }))}
+                      />
+                      <div />
+                      <Hint>{issUnetParams.filterNoise ? 'Only values below -1 dB are used.' : 'Legacy numeric Noise values are used.'}</Hint>
                       <Hint>Noise 會依據時間序與 GPS 採樣點對齊。</Hint>
                     </>
                   )}
@@ -1117,6 +1132,7 @@ function ISSUNetResultView({
           fontSize: 12,
         }}>
           <div>Aligned Noise: {String(metrics.aligned_noise ?? '-')}</div>
+          <div>Filtered Noise: {String(metrics.filtered_noise ?? '-')}</div>
           <div>Skipped Noise: {String(metrics.skipped_noise ?? '-')}</div>
           <div>Used Samples: {String(metrics.used_samples ?? '-')}</div>
           <div>Sparse Samples: {String(metrics.sparse_samples ?? '-')}</div>

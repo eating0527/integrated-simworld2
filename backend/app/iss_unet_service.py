@@ -915,6 +915,7 @@ def _build_iss_unet_artifacts(
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
     pixel_size_m: float = 4.0,
+    filter_noise: bool = True,
 ) -> ISSUNetArtifacts:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
@@ -971,6 +972,7 @@ def _build_iss_unet_artifacts(
             gps_points=gps_points,
             noise_points=noise_points,
             apply_building_mask=apply_building_mask,
+            filter_noise=filter_noise,
         )
         inputs = route_sample.inputs
         sparse_mask = route_sample.sparse_mask
@@ -1037,6 +1039,7 @@ def reconstruct_iss_unet(
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
     pixel_size_m: float = 4.0,
+    filter_noise: bool = True,
 ) -> dict[str, Any]:
     artifacts = _build_iss_unet_artifacts(
         scene=scene,
@@ -1052,6 +1055,7 @@ def reconstruct_iss_unet(
         devices=devices,
         scene_xml_path=scene_xml_path,
         pixel_size_m=pixel_size_m,
+        filter_noise=filter_noise,
     )
     dataset = artifacts.dataset
     mode = artifacts.mode
@@ -1122,6 +1126,7 @@ def reconstruct_iss_unet(
         "metrics": metrics,
         "options": {
             "apply_building_mask": apply_building_mask,
+            "filter_noise": filter_noise,
             "pixel_size_m": dataset.pixel_size_m,
             "grid_res": dataset.grid_res,
         },

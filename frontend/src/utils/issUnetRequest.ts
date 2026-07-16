@@ -16,6 +16,7 @@ interface BuildIssUnetUploadFormDataParams {
   pixelSizeM: number;
   cfarEnabled: boolean;
   applyBuildingMask: boolean;
+  filterNoise: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
   devices: DevicePayload[];
@@ -25,6 +26,7 @@ interface BuildIssUnetStatisticsFormDataParams {
   scene: string;
   pixelSizeM: number;
   applyBuildingMask: boolean;
+  filterNoise: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
   devices: DevicePayload[];
@@ -57,6 +59,7 @@ export function buildIssUnetUploadFormData({
   pixelSizeM,
   cfarEnabled,
   applyBuildingMask,
+  filterNoise,
   gpsFile,
   noiseFile,
   devices,
@@ -69,6 +72,7 @@ export function buildIssUnetUploadFormData({
   form.append('seed', '41');
   form.append('cfar_enabled', String(cfarEnabled));
   form.append('apply_building_mask', String(applyBuildingMask));
+  form.append('filter_noise', String(filterNoise));
   form.append('devices_json', JSON.stringify(devices));
   if (gpsFile) {
     form.append('gps_file', gpsFile);
@@ -83,6 +87,7 @@ export function buildIssUnetStatisticsFormData({
   scene,
   pixelSizeM,
   applyBuildingMask,
+  filterNoise,
   gpsFile,
   noiseFile,
   devices,
@@ -91,6 +96,7 @@ export function buildIssUnetStatisticsFormData({
   form.append('scene', scene);
   form.append('pixel_size_m', String(pixelSizeM));
   form.append('apply_building_mask', String(applyBuildingMask));
+  form.append('filter_noise', String(filterNoise));
   form.append('devices_json', JSON.stringify(devices));
   if (gpsFile) {
     form.append('gps_file', gpsFile);

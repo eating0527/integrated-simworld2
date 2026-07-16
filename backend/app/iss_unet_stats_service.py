@@ -268,6 +268,7 @@ def generate_gpsn_statistics(
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
     pixel_size_m: float = 4.0,
+    filter_noise: bool = True,
 ) -> dict[str, Any]:
     if mode != "gps_n":
         raise ValueError("statistics generation only supports gps_n mode")
@@ -285,6 +286,7 @@ def generate_gpsn_statistics(
         devices=devices,
         scene_xml_path=scene_xml_path,
         pixel_size_m=pixel_size_m,
+        filter_noise=filter_noise,
     )
     rows = build_gpsn_statistics_rows(artifacts)
     image_path = save_statistics_table_png(artifacts.dataset.scene, rows, grid_res=artifacts.dataset.grid_res)
