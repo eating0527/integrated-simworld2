@@ -1101,6 +1101,7 @@ class ISSUNetServiceTests(unittest.TestCase):
             reconstructed_iss=reconstructed,
             real_metrics={
                 "aligned_noise": 3,
+                "filtered_noise": 1,
                 "skipped_noise": 1,
                 "out_of_bounds": 0,
                 "indoor_filtered": 1,
@@ -1129,6 +1130,8 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["variable"], "GPS/Noise 時間對齊率")
         self.assertEqual(rows[3]["variable"], "採樣點地圖覆蓋率")
         self.assertTrue(rows[0]["value"].endswith("%"))
+        self.assertEqual(rows[0]["value"], "66.67%")
+        self.assertEqual(rows[1]["value"], "50.00%")
         self.assertIn("室外地圖", rows[3]["meaning"])
         self.assertEqual(rows[-1]["variable"], "CFAR 熱點定位誤差")
 

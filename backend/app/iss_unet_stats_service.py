@@ -88,6 +88,8 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
 
     metrics = artifacts.real_metrics
     aligned_noise = float(metrics.get("aligned_noise") or 0)
+    filtered_noise = float(metrics.get("filtered_noise") or 0)
+    usable_noise = max(0.0, aligned_noise - filtered_noise)
     skipped_noise = float(metrics.get("skipped_noise") or 0)
     out_of_bounds = float(metrics.get("out_of_bounds") or 0)
     indoor_filtered = float(metrics.get("indoor_filtered") or 0)
@@ -113,12 +115,12 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
     return [
         {
             "variable": "GPS/Noise 時間對齊率",
-            "value": _format_percent(_safe_divide(aligned_noise, aligned_noise + skipped_noise)),
+            "value": _format_percent(_safe_divide(usable_noise, usable_noise + skipped_noise)),
             "meaning": "干擾採樣與座標資料的時間同步品質",
         },
         {
             "variable": "有效量測率",
-            "value": _format_percent(_safe_divide(aligned_noise - out_of_bounds - indoor_filtered, aligned_noise)),
+            "value": _format_percent(_safe_divide(usable_noise - out_of_bounds - indoor_filtered, usable_noise)),
             "meaning": "干擾採樣成功落在虛擬場景有效區域的比例",
         },
         {
@@ -290,9 +292,12 @@ def generate_gpsn_statistics(
     )
     rows = build_gpsn_statistics_rows(artifacts)
     image_path = save_statistics_table_png(artifacts.dataset.scene, rows, grid_res=artifacts.dataset.grid_res)
+    metrics = artifacts.real_metrics
     return {
         "scene": artifacts.dataset.scene,
         "mode": "gps_n",
+        "metrics": metrics,
+        "options": {"filter_noise": filter_noise},
         "statistics": {"rows": rows},
         "images": {"statistics": result_image_url(image_path.name, artifacts.dataset.scene)},
         "files": {"statistics_png": str(image_path)},

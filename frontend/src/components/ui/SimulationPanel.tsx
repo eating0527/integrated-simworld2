@@ -426,9 +426,7 @@ export function SimulationPanel({
           const routePoints = Array.isArray(route.all_points) ? route.all_points as ISSRoutePoint[] : [];
           const alignedPoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSRoutePoint[] : [];
           const sparsePoints = Array.isArray(route.sparse_points) ? route.sparse_points as ISSSamplePoint[] : [];
-          const samplePoints = sparsePoints.length > 0
-            ? sparsePoints
-            : alignedPoints.filter(point => typeof point.noise_floor_db === 'number' && Number.isFinite(point.noise_floor_db)) as ISSSamplePoint[];
+          const samplePoints = sparsePoints;
           setIssRouteOverlay(routePoints.length > 0 || alignedPoints.length > 0
             ? { routePoints, alignedPoints, samplePoints }
             : null);

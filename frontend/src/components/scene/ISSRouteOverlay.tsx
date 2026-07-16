@@ -75,7 +75,7 @@ export function ISSRouteOverlay({ overlay }: { overlay: ISSRouteOverlayConfig })
         </mesh>
       ))}
       {emptyMarkers.map(({ point, index, position }) => (
-        <mesh key={`${point.time_stamp ?? 'empty'}:${index}`} position={position}>
+        <mesh key={`${point.time_stamp ?? 'empty'}:${index}`} position={position} rotation={[Math.PI / 2, 0, 0]}>
           <ringGeometry args={[2.2, 2.8, 16]} />
           <meshBasicMaterial color="#ffffff" transparent opacity={0.95} depthWrite={false} />
         </mesh>

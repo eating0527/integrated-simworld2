@@ -60,7 +60,7 @@ function successfulIssUnetResponse() {
         aligned_points: [
           routePoint(2, 2, 1, { noise_floor_db: -80 }),
         ],
-        sparse_points: [],
+        sparse_points: [routePoint(2, 2, 1, { noise_floor_db: -80, used_in_sparse: true })],
       },
       overlay: {
         kind: 'reconstructed_iss',
