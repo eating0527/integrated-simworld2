@@ -467,6 +467,8 @@ class ISSUNetServiceTests(unittest.TestCase):
                 "2026-05-27T12:00:01.100Z,-1.0",
                 "2026-05-27T12:00:02.100Z,",
                 "not-a-time,-3.0",
+                "inf,-3.0",
+                "2026-05-27T12:00:10Z,-1.0",
             ]
         )
         arrays = {
@@ -488,7 +490,7 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual([point["noise_floor_db"] for point in result.aligned_points], [-2.0, None, None])
         self.assertEqual(len(result.sparse_points), 1)
         self.assertEqual(result.metrics["filtered_noise"], 2)
-        self.assertEqual(result.metrics["skipped_noise"], 1)
+        self.assertEqual(result.metrics["skipped_noise"], 3)
         self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-2.0])
 
     def test_gps_noise_filter_can_be_disabled_for_legacy_numeric_values(self):

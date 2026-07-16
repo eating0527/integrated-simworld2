@@ -143,7 +143,7 @@ def parse_noise_csv(source: Path | str | bytes | TextIO) -> list[NoisePoint]:
     for row in rows:
         try:
             time_stamp = _parse_time(row.get("time_stamp", ""))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError, OSError):
             time_stamp = None
         try:
             noise_floor_db = float(row.get("noise_floor_db", ""))
@@ -195,19 +195,16 @@ def align_noise_to_gps(
 def _prepare_noise_points(
     noise_points: list[NoisePoint],
     filter_noise: bool,
-) -> tuple[list[NoisePoint], int]:
+) -> list[NoisePoint]:
     prepared: list[NoisePoint] = []
-    filtered = 0
     for point in noise_points:
         value = point.noise_floor_db
         invalid = value is None or not math.isfinite(value) or (filter_noise and value >= -1.0)
         if invalid:
-            if point.time_stamp is not None:
-                filtered += 1
             prepared.append(replace(point, noise_floor_db=None))
         else:
             prepared.append(point)
-    return prepared, filtered
+    return prepared
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -308,9 +305,9 @@ def create_route_sparse_sample(
     if mode == "gps_n" and noise_points is None:
         noise_points = parse_noise_csv(SAMPLE_NOISE_PATH)
     if mode == "gps_n":
-        noise_points, filtered_noise = _prepare_noise_points(noise_points or [], filter_noise)
+        noise_points = _prepare_noise_points(noise_points or [], filter_noise)
     else:
-        filtered_noise = 0
+        noise_points = noise_points or []
 
     frame = resolve_scene_frame(dataset)
 
@@ -327,6 +324,7 @@ def create_route_sparse_sample(
     projected_route_points: list[dict[str, Any]] = []
     projected_aligned_points: list[dict[str, Any]] = []
     projected_sparse_points: list[dict[str, Any]] = []
+    filtered_noise = 0
 
     for gps_point in gps_points:
         projected_route_points.append(_route_point_payload(gps_point, frame))
@@ -334,6 +332,8 @@ def create_route_sparse_sample(
     for point in route_points:
         grid, _enu = _latlon_to_grid(point, frame)
         payload = _route_point_payload(point, frame)
+        if isinstance(point, AlignedNoisePoint) and point.noise_floor_db is None:
+            filtered_noise += 1
         if not grid.inside_extent or grid.row is None or grid.col is None:
             out_of_bounds += 1
             continue
