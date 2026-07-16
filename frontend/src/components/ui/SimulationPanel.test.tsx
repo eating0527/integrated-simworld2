@@ -323,7 +323,7 @@ describe('SimulationPanel UI', () => {
       cfar: { enabled: true },
     });
 
-    await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
+    await user.click(screen.getByRole('button', { name: 'Noise + GPS' }));
     expect(screen.getByText('GPS CSV')).toBeInTheDocument();
     expect(screen.getByText('Noise CSV')).toBeInTheDocument();
     const noiseFilter = screen.getByRole('checkbox', { name: 'Noise Filter (>= -1 dB)' });
@@ -464,7 +464,7 @@ describe('SimulationPanel UI', () => {
     await restorePanel(user);
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
-    await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
+    await user.click(screen.getByRole('button', { name: 'Noise + GPS' }));
     await runCurrentTab(user);
 
     await waitFor(() => expect(onRouteOverlayChange).toHaveBeenCalledWith(
@@ -594,7 +594,7 @@ describe('SimulationPanel UI', () => {
     const user = await openPanel();
 
     await user.click(screen.getByRole('button', { name: 'ISS_UNET' }));
-    await user.click(screen.getByRole('button', { name: 'Noise with GPS' }));
+    await user.click(screen.getByRole('button', { name: 'Noise + GPS' }));
     await user.click(screen.getByRole('button', { name: '產生統計資料' }));
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(

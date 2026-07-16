@@ -632,7 +632,7 @@ export function SimulationPanel({
                     options={[
                       { value: 'sim', label: 'Sim' },
                       { value: 'gps', label: 'GPS' },
-                      { value: 'gps_n', label: 'Noise with GPS' },
+                      { value: 'gps_n', label: 'Noise + GPS' },
                     ]}
                     onChange={mode => setIssUnetParams(p => ({ ...p, mode }))}
                   />
@@ -662,16 +662,14 @@ export function SimulationPanel({
                         file={issUnetParams.noiseFile}
                         onChange={file => setIssUnetParams(p => ({ ...p, noiseFile: file }))}
                       />
-                      <div />
-                      <Label>Noise Filter (&gt;= -1 dB)</Label>
+                      <Label>Noise Filter</Label>
                       <ToggleSwitch
                         ariaLabel="Noise Filter (>= -1 dB)"
                         checked={issUnetParams.filterNoise}
                         onChange={v => setIssUnetParams(p => ({ ...p, filterNoise: v }))}
                       />
                       <div />
-                      <Hint>{issUnetParams.filterNoise ? 'Only values below -1 dB are used.' : 'Legacy numeric Noise values are used.'}</Hint>
-                      <Hint>Noise 會依據時間序與 GPS 採樣點對齊。</Hint>
+                      <Hint>{issUnetParams.filterNoise ? '僅計算 < -1 dB。' : '不套用 -1 dB 門檻。'}</Hint>
                     </>
                   )}
                   <Label>OS-CFAR</Label>
