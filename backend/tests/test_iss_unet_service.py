@@ -458,6 +458,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                 "2026-05-27T12:00:00Z,24.0,121.0,0",
                 "2026-05-27T12:00:01Z,24.0000359324461,121.000039446262,0",
                 "2026-05-27T12:00:02Z,24.0000718648922,121.000078892524,0",
+                "2026-05-27T12:00:03Z,25.0,122.0,0",
             ]
         )
         noise_csv = "\n".join(
@@ -469,6 +470,7 @@ class ISSUNetServiceTests(unittest.TestCase):
                 "not-a-time,-3.0",
                 "inf,-3.0",
                 "2026-05-27T12:00:10Z,-1.0",
+                "2026-05-27T12:00:03.100Z,-1.0",
             ]
         )
         arrays = {
@@ -489,9 +491,10 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(len(result.aligned_points), 3)
         self.assertEqual([point["noise_floor_db"] for point in result.aligned_points], [-2.0, None, None])
         self.assertEqual(len(result.sparse_points), 1)
-        self.assertEqual(result.metrics["filtered_noise"], 3)
+        self.assertEqual(result.metrics["filtered_noise"], 4)
         self.assertEqual(result.metrics["skipped_noise"], 2)
         self.assertEqual(result.metrics["usable_noise"], 1)
+        self.assertEqual(result.metrics["out_of_bounds"], 0)
         self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-2.0])
 
     def test_gps_noise_filter_can_be_disabled_for_legacy_numeric_values(self):

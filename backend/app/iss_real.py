@@ -346,13 +346,15 @@ def create_route_sparse_sample(
     for point in route_points:
         grid, _enu = _latlon_to_grid(point, frame)
         payload = _route_point_payload(point, frame)
+        is_empty_noise = isinstance(point, AlignedNoisePoint) and point.noise_floor_db is None
         if not grid.inside_extent or grid.row is None or grid.col is None:
-            out_of_bounds += 1
+            if not is_empty_noise:
+                out_of_bounds += 1
             continue
         row, col = grid.row, grid.col
         if isinstance(point, AlignedNoisePoint):
             projected_aligned_points.append(payload)
-            if point.noise_floor_db is None:
+            if is_empty_noise:
                 continue
         if apply_building_mask and outdoor_mask[row, col] < 0.5:
             indoor_filtered += 1
