@@ -489,8 +489,9 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(len(result.aligned_points), 3)
         self.assertEqual([point["noise_floor_db"] for point in result.aligned_points], [-2.0, None, None])
         self.assertEqual(len(result.sparse_points), 1)
-        self.assertEqual(result.metrics["filtered_noise"], 2)
-        self.assertEqual(result.metrics["skipped_noise"], 3)
+        self.assertEqual(result.metrics["filtered_noise"], 3)
+        self.assertEqual(result.metrics["skipped_noise"], 2)
+        self.assertEqual(result.metrics["usable_noise"], 1)
         self.assertEqual(result.metrics["valid_projected_noise_dbm"], [-2.0])
 
     def test_gps_noise_filter_can_be_disabled_for_legacy_numeric_values(self):
@@ -1103,7 +1104,8 @@ class ISSUNetServiceTests(unittest.TestCase):
             reconstructed_iss=reconstructed,
             real_metrics={
                 "aligned_noise": 3,
-                "filtered_noise": 1,
+                "filtered_noise": 2,
+                "usable_noise": 2,
                 "skipped_noise": 1,
                 "out_of_bounds": 0,
                 "indoor_filtered": 1,
@@ -1254,6 +1256,26 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(captured["noise_csv"], noise_bytes)
         self.assertEqual(captured["filter_noise"], False)
         self.assertEqual(response["statistics"]["rows"][0]["variable"], "採樣點地圖覆蓋率")
+
+    def test_gpsn_statistics_returns_metrics_and_filter_option(self):
+        from app import iss_unet_stats_service
+
+        artifacts = types.SimpleNamespace(
+            dataset=types.SimpleNamespace(scene="NTPU", grid_res=128),
+            real_metrics={"aligned_noise": 1, "usable_noise": 1},
+        )
+        image_path = self.root / "statistics.png"
+        with patch.object(iss_unet_stats_service, "_build_iss_unet_artifacts", return_value=artifacts):
+            with patch.object(iss_unet_stats_service, "build_gpsn_statistics_rows", return_value=[]):
+                with patch.object(iss_unet_stats_service, "save_statistics_table_png", return_value=image_path):
+                    result = iss_unet_stats_service.generate_gpsn_statistics(
+                        scene="NTPU",
+                        device="cpu",
+                        filter_noise=False,
+                    )
+
+        self.assertEqual(result["metrics"], artifacts.real_metrics)
+        self.assertEqual(result["options"], {"filter_noise": False})
 
     def test_single_input_unet_accepts_three_channels(self):
         import torch

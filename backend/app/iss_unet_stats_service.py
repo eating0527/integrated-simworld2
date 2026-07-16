@@ -89,7 +89,12 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
     metrics = artifacts.real_metrics
     aligned_noise = float(metrics.get("aligned_noise") or 0)
     filtered_noise = float(metrics.get("filtered_noise") or 0)
-    usable_noise = max(0.0, aligned_noise - filtered_noise)
+    usable_noise_value = metrics.get("usable_noise")
+    usable_noise = (
+        float(usable_noise_value)
+        if usable_noise_value is not None
+        else max(0.0, aligned_noise - filtered_noise)
+    )
     skipped_noise = float(metrics.get("skipped_noise") or 0)
     out_of_bounds = float(metrics.get("out_of_bounds") or 0)
     indoor_filtered = float(metrics.get("indoor_filtered") or 0)

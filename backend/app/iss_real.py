@@ -41,6 +41,7 @@ class NoisePoint:
     time_stamp: datetime | None
     noise_floor_db: float | None
     raw_columns: set[str] = field(default_factory=set)
+    filtered: bool = False
 
 
 @dataclass(frozen=True)
@@ -171,11 +172,13 @@ def align_noise_to_gps(
         while gps_index + 1 < len(gps_sorted) and gps_sorted[gps_index + 1].time_stamp <= noise.time_stamp:
             gps_index += 1
         if not gps_sorted or gps_sorted[gps_index].time_stamp > noise.time_stamp:
-            skipped += 1
+            if not noise.filtered:
+                skipped += 1
             continue
         delta = (noise.time_stamp - gps_sorted[gps_index].time_stamp).total_seconds()
         if delta >= 1.0:
-            skipped += 1
+            if not noise.filtered:
+                skipped += 1
             continue
         gps = gps_sorted[gps_index]
         aligned.append(
@@ -201,7 +204,13 @@ def _prepare_noise_points(
         value = point.noise_floor_db
         invalid = value is None or not math.isfinite(value) or (filter_noise and value >= -1.0)
         if invalid:
-            prepared.append(replace(point, noise_floor_db=None))
+            prepared.append(
+                replace(
+                    point,
+                    noise_floor_db=None,
+                    filtered=point.time_stamp is not None,
+                )
+            )
         else:
             prepared.append(point)
     return prepared
@@ -324,7 +333,12 @@ def create_route_sparse_sample(
     projected_route_points: list[dict[str, Any]] = []
     projected_aligned_points: list[dict[str, Any]] = []
     projected_sparse_points: list[dict[str, Any]] = []
-    filtered_noise = 0
+    filtered_noise = sum(1 for point in noise_points if point.filtered) if mode == "gps_n" else 0
+    usable_noise = sum(
+        1
+        for point in route_points
+        if isinstance(point, AlignedNoisePoint) and point.noise_floor_db is not None
+    )
 
     for gps_point in gps_points:
         projected_route_points.append(_route_point_payload(gps_point, frame))
@@ -332,8 +346,6 @@ def create_route_sparse_sample(
     for point in route_points:
         grid, _enu = _latlon_to_grid(point, frame)
         payload = _route_point_payload(point, frame)
-        if isinstance(point, AlignedNoisePoint) and point.noise_floor_db is None:
-            filtered_noise += 1
         if not grid.inside_extent or grid.row is None or grid.col is None:
             out_of_bounds += 1
             continue
@@ -376,6 +388,7 @@ def create_route_sparse_sample(
         "route_points": len(gps_points),
         "used_samples": int(sparse_mask.sum()),
         "aligned_noise": aligned_noise,
+        "usable_noise": usable_noise,
         "skipped_noise": skipped_noise,
         "filtered_noise": filtered_noise,
         "sample_used": sample_used,
