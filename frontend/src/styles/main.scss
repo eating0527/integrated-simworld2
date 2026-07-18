@@ -506,6 +506,28 @@ canvas {
   letter-spacing: 0.05em;
 }
 
+.dp-section-actions,
+.dp-model-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dp-model-toggle {
+  min-height: 44px;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+
+  input {
+    width: 40px;
+    height: 22px;
+    margin: 0;
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+  }
+}
+
 .dp-btn-add {
   font-size: 11px;
   padding: 2px 8px;

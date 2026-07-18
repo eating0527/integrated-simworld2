@@ -225,7 +225,11 @@ function Section({
     applyDeviceDefault,
     zeroDevice,
     deviceDefaults,
+    modelVisible,
+    setModelVisible,
   } = useDeviceStore();
+  const visible = modelVisible[role];
+  const roleLabel = role === 'jammer' ? 'Jam' : role.toUpperCase();
 
   const handleApplyPosition = (device: Device, position: Position) => {
     updateDevice(device.id, { x: position[0], y: position[1], z: position[2] });
@@ -249,7 +253,19 @@ function Section({
     <div className="dp-section">
       <div className="dp-section-header">
         <span className="dp-section-title">{title}</span>
-        {canAdd && <button className="dp-btn-add" onClick={() => addDevice(role)}>+ 新增</button>}
+        <div className="dp-section-actions">
+          <label className="dp-model-toggle">
+            <span>3D</span>
+            <input
+              type="checkbox"
+              role="switch"
+              aria-label={`顯示 ${roleLabel} 3D 模型`}
+              checked={visible}
+              onChange={(event) => setModelVisible(role, event.target.checked)}
+            />
+          </label>
+          {canAdd && <button className="dp-btn-add" onClick={() => addDevice(role)}>+ 新增</button>}
+        </div>
       </div>
       {devices.map((device) => (
         <DeviceRow

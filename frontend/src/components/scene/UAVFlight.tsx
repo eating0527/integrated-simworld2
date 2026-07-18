@@ -34,6 +34,7 @@ export interface UAVFlightProps {
     onPositionUpdate?: (position: [number, number, number]) => void
     uavAnimation: boolean
     modelUrl?: string
+    visible?: boolean
 }
 
 export default function UAVFlight({
@@ -45,6 +46,7 @@ export default function UAVFlight({
     onPositionUpdate,
     uavAnimation,
     modelUrl,
+    visible = true,
 }: UAVFlightProps) {
     const group = useRef<THREE.Group>(null)
     const lightRef = useRef<THREE.PointLight>(null)
@@ -613,7 +615,7 @@ export default function UAVFlight({
     }, [manualDirection, auto, onManualMoveDone, onPositionUpdate, throttleInterval])
 
     return (
-        <group ref={group} position={position} scale={scale}>
+        <group ref={group} position={position} scale={scale} visible={visible}>
             <primitive object={clonedScene} />
             <pointLight
                 ref={lightRef}

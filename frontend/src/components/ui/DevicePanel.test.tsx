@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDeviceStore } from '../../store/useDeviceStore';
 import { createSceneFrame } from '../../types/sceneFrame';
+import { getCurrentDevicePayload } from '../../utils/devicePayload';
 import { enuToGps, enuToThree, gpsToEnu, threeToEnu } from '../../utils/geo';
 import { DevicePanel } from './DevicePanel';
 
@@ -55,7 +56,29 @@ function getDevice(id: string) {
 }
 
 beforeEach(() => {
-  useDeviceStore.setState({ devices });
+  useDeviceStore.setState({
+    devices,
+    modelVisible: { tx: true, rx: true, jammer: true },
+  });
+});
+
+describe('DevicePanel 3D visibility', () => {
+  it.each([
+    ['TX', 'tx'],
+    ['RX', 'rx'],
+    ['Jam', 'jammer'],
+  ] as const)('toggles every %s model without removing simulation devices', async (label, role) => {
+    renderPanel();
+    const user = await openPanel();
+    const before = getCurrentDevicePayload(frame);
+    const toggle = screen.getByRole('switch', { name: `顯示 ${label} 3D 模型` });
+
+    await user.click(toggle);
+
+    expect(toggle).not.toBeChecked();
+    expect(useDeviceStore.getState().modelVisible[role]).toBe(false);
+    expect(getCurrentDevicePayload(frame)).toEqual(before);
+  });
 });
 
 describe('DevicePanel coordinate modes', () => {
