@@ -1,4 +1,4 @@
-﻿import { Component, Suspense, useState, type ErrorInfo, type ReactNode } from 'react';
+﻿import { Component, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Canvas } from '@react-three/fiber';
 import {
   OrbitControls,
@@ -21,7 +21,7 @@ import UAVFlight, { UAVManualDirection } from './UAVFlight';
 import { CFARBeaconMarker } from './CFARBeaconMarker';
 import type { CFARBeacon } from '../../types/cfar';
 import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from '../../types/heatmap';
-import { ISSHeatmapOverlay } from './ISSHeatmapOverlay';
+import { ISSHeatmapOverlay, type ISSHeatmapOverlayStatus } from './ISSHeatmapOverlay';
 import { ISSRouteOverlay } from './ISSRouteOverlay';
 
 function Loader({ label }: { label: string }) {
@@ -131,6 +131,33 @@ export function MainScene({
   const modelVisible = useDeviceStore((s) => s.modelVisible);
   const txDevices = devices.filter((d) => d.role === 'tx');
   const jammerDevices = devices.filter((d) => d.role === 'jammer');
+  const [heatmapStatus, setHeatmapStatus] = useState<ISSHeatmapOverlayStatus | null>(null);
+  const [heatmapRetryKey, setHeatmapRetryKey] = useState(0);
+
+  useEffect(() => {
+    setHeatmapStatus(heatmapOverlay ? 'loading' : null);
+    setHeatmapRetryKey(0);
+  }, [heatmapOverlay?.url]);
+
+  const sceneStatus = heatmapOverlay && heatmapStatus && heatmapStatus !== 'ready' ? (
+    <div
+      role={heatmapStatus === 'error' ? 'alert' : undefined}
+      style={{
+        position: 'absolute', top: 12, left: 12, zIndex: 2, color: '#fff',
+        background: 'rgba(0, 0, 0, 0.72)', padding: '8px 12px', borderRadius: 6,
+        fontSize: 12,
+      }}
+    >
+      {heatmapStatus === 'loading' && 'Loading ISS heatmap…'}
+      {heatmapStatus === 'empty' && 'ISS heatmap is empty.'}
+      {heatmapStatus === 'error' && (
+        <>
+          <span>ISS heatmap failed to load.</span>{' '}
+          <button type="button" onClick={() => setHeatmapRetryKey((key) => key + 1)}>Retry</button>
+        </>
+      )}
+    </div>
+  ) : null;
 
   return (
     <div style={{
@@ -140,6 +167,7 @@ export function MainScene({
       background: 'radial-gradient(ellipse at bottom, #1b2735 0%, #090a0f 100%)',
       overflow: 'hidden',
     }}>
+      {sceneStatus}
       <Canvas
         shadows
         gl={{
@@ -197,7 +225,13 @@ export function MainScene({
         </SceneErrorBoundary>
 
         <Suspense fallback={null}>
-          {heatmapOverlay && <ISSHeatmapOverlay overlay={heatmapOverlay} />}
+          {heatmapOverlay && (
+            <ISSHeatmapOverlay
+              overlay={heatmapOverlay}
+              retryKey={heatmapRetryKey}
+              onStatusChange={setHeatmapStatus}
+            />
+          )}
           {issRouteOverlay && <ISSRouteOverlay overlay={issRouteOverlay} />}
           <UAVFlight
             position={uavPosition}

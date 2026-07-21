@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MainScene } from './MainScene';
@@ -53,9 +53,10 @@ vi.mock('./UAVFlight', () => ({
 }));
 vi.mock('./CFARBeaconMarker', () => ({ CFARBeaconMarker: () => null }));
 vi.mock('./ISSHeatmapOverlay', () => ({
-  ISSHeatmapOverlay: ({ overlay }: { overlay: { url: string } }) => (
-    <div data-testid="heatmap-overlay">{overlay.url}</div>
-  ),
+  ISSHeatmapOverlay: ({ overlay, onStatusChange }: { overlay: { url: string }; onStatusChange?: (status: string) => void }) => {
+    useEffect(() => onStatusChange?.('ready'), [onStatusChange]);
+    return <div data-testid="heatmap-overlay">{overlay.url}</div>;
+  },
 }));
 vi.mock('./ISSRouteOverlay', () => ({
   ISSRouteOverlay: ({ overlay }: { overlay: { routeMode: string } }) => (
