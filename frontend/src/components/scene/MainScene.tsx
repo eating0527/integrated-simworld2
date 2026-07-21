@@ -1,9 +1,10 @@
-﻿import { Suspense } from 'react';
+﻿import { Component, Suspense, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Canvas } from '@react-three/fiber';
 import {
   OrbitControls,
   PerspectiveCamera,
   Html,
+  useGLTF,
 } from '@react-three/drei';
 import { ACESFilmicToneMapping } from 'three';
 import { NTPUScene } from './NTPUScene';
@@ -37,6 +38,51 @@ function Loader({ label }: { label: string }) {
       </div>
     </Html>
   );
+}
+
+function SceneLoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Html center>
+      <div role="alert" style={{
+        minWidth: '240px',
+        padding: '16px 20px',
+        color: 'white',
+        textAlign: 'center',
+        background: 'rgba(8, 12, 28, 0.94)',
+        border: '1px solid rgba(255, 77, 106, 0.5)',
+        borderRadius: '8px',
+      }}>
+        <div style={{ marginBottom: '12px' }}>場景載入失敗</div>
+        <button type="button" onClick={onRetry}>重試</button>
+      </div>
+    </Html>
+  );
+}
+
+interface SceneErrorBoundaryProps {
+  children: ReactNode;
+  onRetry: () => void;
+}
+
+interface SceneErrorBoundaryState {
+  hasError: boolean;
+}
+
+class SceneErrorBoundary extends Component<SceneErrorBoundaryProps, SceneErrorBoundaryState> {
+  state: SceneErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): SceneErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Scene asset failed to load', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) return <SceneLoadError onRetry={this.props.onRetry} />;
+    return this.props.children;
+  }
 }
 
 interface MainSceneProps {
@@ -74,6 +120,12 @@ export function MainScene({
 }: MainSceneProps) {
   const sceneDef = getSceneById(sceneId);
   const cfg = sceneDef.config;
+  const sceneAssetPath = generatedSceneModelPath ?? cfg.scene.modelPath;
+  const [sceneRetry, setSceneRetry] = useState(0);
+  const retryScene = () => {
+    useGLTF.clear(sceneAssetPath);
+    setSceneRetry(value => value + 1);
+  };
 
   const devices = useDeviceStore((s) => s.devices);
   const modelVisible = useDeviceStore((s) => s.modelVisible);
@@ -132,15 +184,17 @@ export function MainScene({
           shadow-radius={8}
         />
 
-        <Suspense fallback={<Loader label={generatedSceneModelPath ? 'Generated' : sceneDef.labelEn} />}>
-          {generatedSceneModelPath ? (
-            <DynamicScene modelPath={generatedSceneModelPath} />
-          ) : sceneId === 'nycu' ? (
-            <NYCUScene />
-          ) : (
-            <NTPUScene />
-          )}
-        </Suspense>
+        <SceneErrorBoundary key={`${sceneAssetPath}:${sceneRetry}`} onRetry={retryScene}>
+          <Suspense fallback={<Loader label={generatedSceneModelPath ? 'Generated' : sceneDef.labelEn} />}>
+            {generatedSceneModelPath ? (
+              <DynamicScene modelPath={generatedSceneModelPath} />
+            ) : sceneId === 'nycu' ? (
+              <NYCUScene />
+            ) : (
+              <NTPUScene />
+            )}
+          </Suspense>
+        </SceneErrorBoundary>
 
         <Suspense fallback={null}>
           {heatmapOverlay && <ISSHeatmapOverlay overlay={heatmapOverlay} />}

@@ -8,8 +8,8 @@ function renderWorkspace() {
   return render(
     <Workspace
       top={<div>場景列</div>}
-      left={<div>左側內容</div>}
-      right={<div>右側內容</div>}
+      left={<><button type="button">左側第一項</button><button type="button">左側最後項</button></>}
+      right={<><button type="button">右側第一項</button><button type="button">右側最後項</button></>}
     >
       <div>3D 場景</div>
     </Workspace>,
@@ -126,6 +126,42 @@ describe('Workspace', () => {
     } finally {
       window.removeEventListener('keydown', preventEscape);
     }
+  });
+
+  it('opens the mobile rail as a focus-trapped dialog and restores focus on Escape', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    const trigger = screen.getByRole('button', { name: '開啟左側工作區' });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: '左側工作區' });
+    const first = within(dialog).getByRole('button', { name: '左側第一項' });
+    const last = within(dialog).getByRole('button', { name: '左側最後項' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(first).toHaveFocus();
+
+    last.focus();
+    await user.tab();
+    expect(first).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(last).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: '左側工作區' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '開啟左側工作區' })).toHaveFocus();
+  });
+
+  it('restores focus after closing a mobile drawer from its backdrop', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    const trigger = screen.getByRole('button', { name: '開啟右側工作區' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: '關閉側欄' }));
+
+    expect(trigger).toHaveFocus();
   });
 
   it('closes the mobile drawer from its backdrop', async () => {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MainScene } from './MainScene';
 
 const storeState = vi.hoisted(() => ({
@@ -11,6 +12,14 @@ const storeState = vi.hoisted(() => ({
   modelVisible: { tx: true, rx: true, jammer: true },
 }));
 
+const sceneMocks = vi.hoisted(() => ({
+  clear: vi.fn(() => {
+    sceneMocks.failDynamic = false;
+  }),
+  dynamicAttempts: 0,
+  failDynamic: false,
+}));
+
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { children: ReactNode }) => <div data-testid="canvas">{children}</div>,
 }));
@@ -19,11 +28,18 @@ vi.mock('@react-three/drei', () => ({
   OrbitControls: () => null,
   PerspectiveCamera: () => null,
   Html: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useGLTF: { clear: sceneMocks.clear },
 }));
 
 vi.mock('./NTPUScene', () => ({ NTPUScene: () => null }));
 vi.mock('./NYCUScene', () => ({ NYCUScene: () => null }));
-vi.mock('./DynamicScene', () => ({ DynamicScene: () => null }));
+vi.mock('./DynamicScene', () => ({
+  DynamicScene: () => {
+    sceneMocks.dynamicAttempts += 1;
+    if (sceneMocks.failDynamic) throw new Error('GLB failed');
+    return <div data-testid="dynamic-scene" />;
+  },
+}));
 vi.mock('./UAVPath', () => ({ UAVPath: () => null }));
 vi.mock('./UAV', () => ({ UAV: () => null }));
 vi.mock('../ui/Starfield', () => ({ Starfield: () => null }));
@@ -52,6 +68,9 @@ vi.mock('../../store/useDeviceStore', () => ({
 
 beforeEach(() => {
   storeState.modelVisible = { tx: true, rx: true, jammer: true };
+  sceneMocks.clear.mockClear();
+  sceneMocks.dynamicAttempts = 0;
+  sceneMocks.failDynamic = false;
 });
 
 describe('MainScene device visibility', () => {
@@ -75,6 +94,27 @@ describe('MainScene device visibility', () => {
     render(<MainScene />);
 
     expect(screen.getByTestId('rx-model')).toHaveAttribute('data-visible', 'false');
+  });
+});
+
+describe('MainScene scene loading', () => {
+  it('clears the failed GLB cache and recovers when retried', async () => {
+    const user = userEvent.setup();
+    sceneMocks.failDynamic = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      render(<MainScene generatedSceneModelPath="/generated/test.glb" />);
+
+      expect(screen.getByRole('alert')).toHaveTextContent('場景載入失敗');
+      await user.click(screen.getByRole('button', { name: '重試' }));
+
+      expect(sceneMocks.clear).toHaveBeenCalledWith('/generated/test.glb');
+      expect(screen.getByTestId('dynamic-scene')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
 

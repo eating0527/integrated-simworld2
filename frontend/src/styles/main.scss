@@ -1760,9 +1760,16 @@ canvas {
     pointer-events: none;
   }
 
-  .workspace__rail--left,
-  .workspace__rail--right {
+  .workspace__rail--left:not(.is-mobile-open) {
+    transform: translateX(calc(-100% - 24px));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .workspace__rail--right:not(.is-mobile-open) {
     transform: translateX(calc(100% + 24px));
+    opacity: 0;
+    pointer-events: none;
   }
 
   .workspace__rail--left {

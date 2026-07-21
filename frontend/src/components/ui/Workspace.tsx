@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 type Rail = 'left' | 'right';
 
@@ -15,18 +15,65 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
   const [mobileRail, setMobileRail] = useState<Rail | null>(null);
   const leftRailId = `workspace-left-${useId()}`;
   const rightRailId = `workspace-right-${useId()}`;
+  const leftRailRef = useRef<HTMLElement>(null);
+  const rightRailRef = useRef<HTMLElement>(null);
+  const leftTriggerRef = useRef<HTMLButtonElement>(null);
+  const rightTriggerRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (!mobileRail) return;
 
-    const closeDrawer = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.defaultPrevented) setMobileRail(null);
+    const rail = mobileRail === 'left' ? leftRailRef.current : rightRailRef.current;
+    const focusable = rail?.querySelector<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    );
+    (focusable ?? rail)?.focus();
+
+    const handleDrawerKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!event.defaultPrevented) setMobileRail(null);
+        return;
+      }
+      if (event.key !== 'Tab' || !rail) return;
+
+      const focusableElements = Array.from(rail.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ));
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        rail.focus();
+        return;
+      }
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener('keydown', closeDrawer);
-    return () => window.removeEventListener('keydown', closeDrawer);
+    window.addEventListener('keydown', handleDrawerKey);
+    return () => window.removeEventListener('keydown', handleDrawerKey);
   }, [mobileRail]);
 
-  const toggleMobile = (rail: Rail) => setMobileRail(current => current === rail ? null : rail);
+  useEffect(() => {
+    if (!mobileRail && returnFocusRef.current) {
+      returnFocusRef.current.focus();
+      returnFocusRef.current = null;
+    }
+  }, [mobileRail]);
+
+  const toggleMobile = (rail: Rail) => {
+    setMobileRail(current => {
+      if (current === rail) return null;
+      returnFocusRef.current = rail === 'left' ? leftTriggerRef.current : rightTriggerRef.current;
+      return rail;
+    });
+  };
 
   return (
     <div className="workspace">
@@ -38,19 +85,35 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
       </header>
 
       {left && (
-        <aside id={leftRailId} aria-label="左側工作區" className={`workspace__rail workspace__rail--left ${leftOpen ? 'is-open' : ''} ${mobileRail === 'left' ? 'is-mobile-open' : ''}`}>
+        <aside
+          ref={leftRailRef}
+          id={leftRailId}
+          aria-label="左側工作區"
+          aria-modal={mobileRail === 'left' ? true : undefined}
+          role={mobileRail === 'left' ? 'dialog' : undefined}
+          tabIndex={mobileRail === 'left' ? -1 : undefined}
+          className={`workspace__rail workspace__rail--left ${leftOpen ? 'is-open' : ''} ${mobileRail === 'left' ? 'is-mobile-open' : ''}`}
+        >
           {left}
         </aside>
       )}
       {right && (
-        <aside id={rightRailId} aria-label="右側工作區" className={`workspace__rail workspace__rail--right ${rightOpen ? 'is-open' : ''} ${mobileRail === 'right' ? 'is-mobile-open' : ''}`}>
+        <aside
+          ref={rightRailRef}
+          id={rightRailId}
+          aria-label="右側工作區"
+          aria-modal={mobileRail === 'right' ? true : undefined}
+          role={mobileRail === 'right' ? 'dialog' : undefined}
+          tabIndex={mobileRail === 'right' ? -1 : undefined}
+          className={`workspace__rail workspace__rail--right ${rightOpen ? 'is-open' : ''} ${mobileRail === 'right' ? 'is-mobile-open' : ''}`}
+        >
           {right}
         </aside>
       )}
 
       <div className="workspace__drawer-controls" aria-label="行動工作區控制">
-        {left && <button type="button" aria-label={mobileRail === 'left' ? '關閉左側工作區' : '開啟左側工作區'} aria-expanded={mobileRail === 'left'} aria-controls={leftRailId} onClick={() => toggleMobile('left')}>控制</button>}
-        {right && <button type="button" aria-label={mobileRail === 'right' ? '關閉右側工作區' : '開啟右側工作區'} aria-expanded={mobileRail === 'right'} aria-controls={rightRailId} onClick={() => toggleMobile('right')}>狀態</button>}
+        {left && <button ref={leftTriggerRef} type="button" aria-label={mobileRail === 'left' ? '關閉左側工作區' : '開啟左側工作區'} aria-expanded={mobileRail === 'left'} aria-controls={leftRailId} onClick={() => toggleMobile('left')}>控制</button>}
+        {right && <button ref={rightTriggerRef} type="button" aria-label={mobileRail === 'right' ? '關閉右側工作區' : '開啟右側工作區'} aria-expanded={mobileRail === 'right'} aria-controls={rightRailId} onClick={() => toggleMobile('right')}>狀態</button>}
       </div>
 
       {mobileRail && <button type="button" className="workspace__backdrop" aria-label="關閉側欄" onClick={() => setMobileRail(null)} />}
