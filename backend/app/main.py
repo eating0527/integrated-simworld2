@@ -750,7 +750,22 @@ def _read_scene_index() -> List[Dict[str, Any]]:
     return _read_json_list(SCENE_INDEX_JSON)
 
 
-@app.post("/api/upload-photo")
+def _image_format(content: bytes) -> Optional[str]:
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
+        return "image/gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _safe_upload_name(name: Optional[str]) -> str:
+    return Path((name or "").replace("\\", "/")).name
+
+
 async def upload_photo(
     photo: UploadFile = File(...),
     latitude: Optional[float] = Form(None),
@@ -763,9 +778,19 @@ async def upload_photo(
         if len(content) > 10 * 1024 * 1024:
             return JSONResponse({"success": False, "error": "檔案超過 10MB 限制"}, status_code=413)
 
+        image_type = _image_format(content)
+        if not content or image_type is None or photo.content_type != image_type:
+            return JSONResponse({"success": False, "error": "不支援的圖片格式"}, status_code=415)
+
+        client_name = _safe_upload_name(photo.filename)
+        if not client_name:
+            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{ts}_{photo.filename}"
-        (UPLOAD_DIR / filename).write_bytes(content)
+        filename = f"{ts}_{client_name}"
+        path = (UPLOAD_DIR / filename).resolve()
+        if path.parent != UPLOAD_DIR.resolve():
+            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
+        path.write_bytes(content)
 
         record = {
             "filename": filename,
@@ -804,11 +829,18 @@ async def photo_history():
 @app.delete("/api/delete-photo/{filename}")
 async def delete_photo(filename: str):
     try:
-        path = UPLOAD_DIR / filename
+        if not filename or Path(filename).name != filename or any(separator in filename for separator in ("/", "\\")):
+            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
+        photos = _load_photos()
+        if not any(p.get("filename") == filename for p in photos):
+            return JSONResponse({"success": False, "error": "照片不存在"}, status_code=404)
+        path = (UPLOAD_DIR / filename).resolve()
+        if path.parent != UPLOAD_DIR.resolve():
+            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
         if path.exists():
             path.unlink()
 
-        photos = [p for p in _load_photos() if p.get("filename") != filename]
+        photos = [p for p in photos if p.get("filename") != filename]
         _save_photos(photos)
 
         await gps_manager.broadcast(json.dumps({

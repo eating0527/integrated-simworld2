@@ -1641,6 +1641,52 @@ canvas {
   animation: none;
 }
 
+.photo-viewer__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 14px;
+  cursor: pointer;
+  user-select: none;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+
+.photo-viewer__card-wrap { position: relative; }
+.photo-viewer__delete,
+.photo-viewer__close {
+  min-width: 44px;
+  min-height: 44px;
+  color: rgba(255,255,255,0.8);
+  background: rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.15);
+  cursor: pointer;
+}
+.photo-viewer__delete {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-radius: 50%;
+  opacity: 0.75;
+}
+.photo-viewer__delete:hover,
+.photo-viewer__delete:focus-visible { opacity: 1; }
+.photo-viewer__close { position: fixed; top: 20px; right: 20px; z-index: 1; border-radius: 50%; font-size: 24px; }
+.photo-viewer__dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(4,6,16,0.92);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  animation: fade-in 0.2s ease;
+}
 .workspace__rail .min-panel {
   max-height: min(72vh, 760px);
   overflow: auto;
