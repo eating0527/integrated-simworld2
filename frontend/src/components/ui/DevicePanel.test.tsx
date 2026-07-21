@@ -26,8 +26,14 @@ function renderPanel(onApplyRxPosition = vi.fn(), sceneFrame = frame) {
 
 async function openPanel() {
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: /restore/i }));
+  const restore = screen.queryByRole('button', { name: /restore/i });
+  if (restore) await user.click(restore);
   return user;
+}
+
+function displayed(value: number, fractionDigits: number) {
+  const rounded = Number(value.toFixed(fractionDigits));
+  return String(Object.is(rounded, -0) ? 0 : rounded);
 }
 
 function getRow(name: string) {
@@ -120,12 +126,16 @@ describe('DevicePanel coordinate modes', () => {
     const row = getRow('rx-0');
     const initialRx = getDevice('dev-rx-0');
     const initialGps = enuToGps(threeToEnu([initialRx.x, initialRx.y, initialRx.z]), frame, frame.alt_mode);
-    const updatedGps = { ...initialGps, lat: initialGps.lat + 0.001 };
-    const expected = enuToThree(gpsToEnu(updatedGps, frame, frame.alt_mode));
+    const visibleGps = {
+      lat: initialGps.lat + 0.001,
+      lon: Number(within(row).getByRole('textbox', { name: `${labels.lon} rx-0` }).getAttribute('value')),
+      alt: Number(within(row).getByRole('textbox', { name: `${labels.alt} rx-0` }).getAttribute('value')),
+    };
+    const expected = enuToThree(gpsToEnu(visibleGps, frame, frame.alt_mode));
 
     const latitude = within(row).getByRole('textbox', { name: `${labels.lat} rx-0` });
     await user.clear(latitude);
-    await user.type(latitude, String(updatedGps.lat));
+    await user.type(latitude, String(visibleGps.lat));
     expect(getDevice('dev-rx-0')).toMatchObject({ x: initialRx.x, y: initialRx.y, z: initialRx.z });
     expect(onApplyRxPosition).not.toHaveBeenCalled();
     await user.click(within(row).getByRole('button', { name: applyPositionLabel }));
@@ -156,9 +166,9 @@ describe('DevicePanel coordinate modes', () => {
     await user.clear(x);
     await user.type(x, '123');
     await user.click(screen.getByRole('button', { name: switchToGpsLabel }));
-    expect(within(row).getByRole('textbox', { name: `${labels.lat} tx-0` })).toHaveValue(String(expectedGps.lat));
-    expect(within(row).getByRole('textbox', { name: `${labels.lon} tx-0` })).toHaveValue(String(expectedGps.lon));
-    expect(within(row).getByRole('textbox', { name: `${labels.alt} tx-0` })).toHaveValue(String(expectedGps.alt));
+    expect(within(row).getByRole('textbox', { name: `${labels.lat} tx-0` })).toHaveValue(displayed(expectedGps.lat, 7));
+    expect(within(row).getByRole('textbox', { name: `${labels.lon} tx-0` })).toHaveValue(displayed(expectedGps.lon, 7));
+    expect(within(row).getByRole('textbox', { name: `${labels.alt} tx-0` })).toHaveValue(displayed(expectedGps.alt, 3));
   });
 
   it('keeps RX canonical xyz and callback unchanged until a valid xyz draft is applied', async () => {
@@ -199,18 +209,33 @@ describe('DevicePanel coordinate modes', () => {
     expect(canonical).toMatchObject({ x: expectedCanonical[0], y: expectedCanonical[1], z: expectedCanonical[2] });
 
     await user.click(screen.getByRole('button', { name: switchToXyzLabel }));
-    expect(within(row).getByRole('textbox', { name: 'X tx-0' })).toHaveValue(String(canonical.x));
-    expect(within(row).getByRole('textbox', { name: 'Y tx-0' })).toHaveValue(String(canonical.y));
-    expect(within(row).getByRole('textbox', { name: 'Z tx-0' })).toHaveValue(String(canonical.z));
+    expect(within(row).getByRole('textbox', { name: 'X tx-0' })).toHaveValue(displayed(canonical.x, 3));
+    expect(within(row).getByRole('textbox', { name: 'Y tx-0' })).toHaveValue(displayed(canonical.y, 3));
+    expect(within(row).getByRole('textbox', { name: 'Z tx-0' })).toHaveValue(displayed(canonical.z, 3));
     await user.click(screen.getByRole('button', { name: switchToGpsLabel }));
 
-    expect(within(row).getByRole('textbox', { name: `${labels.lat} tx-0` })).toHaveValue(String(expectedGps.lat));
-    expect(within(row).getByRole('textbox', { name: `${labels.lon} tx-0` })).toHaveValue(String(expectedGps.lon));
-    expect(within(row).getByRole('textbox', { name: `${labels.alt} tx-0` })).toHaveValue(String(expectedGps.alt));
+    expect(within(row).getByRole('textbox', { name: `${labels.lat} tx-0` })).toHaveValue(displayed(expectedGps.lat, 7));
+    expect(within(row).getByRole('textbox', { name: `${labels.lon} tx-0` })).toHaveValue(displayed(expectedGps.lon, 7));
+    expect(within(row).getByRole('textbox', { name: `${labels.alt} tx-0` })).toHaveValue(displayed(expectedGps.alt, 3));
     await user.click(screen.getByRole('button', { name: switchToXyzLabel }));
-    expect(within(row).getByRole('textbox', { name: 'X tx-0' })).toHaveValue(String(canonical.x));
-    expect(within(row).getByRole('textbox', { name: 'Y tx-0' })).toHaveValue(String(canonical.y));
-    expect(within(row).getByRole('textbox', { name: 'Z tx-0' })).toHaveValue(String(canonical.z));
+    expect(within(row).getByRole('textbox', { name: 'X tx-0' })).toHaveValue(displayed(canonical.x, 3));
+    expect(within(row).getByRole('textbox', { name: 'Y tx-0' })).toHaveValue(displayed(canonical.y, 3));
+    expect(within(row).getByRole('textbox', { name: 'Z tx-0' })).toHaveValue(displayed(canonical.z, 3));
+  });
+
+  it('keeps manually entered precision when applying a concise xyz draft', async () => {
+    renderPanel();
+    const user = await openPanel();
+    const row = getRow('rx-0');
+    await user.click(screen.getByRole('button', { name: switchToXyzLabel }));
+    const x = within(row).getByRole('textbox', { name: 'X rx-0' });
+
+    await user.clear(x);
+    await user.type(x, '-29.123456');
+    await user.click(within(row).getByRole('button', { name: applyPositionLabel }));
+
+    expect(getDevice('dev-rx-0').x).toBe(-29.123456);
+    expect(x).toHaveValue('-29.123');
   });
 
   it('does not update the store for incomplete GPS input', async () => {

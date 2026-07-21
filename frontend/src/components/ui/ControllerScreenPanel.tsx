@@ -12,7 +12,6 @@ export function ControllerScreenPanel() {
   return (
     <MinPanel
       className="panel-ui controller-screen-panel"
-      defaultMinimized
       title="無人機畫面"
       actions={(
         <PanelStatus tone={connected ? 'live' : 'waiting'} label={connected ? 'Live' : 'Waiting'} />

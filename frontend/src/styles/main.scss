@@ -652,23 +652,26 @@ canvas {
 }
 
 .dp-btn-apply {
-  font-size: 11px;
-  padding: 3px 10px;
-  min-height: 24px;
-  background: rgba(0, 200, 150, 0.12);
-  color: #00c896;
-  border: 1px solid rgba(0, 200, 150, 0.4);
-  border-radius: 4px;
-  cursor: pointer;
   width: 100%;
-  transition: background 0.15s, border-color 0.15s;
+  min-height: 32px;
+  padding: 5px 10px;
+  color: #041812;
+  background: #00c896;
+  border: 1px solid #27e0b0;
+  border-radius: 4px;
+  box-shadow: 0 0 12px rgba(0, 200, 150, 0.2);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 
   &:hover {
-    background: rgba(0, 200, 150, 0.25);
-    border-color: rgba(0, 200, 150, 0.7);
+    background: #27e0b0;
+    border-color: #5debc5;
+    box-shadow: 0 0 16px rgba(0, 200, 150, 0.32);
   }
   &:active {
-    background: rgba(0, 200, 150, 0.4);
+    background: #00ac81;
   }
 }
 
@@ -692,18 +695,20 @@ canvas {
   white-space: nowrap;
 }
 
-.dp-btn-overwrite {
-  background: rgba(150, 150, 150, 0.12);
-  border-color: rgba(150, 150, 150, 0.4);
-  color: rgb(180, 180, 180);
+.dp-btn-overwrite,
+.dp-btn-apply-default {
+  color: var(--text-muted);
+  background: rgba(150, 150, 150, 0.08);
+  border-color: rgba(150, 150, 150, 0.26);
 
   &:hover {
-    background: rgba(150, 150, 150, 0.25);
-    border-color: rgba(150, 150, 150, 0.7);
+    color: var(--text-secondary);
+    background: rgba(150, 150, 150, 0.16);
+    border-color: rgba(150, 150, 150, 0.42);
   }
 
   &:active {
-    background: rgba(150, 150, 150, 0.4);
+    background: rgba(150, 150, 150, 0.24);
   }
 }
 
@@ -719,21 +724,6 @@ canvas {
   border-color: var(--panel-border);
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-.dp-btn-apply-default {
-  background: rgba(0, 200, 150, 0.12);
-  border-color: rgba(0, 200, 150, 0.4);
-  color: #00c896;
-
-  &:hover {
-    background: rgba(0, 200, 150, 0.25);
-    border-color: rgba(0, 200, 150, 0.7);
-  }
-
-  &:active {
-    background: rgba(0, 200, 150, 0.4);
-  }
 }
 
 .dp-btn-zero {

@@ -11,13 +11,32 @@ type PositionDraft = Record<'lat' | 'lon' | 'alt' | 'x' | 'y' | 'z', string>;
 
 type CoordAxis = keyof PositionDraft;
 
+function formatCoordinate(value: number, fractionDigits: number): string {
+  const rounded = Number(value.toFixed(fractionDigits));
+  return String(Object.is(rounded, -0) ? 0 : rounded);
+}
+
 function formatPosition(device: Device, mode: CoordMode, frame: SceneFrame): PositionDraft {
   if (mode === 'xyz') {
-    return { lat: '', lon: '', alt: '', x: String(device.x), y: String(device.y), z: String(device.z) };
+    return {
+      lat: '',
+      lon: '',
+      alt: '',
+      x: formatCoordinate(device.x, 3),
+      y: formatCoordinate(device.y, 3),
+      z: formatCoordinate(device.z, 3),
+    };
   }
 
   const gps = enuToGps(threeToEnu([device.x, device.y, device.z]), frame, frame.alt_mode);
-  return { lat: String(gps.lat), lon: String(gps.lon), alt: String(gps.alt), x: '', y: '', z: '' };
+  return {
+    lat: formatCoordinate(gps.lat, 7),
+    lon: formatCoordinate(gps.lon, 7),
+    alt: formatCoordinate(gps.alt, 3),
+    x: '',
+    y: '',
+    z: '',
+  };
 }
 
 function isCompleteNumber(value: string): boolean {
@@ -309,7 +328,7 @@ export function DevicePanel({
   const jammerDevices = devices.filter((device) => device.role === 'jammer');
 
   return (
-    <MinPanel as="aside" className="device-panel" title="裝置設定" defaultMinimized>
+    <MinPanel as="aside" className="device-panel" title="裝置設定">
       <div className="dp-coordinate-toolbar">
         <span>{coordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}</span>
         <button
