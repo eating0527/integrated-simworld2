@@ -18,6 +18,8 @@ describe('PhotoViewer', () => {
     fireEvent.click(card);
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByRole('button', { name: '關閉照片' })).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: '關閉照片' })).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(card).toHaveFocus());
   });

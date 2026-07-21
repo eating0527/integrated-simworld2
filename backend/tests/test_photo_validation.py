@@ -8,8 +8,17 @@ def test_image_signatures_and_safe_names():
     assert main._image_format(b"\x89PNG\r\n\x1a\nrest") == "image/png"
     assert main._image_format(b"RIFFxxxxWEBP") == "image/webp"
     assert main._image_format(b"not-an-image") is None
-    assert main._safe_upload_name(r"C:\temp\photo.jpg") == "photo.jpg"
-    assert main._safe_upload_name("../photo.jpg") == "photo.jpg"
+    assert main._safe_upload_name(r"C:\temp\photo.jpg", "image/jpeg") == "photo.jpg"
+    assert main._safe_upload_name("../report.html", "image/png") == "report.png"
+    assert main._safe_upload_name("<script>.gif", "image/gif") == "script.gif"
+    assert main._safe_upload_name("..", "image/webp") == ""
+
+
+def test_upload_route_is_registered():
+    assert any(
+        route.path == "/api/upload-photo" and "POST" in route.methods
+        for route in main.app.routes
+    )
 
 
 def test_delete_rejects_traversal_and_unknown_without_mutation(tmp_path, monkeypatch):

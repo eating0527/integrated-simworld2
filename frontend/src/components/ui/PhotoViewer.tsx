@@ -41,10 +41,20 @@ export function PhotoViewer({ photos, onDelete }: Props) {
     closeButton.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setSelected(null);
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        closeButton.current?.focus();
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [selected]);
+
+  useEffect(() => {
+    if (selected && !photos.some((photo) => photo.filename === selected.filename)) {
+      setSelected(null);
+    }
+  }, [photos, selected]);
 
   if (photos.length === 0) return null;
 
@@ -72,7 +82,7 @@ export function PhotoViewer({ photos, onDelete }: Props) {
         maxHeight: collapsed ? 52 : '62vh', overflow: 'hidden', display: 'flex', flexDirection: 'column',
         transition: 'max-height 0.35s cubic-bezier(0.4,0,0.2,1)', animation: 'slide-in-right 0.3s ease',
       }}>
-        <button className="photo-viewer__header" aria-expanded={!collapsed} aria-controls="photo-viewer-history" onClick={() => setCollapsed(c => !c)}>
+        <button type="button" className="photo-viewer__header" aria-expanded={!collapsed} aria-controls="photo-viewer-history" onClick={() => setCollapsed(c => !c)}>
           <span style={{ fontSize: 14 }}>🖼️</span>
           <span style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: 13, flex: 1 }}>照片</span>
           <span style={{ background: 'rgba(0,212,255,0.15)', color: 'var(--accent-cyan)', fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10 }}>{photos.length}</span>
@@ -80,7 +90,7 @@ export function PhotoViewer({ photos, onDelete }: Props) {
         </button>
         {!collapsed && <div id="photo-viewer-history" style={{ overflowY: 'auto', flex: 1, padding: '8px 8px 10px' }}>
           {photos.map((p, i) => <div key={p.filename} className="photo-viewer__card-wrap" onMouseEnter={() => setHoveredIdx(i)} onMouseLeave={() => setHoveredIdx(null)}>
-            <button className="photo-viewer__card" aria-label={`開啟照片 ${p.filename}`} onClick={(e) => { lastTrigger.current = e.currentTarget; setSelected(p); }} style={{
+            <button type="button" className="photo-viewer__card" aria-label={`開啟照片 ${p.filename}`} onClick={(e) => { lastTrigger.current = e.currentTarget; setSelected(p); }} style={{
               position: 'relative', marginBottom: 8, cursor: 'pointer', borderRadius: 10, overflow: 'hidden', width: '100%', padding: 0,
               border: `1.5px solid ${selected?.filename === p.filename ? 'rgba(0,212,255,0.6)' : hoveredIdx === i ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)'}`,
               boxShadow: selected?.filename === p.filename ? '0 0 12px rgba(0,212,255,0.3)' : 'none', transition: 'border 0.2s, box-shadow 0.2s, transform 0.15s', transform: hoveredIdx === i ? 'scale(1.02)' : 'scale(1)',
@@ -91,12 +101,12 @@ export function PhotoViewer({ photos, onDelete }: Props) {
                 <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', lineHeight: 1.3 }}>{parseTimestamp(p.timestamp).toLocaleDateString([], { month: '2-digit', day: '2-digit', year: 'numeric' })}</div>
               </div>
             </button>
-            <button className="photo-viewer__delete" aria-label={`刪除照片 ${p.filename}`} onClick={(e) => handleDelete(p, e)}>×</button>
+            <button type="button" className="photo-viewer__delete" aria-label={`刪除照片 ${p.filename}`} onClick={(e) => handleDelete(p, e)}>×</button>
           </div>)}
         </div>}
       </div>
       {selected && <div className="photo-viewer__dialog" role="dialog" aria-modal="true" aria-labelledby="photo-viewer-dialog-title" onClick={(e) => { if (e.target === e.currentTarget) closeDialog(); }}>
-        <button ref={closeButton} className="photo-viewer__close" aria-label="關閉照片" onClick={closeDialog}>×</button>
+        <button type="button" ref={closeButton} className="photo-viewer__close" aria-label="關閉照片" onClick={closeDialog}>×</button>
         <div style={{ background: 'rgba(8,12,28,0.8)', border: '1px solid rgba(120,180,255,0.2)', borderRadius: 20, padding: 10, boxShadow: '0 0 60px rgba(0,212,255,0.15), 0 20px 60px rgba(0,0,0,0.7)' }}>
           <img src={full(selected.url)} alt={selected.filename} style={{ maxWidth: '85vw', maxHeight: '72vh', borderRadius: 12, display: 'block' }} />
         </div>

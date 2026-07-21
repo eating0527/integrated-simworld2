@@ -762,10 +762,19 @@ def _image_format(content: bytes) -> Optional[str]:
     return None
 
 
-def _safe_upload_name(name: Optional[str]) -> str:
-    return Path((name or "").replace("\\", "/")).name
+def _safe_upload_name(name: Optional[str], image_type: str) -> str:
+    stem = Path(Path((name or '').replace('\\', '/')).name).stem.strip()
+    safe_stem = re.sub(r'[^A-Za-z0-9._-]+', '_', stem).strip('._')
+    extension = {
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+    }[image_type]
+    return f'{safe_stem[:80]}{extension}' if safe_stem else ''
 
 
+@app.post("/api/upload-photo")
 async def upload_photo(
     photo: UploadFile = File(...),
     latitude: Optional[float] = Form(None),
@@ -782,7 +791,7 @@ async def upload_photo(
         if not content or image_type is None or photo.content_type != image_type:
             return JSONResponse({"success": False, "error": "不支援的圖片格式"}, status_code=415)
 
-        client_name = _safe_upload_name(photo.filename)
+        client_name = _safe_upload_name(photo.filename, image_type)
         if not client_name:
             return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -815,9 +824,9 @@ async def upload_photo(
         logger.info(f"📸 照片已儲存: {filename}  deviceId={deviceId}")
         return JSONResponse({"success": True, **record})
 
-    except Exception as e:
-        logger.error(f"❌ 照片上傳失敗: {e}")
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    except Exception:
+        logger.exception("照片上傳失敗")
+        return JSONResponse({"success": False, "error": "照片上傳失敗"}, status_code=500)
 
 
 @app.get("/api/photo-history")
@@ -850,8 +859,9 @@ async def delete_photo(filename: str):
         }))
 
         return {"success": True, "filename": filename}
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    except Exception:
+        logger.exception("照片刪除失敗")
+        return JSONResponse({"success": False, "error": "照片刪除失敗"}, status_code=500)
 
 
 # ──────────────────────────────────────────────
