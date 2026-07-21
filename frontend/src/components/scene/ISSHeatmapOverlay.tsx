@@ -50,7 +50,7 @@ export function validateHeatmapOverlayPayload(
   if (typeof data.area_m !== 'number' || !Number.isFinite(data.area_m)
     || typeof data.min_dbm !== 'number' || !Number.isFinite(data.min_dbm)
     || typeof data.max_dbm !== 'number' || !Number.isFinite(data.max_dbm)
-    || data.min_dbm > data.max_dbm || !Array.isArray(data.values) || data.values.length !== data.rows) {
+    || data.min_dbm >= data.max_dbm || !Array.isArray(data.values) || data.values.length !== data.rows) {
     throw new Error('Invalid heatmap overlay metadata');
   }
   const values = data.values.map((row) => {
@@ -117,7 +117,7 @@ export function ISSHeatmapOverlay({ overlay, onStatusChange, retryKey = 0 }: ISS
     setRequest({ status: 'loading' });
     try {
       if (!Number.isFinite(overlay.vminDbm) || !Number.isFinite(overlay.vmaxDbm)
-        || overlay.vminDbm > overlay.vmaxDbm) throw new Error('Invalid heatmap display range');
+        || overlay.vminDbm >= overlay.vmaxDbm) throw new Error('Invalid heatmap display range');
     } catch {
       setRequest({ status: 'error' });
       return () => controller.abort();
