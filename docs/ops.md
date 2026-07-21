@@ -1,6 +1,6 @@
 # 後端與硬體操作
 
-這份文件放 README 不需要背的操作細節：後端、AP3 bridge、Raspberry Pi USRP、Cloudflare tunnel。
+這份文件涵蓋詳細操作細節：後端、AP3 bridge、Raspberry Pi USRP、Cloudflare tunnel。
 
 ## Windows 啟動腳本
 
@@ -34,6 +34,24 @@ log 位置：
 .logs/ap3_bridge.log.err
 .logs/ap3_gps_csv.log
 ```
+
+本機只驗證前後端時，使用：
+
+```powershell
+.\start.ps1 -NoTunnel -NoAP3
+```
+
+這會避免啟動 Cloudflare tunnel 與硬體 AP3 bridge，適合 UI、API 與一般回歸測試。
+
+服務停止後，才清理 runtime 產物：
+
+```powershell
+Remove-Item .logs -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item frontend\dist -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item .playwright-cli,.tmp,tmp,outputs,work -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+不要用上述清理指令刪除 `backend/.venv`、`frontend/node_modules`、`.env`、模型權重或 `incoming` 中仍要保留的 mission。
 
 ## AP3 / M4P TOP USB
 

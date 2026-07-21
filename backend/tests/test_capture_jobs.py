@@ -244,6 +244,26 @@ class Ap3CliTests(unittest.TestCase):
         self.assertTrue(result)
         forward.assert_called_once_with(15760, 5760)
 
+    def test_gps_csv_header_declares_altitude_mode(self):
+        path = Path(__file__).resolve().parents[2] / ".test_tmp" / f"gps-{uuid.uuid4().hex}.csv"
+        self.module.ensure_csv(path)
+        self.assertEqual(path.read_text(encoding="utf-8").splitlines()[0], "time_stamp,lat,lon,alt,alt_mode")
+
+    def test_simulator_payload_declares_altitude_mode(self):
+        script = Path(__file__).resolve().parents[2] / "tools" / "ap3_to_simulator.py"
+        spec = importlib.util.spec_from_file_location("ap3_to_simulator_payload_test", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        fake_pymavlink = types.ModuleType("pymavlink")
+        fake_pymavlink.mavutil = Mock()
+        with patch.dict(sys.modules, {"pymavlink": fake_pymavlink}):
+            spec.loader.exec_module(module)
+
+        msg = types.SimpleNamespace(lat=240000000, lon=1210000000, alt=125000, relative_alt=25000)
+        payload = module.gps_payload(msg, "amsl", "device", "Device")
+        self.assertEqual(payload["alt"], 125.0)
+        self.assertEqual(payload["alt_mode"], "amsl")
+
 
 class StartupScriptTests(unittest.TestCase):
     def test_gps_csv_requires_explicit_switch(self):

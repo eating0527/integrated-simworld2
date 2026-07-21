@@ -1,75 +1,73 @@
-.DS_Store
-node_modules/
-dist/
-build/
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Level 1：永遠不進 Git
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+## Secrets 與本機環境
+.env
+.env.*
+!**/.env.example
+
+## 依賴環境與本機工具
+node_modules/
 .venv/
 .venv-*/
 venv/
 ENV/
 env/
-.pytest_cache/
-
-# Blender / blosm
-*.blend
-*.blend1
-*.blend2
 blosm/
+tools/platform-tools/
+tools/platform-tools-latest-windows.zip
+tools/scrcpy/scrcpy-win64-*/
+tools/scrcpy/*.zip
 
-# Docker
-docker-compose.override.yml
-
-# IDEs
+## IDE、代理與作業系統設定
+.DS_Store
 .vscode/
 .idea/
+/.claude/settings.local.json
+/.claude/worktrees/
 
-# Log
-*.log
-/tmp/
-
-# Capture control mission data
-incoming/mission_*/
-
-# Runtime-generated logs and temp files
-.logs/
-.playwright-cli/
-.test_tmp/
-.test_tmp/
-backend/.tmp/
-backend/.pip-cache/
-frontend/.npm-cache/
-
-# 本機代理與工具狀態
-.claude/worktrees/
-.superpowers/
-
-# Generated simulation map images
-backend/app/static/maps/
-backend/app/static/images/iss_unet_*
-backend/app/static/scenes/generated/
-
-# Local ISS_UNET model artifacts
+## 本機模型權重與覆寫設定
 backend/app/model_artifacts/
 *.pt
 *.pth
+docker-compose.override.yml
 
-# 模型 artifacts
-backend/app/model_artifacts/
+# Level 2：可重建，停止服務後定期清理
 
-# Local Android platform-tools install for AP3 telemetry bridge
-tools/platform-tools/
-tools/platform-tools-latest-windows.zip
+## Build、cache、test tmp、logs
+dist/
+build/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.log
+/.logs/
+/.playwright-cli/
+/.test_tmp/
+/backend/.tmp/
+/backend/.pip-cache/
+/backend/tests/tmp*/
+/frontend/.npm-cache/
 
-# Generated simulation scenes
+## Runtime mission 與暫存輸出
+/incoming/mission_*/
+/tmp/
+/.tmp/
+/outputs/
+/work/
+
+## 生成圖、地圖、場景與索引
+*.blend
+*.blend1
+*.blend2
+backend/app/static/maps/ntpu/iss_unet_*
+backend/app/static/maps/t-*/
+backend/app/static/images/iss_unet_*
+backend/app/static/scenes/generated/
 backend/app/static/scenes/T-*
 backend/app/uploads/scene_index.json
-docs/plans/
+backend/app/uploads/scene_tasks.json
+backend/app/uploads/selected_locations.json
+
+# Level 3：source、tests、docs/specs、lockfiles/manifests、example configs、
+# operational scripts、fixtures、canonical assets 不加 ignore 規則。

@@ -68,7 +68,7 @@ def ensure_csv(csv_path: Path) -> None:
     if not csv_path.exists():
         with csv_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(["time_stamp", "lat", "lon", "alt"])
+            writer.writerow(["time_stamp", "lat", "lon", "alt", "alt_mode"])
 
 
 def main() -> int:
@@ -109,7 +109,7 @@ def main() -> int:
                     rel_alt = msg.relative_alt / 1000.0
                     alt = rel_alt if args.altitude == "relative" else amsl_alt
                     timestamp = datetime.now(output_tz).replace(tzinfo=None).isoformat(timespec="milliseconds")
-                    writer.writerow([timestamp, lat, lon, alt])
+                    writer.writerow([timestamp, lat, lon, alt, args.altitude])
                     written += 1
                     if written % max(1, args.flush_every) == 0:
                         handle.flush()

@@ -1,6 +1,9 @@
 import type { HeatmapGridBounds } from './heatmap';
+import type { Enu, GridPoint, SceneFrame } from './sceneFrame';
 
 export interface CFARGrid {
+  frame_id: string;
+  frame: SceneFrame;
   rows: number;
   cols: number;
   area_m: number;
@@ -16,14 +19,15 @@ export interface CFARCluster {
   peak_power_dbm: number;
   mean_power_dbm: number;
   size: number;
-  world_x: number;
-  world_z: number;
-  lat?: number;
-  lon?: number;
-}
-
-export interface CFARBeacon extends CFARCluster {
+  frame_id: string;
+  frame?: SceneFrame;
+  enu: Enu;
+  grid: GridPoint;
   lat: number;
   lon: number;
   alt: number;
+  alt_mode?: 'amsl' | 'relative';
+}
+
+export interface CFARBeacon extends CFARCluster {
 }

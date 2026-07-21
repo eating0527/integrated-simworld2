@@ -1,14 +1,17 @@
 import json
 import asyncio
 import math
+import os
 import shutil
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import main
 from app import blender_generate_scene
+from app.coordinate_frame import SceneFrame
 
 
 def _task(
@@ -94,6 +97,7 @@ class GeneratedSceneIndexTests(unittest.TestCase):
 
     def test_get_generated_scenes_returns_cached_index(self):
         cached = [_task("task-ok", "T-AAAAAAAAAA")]
+        self._write_tasks(cached)
         self.index_json.write_text(json.dumps(cached), encoding="utf-8")
 
         response = asyncio.run(main.list_generated_scenes())
@@ -113,6 +117,153 @@ class GeneratedSceneIndexTests(unittest.TestCase):
         self.assertEqual(response["scenes"][0]["id"], "task-ok")
         self.assertEqual(json.loads(self.index_json.read_text(encoding="utf-8")), response["scenes"])
 
+    def test_admin_can_update_completed_scene_display_name(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+        (self.scene_dir / "T-AAAAAAAAAA" / "scene_metadata.json").write_text(
+            json.dumps({"frame": SceneFrame(
+                frame_id="scene-test", origin_lat=24.1, origin_lon=121.1, origin_alt_m=0.0
+            ).to_dict()}),
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            response = asyncio.run(
+                main.update_scene_display_name(
+                    "task-ok",
+                    SimpleNamespace(display_name="  新場景名稱  "),
+                    "secret-token",
+                )
+            )
+
+        payload = response["task"]
+        self.assertEqual(payload["displayName"], "新場景名稱")
+        self.assertEqual(payload["sceneKey"], "T-AAAAAAAAAA")
+        self.assertEqual(payload["sceneName"], task["sceneName"])
+        persisted = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
+        indexed = json.loads(self.index_json.read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted["displayName"], "新場景名稱")
+        self.assertEqual(indexed["displayName"], "新場景名稱")
+
+    def test_display_name_length_is_checked_after_trimming(self):
+        name = "新" * 80
+
+        request = main.SceneDisplayNameRequest(display_name=f" {name} ")
+
+        self.assertEqual(request.display_name.strip(), name)
+
+    def test_admin_delete_removes_scene_data_but_keeps_generated_images(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+        scene_path = self.scene_dir / "T-AAAAAAAAAA"
+        (scene_path / "iss_unet_data").mkdir()
+        (scene_path / "iss_unet_data" / "sionna_iss.npy").write_bytes(b"npy")
+        (scene_path / "osm_basemap_bbox_18.png").write_bytes(b"texture")
+        maps_path = self.root / "maps" / "t-aaaaaaaaaa"
+        maps_path.mkdir(parents=True)
+        result_image = maps_path / "iss_unet_t-aaaaaaaaaa_comparison.png"
+        result_image.write_bytes(b"png")
+        main.rebuild_scene_index()
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            response = asyncio.run(main.delete_scene_task("task-ok", "secret-token"))
+
+        self.assertTrue(response["success"])
+        self.assertFalse(scene_path.exists())
+        self.assertTrue(result_image.exists())
+        persisted = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted["status"], "deleted")
+        self.assertIn("deletedAt", persisted)
+        self.assertEqual(json.loads(self.index_json.read_text(encoding="utf-8")), [])
+
+    def test_deleted_scene_tombstones_are_hidden_from_task_list(self):
+        deleted = _task("task-deleted", "T-AAAAAAAAAA", status="deleted")
+        available = _task("task-ok", "T-BBBBBBBBBB")
+        self._write_tasks([deleted, available])
+
+        response = asyncio.run(main.list_scene_tasks())
+
+        self.assertEqual([task["id"] for task in response["tasks"]], ["task-ok"])
+        self.assertEqual(response["count"], 1)
+
+    def test_scene_admin_endpoints_require_configured_valid_token(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+
+        with patch.dict(os.environ, {}, clear=True):
+            unavailable = asyncio.run(main.delete_scene_task("task-ok", "secret-token"))
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            forbidden = asyncio.run(main.delete_scene_task("task-ok", "wrong-token"))
+
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "completed")
+
+    def test_running_scene_cannot_be_deleted(self):
+        task = _task("task-running", "T-AAAAAAAAAA", status="running")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            response = asyncio.run(main.delete_scene_task("task-running", "secret-token"))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue((self.scene_dir / "T-AAAAAAAAAA").exists())
+        self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "running")
+
+    def test_delete_still_reports_success_when_index_refresh_fails(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            with patch.object(main, "rebuild_scene_index", side_effect=OSError("index unavailable")):
+                response = asyncio.run(main.delete_scene_task("task-ok", "secret-token"))
+
+        self.assertTrue(response["success"])
+        self.assertFalse((self.scene_dir / "T-AAAAAAAAAA").exists())
+        self.assertEqual(json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]["status"], "deleted")
+        visible = asyncio.run(main.list_generated_scenes())
+        self.assertEqual(visible["scenes"], [])
+
+    def test_rename_uses_task_name_when_index_refresh_fails(self):
+        task = _task("task-ok", "T-AAAAAAAAAA")
+        self._write_tasks([task])
+        _write_scene(self.scene_dir, "T-AAAAAAAAAA")
+        (self.scene_dir / "T-AAAAAAAAAA" / "scene_metadata.json").write_text(
+            json.dumps({"frame": SceneFrame(
+                frame_id="scene-test", origin_lat=24.1, origin_lon=121.1, origin_alt_m=0.0
+            ).to_dict()}),
+            encoding="utf-8",
+        )
+        main.rebuild_scene_index()
+
+        with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+            with patch.object(main, "rebuild_scene_index", side_effect=OSError("index unavailable")):
+                response = asyncio.run(main.update_scene_display_name(
+                    "task-ok",
+                    main.SceneDisplayNameRequest(display_name="新名稱"),
+                    "secret-token",
+                ))
+
+        self.assertTrue(response["success"])
+        visible = asyncio.run(main.list_generated_scenes())
+        self.assertEqual(visible["scenes"][0]["displayName"], "新名稱")
+
+    def test_delete_rejects_presets_and_path_traversal_scene_keys(self):
+        protected = self.root / "protected.txt"
+        protected.write_text("keep", encoding="utf-8")
+
+        for scene_key in ("NTPU", "../T-AAAAAAAAAA"):
+            with self.subTest(scene_key=scene_key):
+                self._write_tasks([_task("task-bad", scene_key)])
+                with patch.dict(os.environ, {"SCENE_ADMIN_TOKEN": "secret-token"}):
+                    response = asyncio.run(main.delete_scene_task("task-bad", "secret-token"))
+                self.assertEqual(response.status_code, 409)
+                self.assertTrue(protected.exists())
+
     def test_completed_scene_task_prepares_iss_unet_dataset(self):
         task = _task("task-ok", "T-AAAAAAAAAA", status="running")
         task["outputDir"] = str(self.scene_dir / "T-AAAAAAAAAA")
@@ -121,9 +272,9 @@ class GeneratedSceneIndexTests(unittest.TestCase):
 
         prepare_calls = []
 
-        def fake_prepare(scene, scene_dir):
-            prepare_calls.append((scene, scene_dir))
-            return {"available": True}
+        def fake_prepare(scene, scene_dir, pixel_size_m):
+            prepare_calls.append((scene, scene_dir, pixel_size_m))
+            return {"available": True, "pixel_size_m": pixel_size_m}
 
         with patch.object(main, "_run_blender_task_sync", return_value={
             "success": True,
@@ -136,10 +287,40 @@ class GeneratedSceneIndexTests(unittest.TestCase):
                 asyncio.run(main._process_scene_task("task-ok"))
 
         updated = json.loads(self.tasks_json.read_text(encoding="utf-8"))[0]
-        self.assertEqual(prepare_calls, [("T-AAAAAAAAAA", self.scene_dir)])
+        self.assertEqual(
+            prepare_calls,
+            [
+                ("T-AAAAAAAAAA", self.scene_dir, 1),
+                ("T-AAAAAAAAAA", self.scene_dir, 2),
+                ("T-AAAAAAAAAA", self.scene_dir, 4),
+            ],
+        )
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(updated["stage"], "iss_unet_dataset_prepared")
         self.assertTrue(updated["issUnetDataset"]["available"])
+        self.assertEqual(updated["issUnetDataset"]["pixel_size_m"], 4)
+        self.assertEqual(set(updated["issUnetDataset"]["resolutions"]), {"1m", "2m", "4m"})
+
+    def test_prepare_iss_unet_dataset_generates_all_resolutions_and_keeps_4m_top_level(self):
+        prepare_calls = []
+
+        def fake_prepare(scene, scene_dir, pixel_size_m):
+            prepare_calls.append((scene, scene_dir, pixel_size_m))
+            return {"available": True, "pixel_size_m": pixel_size_m}
+
+        with patch("app.iss_unet_dataset_service.prepare_iss_unet_dataset", side_effect=fake_prepare):
+            result = main._prepare_iss_unet_dataset_for_scene_task("NTPU")
+
+        self.assertEqual([call[2] for call in prepare_calls], [1, 2, 4])
+        self.assertEqual(result["issUnetDataset"]["pixel_size_m"], 4)
+        self.assertEqual(
+            result["issUnetDataset"]["resolutions"],
+            {
+                "1m": {"available": True, "pixel_size_m": 1},
+                "2m": {"available": True, "pixel_size_m": 2},
+                "4m": {"available": True, "pixel_size_m": 4},
+            },
+        )
 
     def test_completed_scene_task_records_dataset_prepare_failure_without_crashing(self):
         task = _task("task-ok", "T-AAAAAAAAAA", status="running")
@@ -236,7 +417,12 @@ class GeneratedSceneIndexTests(unittest.TestCase):
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "T-AAAAAAAAAA.glb").write_bytes(b"glb")
             (out_dir / "T-AAAAAAAAAA.xml").write_text("<scene />", encoding="utf-8")
-            (out_dir / "scene_metadata.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (out_dir / "scene_metadata.json").write_text(
+                json.dumps({"status": "completed", "frame": SceneFrame(
+                    frame_id="scene-test", origin_lat=25.0, origin_lon=121.0, origin_alt_m=0.0
+                ).to_dict()}),
+                encoding="utf-8",
+            )
 
             class Result:
                 returncode = 0
@@ -265,16 +451,37 @@ class GeneratedSceneIndexTests(unittest.TestCase):
 
         self.assertEqual(args.area_m, 512.0)
 
-    def test_basemap_size_expands_to_cover_imported_blender_bounds(self):
+    def test_blender_output_dir_is_absolute(self):
+        args = blender_generate_scene.parse_args([
+            "--lat", "25.0",
+            "--lon", "121.0",
+            "--output-dir", "~\\scene-output",
+        ])
+
+        self.assertTrue(Path(args.output_dir).is_absolute())
+
+    def test_blender_scene_metadata_uses_fixed_scene_frame(self):
+        frame = blender_generate_scene.scene_frame_metadata("T-AAAAAAAAAA", 25.0, 121.0)
+
+        self.assertEqual(frame["frame_id"], "scene-t-aaaaaaaaaa")
+        self.assertEqual(frame["extent"], {
+            "min_e": -256.0, "max_e": 256.0, "min_n": -256.0, "max_n": 256.0,
+        })
+        self.assertEqual(frame["grid"], {
+            "rows": 128, "cols": 128, "pixel_size_e_m": 4.0, "pixel_size_n_m": 4.0,
+        })
+        self.assertEqual(frame["display_margin_m"], 32.0)
+
+    def test_basemap_size_stays_fixed_despite_imported_blender_bounds(self):
         width, height, mode = blender_generate_scene._basemap_size_for_imported_bounds(
             area_m=512.0,
             imported_width=593.45,
             imported_height=591.24,
         )
 
-        self.assertEqual(width, 593.45)
-        self.assertEqual(height, 591.24)
-        self.assertEqual(mode, "imported_bounds")
+        self.assertEqual(width, 512.0)
+        self.assertEqual(height, 512.0)
+        self.assertEqual(mode, "fixed_area")
 
     def test_blender_unit_plane_scale_matches_target_size(self):
         scale_x, scale_y = blender_generate_scene._plane_scale_for_unit_size(593.45, 591.24)

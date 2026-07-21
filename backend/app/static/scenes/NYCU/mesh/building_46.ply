@@ -1,0 +1,28 @@
+ply
+format ascii 1.0
+comment Created by integrated-simworld2
+element vertex 8
+property float x
+property float y
+property float z
+element face 10
+property list uchar uint vertex_indices
+end_header
+-23.4423332 -136.122131 0
+-20.6670952 -136.077606 0
+-20.6670952 -136.077606 4.89193678
+-23.4423332 -136.122131 4.89193678
+-23.5028782 -132.871597 0
+-23.5028782 -132.871597 4.89193678
+-20.7276402 -132.827072 0
+-20.7276402 -132.827072 4.89193678
+3 0 1 2
+3 0 2 3
+3 4 0 3
+3 4 3 5
+3 1 6 7
+3 1 7 2
+3 2 7 5
+3 2 5 3
+3 6 4 5
+3 6 5 7

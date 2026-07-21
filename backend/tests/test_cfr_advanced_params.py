@@ -12,17 +12,13 @@ DEVICES = [
     {
         "name": "tx-0",
         "role": "tx",
-        "x": -75,
-        "y": 0,
-        "z": 75,
+        "enu": {"east_m": -75, "north_m": -75, "up_m": 0},
         "power_dbm": 60,
     },
     {
         "name": "rx-0",
         "role": "rx",
-        "x": -30,
-        "y": 10,
-        "z": 175,
+        "enu": {"east_m": -30, "north_m": -175, "up_m": 10},
         "power_dbm": None,
     },
 ]

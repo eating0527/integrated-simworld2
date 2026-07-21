@@ -58,6 +58,7 @@ def gps_payload(msg, altitude_mode: str, device_id: str, device_name: str) -> di
         "lat": lat,
         "lon": lon,
         "alt": alt,
+        "alt_mode": altitude_mode,
         "accuracy": 1.0,
         "deviceId": device_id,
         "deviceName": device_name,

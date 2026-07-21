@@ -8,12 +8,12 @@ import {
 } from '../../utils/issUnetRequest';
 import type { CFARCluster } from '../../types/cfar';
 import type {
-  HeatmapGridBounds,
   HeatmapOverlayConfig,
   ISSRouteOverlayConfig,
   ISSRoutePoint,
   ISSSamplePoint,
 } from '../../types/heatmap';
+import { createSceneFrame, type SceneFrame } from '../../types/sceneFrame';
 import type { GpsReplayRate } from '../../utils/gpsReplay';
 import { MinPanel } from './MinPanel';
 
@@ -46,6 +46,7 @@ interface ISSUNetParams {
   pixelSizeM: ISSUNetPixelSizeM;
   cfar_enabled: boolean;
   apply_building_mask: boolean;
+  filterNoise: boolean;
   gpsFile: File | null;
   noiseFile: File | null;
 }
@@ -71,7 +72,9 @@ interface ISSUNetOverlayResponse {
   rows: number;
   cols: number;
   area_m: number;
-  grid_bounds?: HeatmapGridBounds;
+  frame_id: string;
+  frame: SceneFrame;
+  grid: { rows: number; cols: number; pixel_size_e_m: number; pixel_size_n_m: number };
   width_m?: number;
   height_m?: number;
   vmin_dbm: number;
@@ -116,6 +119,7 @@ const ISS_UNET_RESOLUTION_OPTIONS: Array<{ value: ISSUNetPixelSizeM; label: stri
 interface SimulationPanelProps {
   sceneId?: string | null;
   generatedScene?: boolean;
+  sceneFrame?: SceneFrame;
   onCfarClustersChange?: (clusters: CFARCluster[]) => void;
   onHeatmapOverlayChange?: (overlay: HeatmapOverlayConfig | null) => void;
   onRouteOverlayChange?: (overlay: ISSRouteOverlayConfig | null) => void;
@@ -130,6 +134,7 @@ interface SimulationPanelProps {
 export function SimulationPanel({
   sceneId = 'NTPU',
   generatedScene = false,
+  sceneFrame = createSceneFrame('scene-default', { lat: 0, lon: 0, alt_m: 0 }),
   onCfarClustersChange,
   onHeatmapOverlayChange,
   onRouteOverlayChange,
@@ -170,6 +175,7 @@ export function SimulationPanel({
     pixelSizeM: 4,
     cfar_enabled: true,
     apply_building_mask: true,
+    filterNoise: true,
     gpsFile: null,
     noiseFile: null,
   });
@@ -220,7 +226,9 @@ export function SimulationPanel({
       rows: issUnetOverlay.rows,
       cols: issUnetOverlay.cols,
       areaM: issUnetOverlay.area_m,
-      gridBounds: issUnetOverlay.grid_bounds,
+      frame_id: issUnetOverlay.frame_id,
+      frame: issUnetOverlay.frame,
+      grid: issUnetOverlay.grid,
       opacity: heatmapOpacity,
       vminDbm: issUnetOverlay.vmin_dbm,
       vmaxDbm: issUnetOverlay.vmax_dbm,
@@ -271,7 +279,7 @@ export function SimulationPanel({
     try {
       let res;
       const requestSceneId = sceneId ?? 'NTPU';
-      const devicePayload = getCurrentDevicePayload();
+      const devicePayload = getCurrentDevicePayload(sceneFrame);
 
       if (key === 'cfr') {
         res = await fetch(`${API}/api/sionna/cfr-plot`, {
@@ -312,6 +320,7 @@ export function SimulationPanel({
             pixelSizeM: issUnetParams.pixelSizeM,
             cfarEnabled: issUnetParams.cfar_enabled,
             applyBuildingMask: issUnetParams.apply_building_mask,
+            filterNoise: issUnetParams.filterNoise,
             gpsFile: issUnetParams.gpsFile,
             noiseFile: issUnetParams.noiseFile,
             devices: devicePayload,
@@ -416,7 +425,8 @@ export function SimulationPanel({
         if (route) {
           const routePoints = Array.isArray(route.all_points) ? route.all_points as ISSRoutePoint[] : [];
           const alignedPoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSRoutePoint[] : [];
-          const samplePoints = Array.isArray(route.aligned_points) ? route.aligned_points as ISSSamplePoint[] : [];
+          const sparsePoints = Array.isArray(route.sparse_points) ? route.sparse_points as ISSSamplePoint[] : [];
+          const samplePoints = sparsePoints;
           setIssRouteOverlay(routePoints.length > 0 || alignedPoints.length > 0
             ? { routePoints, alignedPoints, samplePoints }
             : null);
@@ -453,7 +463,7 @@ export function SimulationPanel({
       const msg = err instanceof Error ? err.message : String(err);
       setStatus(prev => ({ ...prev, [key]: { loading: false, imageUrl: null, error: msg, metrics: null, options: null } }));
     }
-  }, [sinrParams, sceneId, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay, clearIssOverlays]);
+  }, [sinrParams, sceneId, sceneFrame, overlayScene, generatedScene, cfrModulation, cfrAdvanced, issUnetParams, onCfarClustersChange, clearHeatmapOverlay, clearIssOverlays]);
 
   const generateStatistics = useCallback(async () => {
     if (generatedScene && !sceneId) {
@@ -472,9 +482,10 @@ export function SimulationPanel({
         scene: requestSceneId,
         pixelSizeM: issUnetParams.pixelSizeM,
         applyBuildingMask: issUnetParams.apply_building_mask,
+        filterNoise: issUnetParams.filterNoise,
         gpsFile: issUnetParams.gpsFile,
         noiseFile: issUnetParams.noiseFile,
-        devices: getCurrentDevicePayload(),
+        devices: getCurrentDevicePayload(sceneFrame),
       });
       const res = await fetch(`${API}/api/iss-unet/statistics/upload`, {
         method: 'POST',
@@ -497,7 +508,7 @@ export function SimulationPanel({
       const msg = err instanceof Error ? err.message : String(err);
       setIssUnetStatistics({ loading: false, imageUrl: null, error: msg, rows: [] });
     }
-  }, [generatedScene, sceneId, issUnetParams]);
+  }, [generatedScene, sceneId, sceneFrame, issUnetParams]);
 
   const cur = status[tab];
   const hasStatisticsResult = tab === 'iss_unet'
@@ -621,7 +632,7 @@ export function SimulationPanel({
                     options={[
                       { value: 'sim', label: 'Sim' },
                       { value: 'gps', label: 'GPS' },
-                      { value: 'gps_n', label: 'Noise with GPS' },
+                      { value: 'gps_n', label: 'Noise + GPS' },
                     ]}
                     onChange={mode => setIssUnetParams(p => ({ ...p, mode }))}
                   />
@@ -651,8 +662,14 @@ export function SimulationPanel({
                         file={issUnetParams.noiseFile}
                         onChange={file => setIssUnetParams(p => ({ ...p, noiseFile: file }))}
                       />
+                      <Label>Noise Filter</Label>
+                      <ToggleSwitch
+                        ariaLabel="Noise Filter (>= -1 dB)"
+                        checked={issUnetParams.filterNoise}
+                        onChange={v => setIssUnetParams(p => ({ ...p, filterNoise: v }))}
+                      />
                       <div />
-                      <Hint>Noise 會依據時間序與 GPS 採樣點對齊。</Hint>
+                      <Hint>{issUnetParams.filterNoise ? '僅計算 < -1 dB。' : '不套用 -1 dB 門檻。'}</Hint>
                     </>
                   )}
                   <Label>OS-CFAR</Label>
@@ -1111,6 +1128,7 @@ function ISSUNetResultView({
           fontSize: 12,
         }}>
           <div>Aligned Noise: {String(metrics.aligned_noise ?? '-')}</div>
+          <div>Filtered Noise: {String(metrics.filtered_noise ?? '-')}</div>
           <div>Skipped Noise: {String(metrics.skipped_noise ?? '-')}</div>
           <div>Used Samples: {String(metrics.used_samples ?? '-')}</div>
           <div>Sparse Samples: {String(metrics.sparse_samples ?? '-')}</div>

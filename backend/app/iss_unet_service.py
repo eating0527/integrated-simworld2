@@ -14,6 +14,14 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import zoom
 
+from app.coordinate_frame import (
+    SceneFrame,
+    enu_to_gps,
+    enu_to_grid,
+    grid_to_enu,
+    scene_frame_from_metadata,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +50,6 @@ NOISE_CONFIDENCE_SIGMA_PX = 8.0
 DEFAULT_SCENE_AREA_M = 512.0
 LIVE_MAP_CELL_SIZE = 4.0
 LIVE_MAP_SAMPLES_PER_TX = 100000000
-FALLBACK_SCENE_CENTERS = {
-    "NTPU": (24.943476, 121.370054),
-    "NYCU": (24.967052, 121.536335),
-}
 ISS_UNET_MODE_LABELS = {
     "sim": "Sim",
     "gps": "GPS",
@@ -281,21 +285,39 @@ def _normalize_live_devices(devices: list[Any] | None) -> list[dict[str, Any]]:
         if isinstance(device, dict):
             payload = device
         else:
+            enu = getattr(device, "enu")
             payload = {
                 "name": getattr(device, "name"),
                 "role": getattr(device, "role"),
-                "x": getattr(device, "x"),
-                "y": getattr(device, "y"),
-                "z": getattr(device, "z"),
+                "enu": {
+                    "east_m": getattr(enu, "east_m"),
+                    "north_m": getattr(enu, "north_m"),
+                    "up_m": getattr(enu, "up_m"),
+                },
                 "power_dbm": getattr(device, "power_dbm", None),
             }
+        if all(key in payload for key in ("east_m", "north_m", "up_m")):
+            normalized.append(
+                {
+                    "name": payload["name"],
+                    "role": payload["role"],
+                    "east_m": float(payload["east_m"]),
+                    "north_m": float(payload["north_m"]),
+                    "up_m": float(payload["up_m"]),
+                    "power_dbm": None if payload.get("power_dbm") is None else float(payload["power_dbm"]),
+                }
+            )
+            continue
+        enu = payload.get("enu")
+        if not isinstance(enu, dict):
+            raise ValueError("device enu coordinates are required")
         normalized.append(
             {
                 "name": payload["name"],
                 "role": payload["role"],
-                "x": float(payload["x"]),
-                "y": float(payload["y"]),
-                "z": float(payload["z"]),
+                "east_m": float(enu["east_m"]),
+                "north_m": float(enu["north_m"]),
+                "up_m": float(enu["up_m"]),
                 "power_dbm": None if payload.get("power_dbm") is None else float(payload["power_dbm"]),
             }
         )
@@ -310,55 +332,32 @@ def _resize_radio_map(values: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return zoom(values.astype(np.float32), (row_scale, col_scale), order=1).astype(np.float32)
 
 
-def _scene_area_m(dataset: SceneDataset) -> float:
+def _scene_frame(dataset: SceneDataset) -> SceneFrame:
     if dataset.meta_path is None:
-        return DEFAULT_SCENE_AREA_M
-    try:
-        meta = json.loads(dataset.meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        return DEFAULT_SCENE_AREA_M
-    try:
-        area_m = float(meta.get("area_m", DEFAULT_SCENE_AREA_M))
-    except (TypeError, ValueError):
-        return DEFAULT_SCENE_AREA_M
-    return area_m if np.isfinite(area_m) and area_m > 0 else DEFAULT_SCENE_AREA_M
+        raise ValueError(f"SceneFrame metadata is required for {dataset.scene}")
+    return scene_frame_from_metadata(_read_dataset_json(dataset.meta_path))
+
+
+def _scene_area_m(dataset: SceneDataset) -> float:
+    _scene_frame(dataset)
+    return DEFAULT_SCENE_AREA_M
 
 
 def _legacy_grid_bounds(area_m: float, rows: int, cols: int) -> dict[str, float]:
-    half = float(area_m) / 2.0
     return {
-        "min_x": -half,
-        "max_x": half,
-        "min_y": -half,
-        "max_y": half,
-        "pixel_size_x_m": float(area_m) / float(cols),
-        "pixel_size_y_m": float(area_m) / float(rows),
+        "min_x": -256.0,
+        "max_x": 256.0,
+        "min_y": -256.0,
+        "max_y": 256.0,
+        "pixel_size_x_m": 512.0 / float(cols),
+        "pixel_size_y_m": 512.0 / float(rows),
     }
 
 
 def _scene_grid_bounds(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, float]:
     rows, cols = shape
-    area_m = _scene_area_m(dataset)
-    meta = _read_dataset_json(dataset.meta_path)
-    raw_bounds = meta.get("grid_bounds")
-    if isinstance(raw_bounds, dict):
-        try:
-            min_x = float(raw_bounds["min_x"])
-            max_x = float(raw_bounds["max_x"])
-            min_y = float(raw_bounds["min_y"])
-            max_y = float(raw_bounds["max_y"])
-        except (KeyError, TypeError, ValueError):
-            return _legacy_grid_bounds(area_m, rows, cols)
-        if all(np.isfinite(value) for value in (min_x, max_x, min_y, max_y)) and max_x > min_x and max_y > min_y:
-            return {
-                "min_x": min_x,
-                "max_x": max_x,
-                "min_y": min_y,
-                "max_y": max_y,
-                "pixel_size_x_m": float((max_x - min_x) / float(cols)),
-                "pixel_size_y_m": float((max_y - min_y) / float(rows)),
-            }
-    return _legacy_grid_bounds(area_m, rows, cols)
+    _scene_frame(dataset)
+    return _legacy_grid_bounds(DEFAULT_SCENE_AREA_M, rows, cols)
 
 
 def _read_dataset_json(path: Path | None) -> dict[str, Any]:
@@ -370,24 +369,19 @@ def _read_dataset_json(path: Path | None) -> dict[str, Any]:
         return {}
 
 
-def _scene_center(dataset: SceneDataset) -> tuple[float, float] | None:
-    meta = _read_dataset_json(dataset.meta_path)
-    if meta.get("center_lat") is not None and meta.get("center_lon") is not None:
-        return float(meta["center_lat"]), float(meta["center_lon"])
-
-    sibling_meta = dataset.data_dir.parent / "scene_metadata.json"
-    meta = _read_dataset_json(sibling_meta if sibling_meta.exists() else None)
-    if meta.get("lat") is not None and meta.get("lon") is not None:
-        return float(meta["lat"]), float(meta["lon"])
-
-    return FALLBACK_SCENE_CENTERS.get(dataset.scene)
+def _scene_center(dataset: SceneDataset) -> tuple[float, float]:
+    frame = _scene_frame(dataset)
+    return frame.origin_lat, frame.origin_lon
 
 
 def _cfar_grid_metadata(dataset: SceneDataset, shape: tuple[int, int]) -> dict[str, Any]:
     rows, cols = shape
+    frame = _scene_frame(dataset)
     area_m = _scene_area_m(dataset)
     grid_bounds = _scene_grid_bounds(dataset, shape)
     return {
+        "frame_id": frame.frame_id,
+        "frame": frame.to_dict(),
         "rows": int(rows),
         "cols": int(cols),
         "area_m": float(area_m),
@@ -402,6 +396,14 @@ def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, in
     grid = _cfar_grid_metadata(dataset, shape)
     return {
         "kind": "reconstructed_iss",
+        "frame_id": grid["frame_id"],
+        "frame": grid["frame"],
+        "grid": {
+            "rows": grid["rows"],
+            "cols": grid["cols"],
+            "pixel_size_e_m": grid["pixel_size_x_m"],
+            "pixel_size_n_m": grid["pixel_size_y_m"],
+        },
         "url": result_grid_url(filename, dataset.scene),
         "rows": grid["rows"],
         "cols": grid["cols"],
@@ -414,59 +416,33 @@ def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, in
     }
 
 
-def _cfar_pixel_to_world(row: int, col: int, grid: dict[str, Any]) -> tuple[float, float]:
-    bounds = grid.get("grid_bounds")
-    if isinstance(bounds, dict):
-        min_x = float(bounds["min_x"])
-        max_y = float(bounds["max_y"])
-        pixel_size_x = float(bounds.get("pixel_size_x_m", grid.get("pixel_size_x_m")))
-        pixel_size_y = float(bounds.get("pixel_size_y_m", grid.get("pixel_size_y_m")))
-        world_x = min_x + (float(col) + 0.5) * pixel_size_x
-        north_m = max_y - (float(row) + 0.5) * pixel_size_y
-        return float(world_x), float(-north_m)
-    area_m = float(grid["area_m"])
-    pixel_size_m = float(grid["pixel_size_m"])
-    world_x = -area_m / 2.0 + (float(col) + 0.5) * pixel_size_m
-    north_m = area_m / 2.0 - (float(row) + 0.5) * pixel_size_m
-    world_z = -north_m
-    return float(world_x), float(world_z)
-
-
-def _world_to_latlon(
-    world_x: float,
-    world_z: float,
-    center: tuple[float, float] | None,
-) -> tuple[float, float] | None:
-    if center is None:
-        return None
-    center_lat, center_lon = center
-    meters_per_deg_lat = 111320.0
-    meters_per_deg_lon = max(1.0, meters_per_deg_lat * np.cos(np.radians(center_lat)))
-    north_m = -float(world_z)
-    lat = center_lat + north_m / meters_per_deg_lat
-    lon = center_lon + float(world_x) / meters_per_deg_lon
-    return float(lat), float(lon)
+def _cfar_pixel_to_enu(row: int, col: int, grid: dict[str, Any]) -> tuple[float, float, float]:
+    return grid_to_enu(row, col, scene_frame_from_metadata(grid["frame"]))
 
 
 def _enrich_cfar_clusters(
     clusters: list[dict[str, Any]],
     grid: dict[str, Any],
-    center: tuple[float, float] | None,
 ) -> list[dict[str, Any]]:
     enriched = []
+    frame = scene_frame_from_metadata(grid["frame"])
     for cluster in clusters:
         row = int(cluster["peak_pixel_row"])
         col = int(cluster["peak_pixel_col"])
-        world_x, world_z = _cfar_pixel_to_world(row, col, grid)
-        latlon = _world_to_latlon(world_x, world_z, center)
+        east_m, north_m, up_m = _cfar_pixel_to_enu(row, col, grid)
+        lat, lon, alt = enu_to_gps(east_m, north_m, up_m, frame, frame.alt_mode)
+        grid_point = enu_to_grid(east_m, north_m, up_m, frame)
         item = {
             **cluster,
-            "world_x": world_x,
-            "world_z": world_z,
+            "frame_id": frame.frame_id,
+            "enu": {"east_m": east_m, "north_m": north_m, "up_m": up_m},
+            "grid": grid_point.to_dict(),
+            "inside_extent": grid_point.inside_extent,
+            "displayable": grid_point.displayable,
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
         }
-        if latlon is not None:
-            item["lat"] = latlon[0]
-            item["lon"] = latlon[1]
         enriched.append(item)
     return enriched
 
@@ -939,6 +915,7 @@ def _build_iss_unet_artifacts(
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
     pixel_size_m: float = 4.0,
+    filter_noise: bool = True,
 ) -> ISSUNetArtifacts:
     mode = mode.strip().lower()
     if mode not in ISS_UNET_MODE_LABELS:
@@ -995,6 +972,7 @@ def _build_iss_unet_artifacts(
             gps_points=gps_points,
             noise_points=noise_points,
             apply_building_mask=apply_building_mask,
+            filter_noise=filter_noise,
         )
         inputs = route_sample.inputs
         sparse_mask = route_sample.sparse_mask
@@ -1061,6 +1039,7 @@ def reconstruct_iss_unet(
     devices: list[Any] | None = None,
     scene_xml_path: Path | str | None = None,
     pixel_size_m: float = 4.0,
+    filter_noise: bool = True,
 ) -> dict[str, Any]:
     artifacts = _build_iss_unet_artifacts(
         scene=scene,
@@ -1076,6 +1055,7 @@ def reconstruct_iss_unet(
         devices=devices,
         scene_xml_path=scene_xml_path,
         pixel_size_m=pixel_size_m,
+        filter_noise=filter_noise,
     )
     dataset = artifacts.dataset
     mode = artifacts.mode
@@ -1137,7 +1117,7 @@ def reconstruct_iss_unet(
         **artifacts.confidence_metrics,
     }
     cfar_grid = _cfar_grid_metadata(dataset, reconstructed_iss.shape)
-    cfar_clusters = _enrich_cfar_clusters(cfar_result["clusters"], cfar_grid, _scene_center(dataset)) if cfar_result else []
+    cfar_clusters = _enrich_cfar_clusters(cfar_result["clusters"], cfar_grid) if cfar_result else []
     return {
         "scene": dataset.scene,
         "mode": mode,
@@ -1146,6 +1126,7 @@ def reconstruct_iss_unet(
         "metrics": metrics,
         "options": {
             "apply_building_mask": apply_building_mask,
+            "filter_noise": filter_noise,
             "pixel_size_m": dataset.pixel_size_m,
             "grid_res": dataset.grid_res,
         },

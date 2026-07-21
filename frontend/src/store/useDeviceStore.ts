@@ -4,6 +4,8 @@ import type { Device, DeviceRole } from '../types/device';
 interface DeviceStore {
   devices: Device[];
   deviceDefaults: Record<string, DeviceDefault>;
+  modelVisible: Record<DeviceRole, boolean>;
+  setModelVisible: (role: DeviceRole, visible: boolean) => void;
   addDevice: (role: DeviceRole) => void;
   removeDevice: (id: string) => void;
   updateDevice: (id: string, patch: Partial<Omit<Device, 'id' | 'role'>>) => void;
@@ -85,6 +87,10 @@ function makeDeviceDefaults(devices: Device[]): Record<string, DeviceDefault> {
 export const useDeviceStore = create<DeviceStore>((set) => ({
   devices: DEFAULT_DEVICES,
   deviceDefaults: makeDeviceDefaults(DEFAULT_DEVICES),
+  modelVisible: { tx: true, rx: true, jammer: true },
+  setModelVisible: (role, visible) => {
+    set((state) => ({ modelVisible: { ...state.modelVisible, [role]: visible } }));
+  },
 
   addDevice: (role) => {
     set((state) => {

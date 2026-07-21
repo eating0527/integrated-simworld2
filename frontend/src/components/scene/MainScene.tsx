@@ -76,6 +76,7 @@ export function MainScene({
   const cfg = sceneDef.config;
 
   const devices = useDeviceStore((s) => s.devices);
+  const modelVisible = useDeviceStore((s) => s.modelVisible);
   const txDevices = devices.filter((d) => d.role === 'tx');
   const jammerDevices = devices.filter((d) => d.role === 'jammer');
 
@@ -152,6 +153,7 @@ export function MainScene({
             onManualMoveDone={onManualMoveDone}
             onPositionUpdate={onPositionUpdate}
             uavAnimation={uavAnimation}
+            visible={modelVisible.rx}
           />
         </Suspense>
 
@@ -173,13 +175,13 @@ export function MainScene({
           );
         })}
 
-        {jammerDevices.map((d) => (
+        {modelVisible.jammer && jammerDevices.map((d) => (
           <Suspense key={d.id} fallback={null}>
             <Jam position={[d.x, d.y, d.z]} scale={0.01} />
           </Suspense>
         ))}
 
-        {txDevices.map((d) => (
+        {modelVisible.tx && txDevices.map((d) => (
           <Suspense key={d.id} fallback={null}>
             <Tower position={[d.x, d.y, d.z]} scale={0.1} />
           </Suspense>

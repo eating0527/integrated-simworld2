@@ -415,15 +415,17 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
 
 def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
     target = _service_target(mode)
-    active_exit_code, active_out, _ = _run_remote(f"systemctl is-active {target.unit}")
-    was_inactive = _state_from_active_output(active_out, active_exit_code) == "stopped"
     exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}")
     if exit_code != 0:
         raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
     status = get_capture_job(mode, mission_id, state_dir)
     mission_state = status.get("mission_state") or {}
-    pending = mission_state.get("upload_state") == "upload_pending" or mission_state.get("state") == "upload_pending"
-    if was_inactive and pending:
+    pending = mission_state.get("upload_state") in {
+        "recording",
+        "finalizing",
+        "upload_pending",
+    } or mission_state.get("state") == "upload_pending"
+    if status.get("service_state") == "stopped" and pending:
         mission_state = _repair_mission_state(mission_id, mission_state, state_dir)
         exit_code, out, err = _run_service_control(_remote_upload_command(mission_state))
         if exit_code == 0:

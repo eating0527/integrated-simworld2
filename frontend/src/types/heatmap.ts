@@ -1,3 +1,5 @@
+import type { Enu, GridPoint, SceneFrame } from './sceneFrame';
+
 export interface HeatmapGridBounds {
   min_x: number;
   max_x: number;
@@ -12,7 +14,9 @@ export interface HeatmapOverlayConfig {
   rows: number;
   cols: number;
   areaM: number;
-  gridBounds?: HeatmapGridBounds;
+  frame_id: string;
+  frame: SceneFrame;
+  grid: { rows: number; cols: number; pixel_size_e_m: number; pixel_size_n_m: number };
   opacity: number;
   vminDbm: number;
   vmaxDbm: number;
@@ -23,16 +27,16 @@ export interface ISSRoutePoint {
   lat: number;
   lon: number;
   alt: number;
-  row: number;
-  col: number;
-  world_x: number;
-  world_z: number;
-  in_bounds?: boolean;
+  alt_mode: 'amsl' | 'relative';
+  frame_id: string;
+  enu: Enu;
+  grid: GridPoint;
+  noise_floor_db?: number | null;
+  used_in_sparse?: boolean;
 }
 
 export interface ISSSamplePoint extends ISSRoutePoint {
   noise_floor_db: number;
-  used_in_sparse?: boolean;
 }
 
 export interface ISSRouteOverlayConfig {

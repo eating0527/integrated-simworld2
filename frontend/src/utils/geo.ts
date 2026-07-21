@@ -1,51 +1,59 @@
-/**
- * GPS (WGS84) → ENU 座標轉換
- *
- * @param lat     目標緯度
- * @param lon     目標經度
- * @param alt     目標高度 (m)
- * @param origin  原點 { lat, lon, alt }
- * @param rotation 地圖旋轉角度 (度，逆時針為正)
- * @returns [x (東向), y (南→北，已翻轉), z (上向)]
- */
-export function latLonToENU(
-  lat: number,
-  lon: number,
-  alt: number,
-  origin: { lat: number; lon: number; alt: number },
-  rotation = 0
-): [number, number, number] {
-  const R = 6_378_137; // 地球半徑 (m)
-  const dLat = (lat - origin.lat) * (Math.PI / 180);
-  const dLon = (lon - origin.lon) * (Math.PI / 180);
+import type { AltMode, Enu, GridPoint, SceneFrame } from '../types/sceneFrame';
 
-  let x = dLon * R * Math.cos(origin.lat * (Math.PI / 180)); // 東向
-  let y = -dLat * R;                                          // 南北（已翻轉使 y 朝北增大）
-  const z = (alt ?? 0) - origin.alt;                          // 上向
+const METERS_PER_DEGREE_LAT = 111_320;
 
-  if (rotation !== 0) {
-    const rad = rotation * (Math.PI / 180);
-    const xr = x * Math.cos(rad) - y * Math.sin(rad);
-    const yr = x * Math.sin(rad) + y * Math.cos(rad);
-    x = xr;
-    y = yr;
-  }
-
-  return [x, y, z];
+function metersPerDegree(frame: SceneFrame) {
+  return {
+    lat: METERS_PER_DEGREE_LAT,
+    lon: Math.max(1, METERS_PER_DEGREE_LAT * Math.cos(frame.origin.lat * Math.PI / 180)),
+  };
 }
 
-export function worldXZToLatLon(
-  x: number,
-  z: number,
-  origin: { lat: number; lon: number; alt: number },
-): { lat: number; lon: number; alt: number } {
-  const R = 6_378_137;
-  const dLat = -z / R;
-  const dLon = x / (R * Math.cos(origin.lat * (Math.PI / 180)));
-
+export function gpsToEnu(
+  gps: { lat: number; lon: number; alt: number },
+  frame: SceneFrame,
+  altMode: AltMode = frame.alt_mode,
+): Enu {
+  const meters = metersPerDegree(frame);
   return {
-    lat: origin.lat + dLat * (180 / Math.PI),
-    lon: origin.lon + dLon * (180 / Math.PI),
-    alt: origin.alt,
+    east_m: (gps.lon - frame.origin.lon) * meters.lon,
+    north_m: (gps.lat - frame.origin.lat) * meters.lat,
+    up_m: altMode === 'amsl' ? gps.alt - frame.origin.alt_m : gps.alt,
+  };
+}
+
+export function enuToGps(enu: Enu, frame: SceneFrame, altMode: AltMode = frame.alt_mode) {
+  const meters = metersPerDegree(frame);
+  return {
+    lat: frame.origin.lat + enu.north_m / meters.lat,
+    lon: frame.origin.lon + enu.east_m / meters.lon,
+    alt: altMode === 'amsl' ? enu.up_m + frame.origin.alt_m : enu.up_m,
+  };
+}
+
+export function enuToThree(enu: Enu): [number, number, number] {
+  return [enu.east_m, enu.up_m, -enu.north_m];
+}
+
+export function threeToEnu([x, y, z]: [number, number, number]): Enu {
+  return { east_m: x, north_m: -z, up_m: y };
+}
+
+export function enuToGrid(enu: Enu, frame: SceneFrame): GridPoint {
+  const { min_e, max_e, min_n, max_n } = frame.extent;
+  const inside_extent = min_e <= enu.east_m && enu.east_m < max_e && min_n <= enu.north_m && enu.north_m < max_n;
+  const displayable = (
+    min_e - frame.display_margin_m <= enu.east_m && enu.east_m < max_e + frame.display_margin_m
+    && min_n - frame.display_margin_m <= enu.north_m && enu.north_m < max_n + frame.display_margin_m
+  );
+  return {
+    row: inside_extent
+      ? Math.min(frame.grid.rows - 1, Math.floor((max_n - enu.north_m) / frame.grid.pixel_size_n_m))
+      : null,
+    col: inside_extent
+      ? Math.min(frame.grid.cols - 1, Math.floor((enu.east_m - min_e) / frame.grid.pixel_size_e_m))
+      : null,
+    inside_extent,
+    displayable,
   };
 }

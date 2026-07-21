@@ -6,6 +6,7 @@ import math
 import os
 import re
 import json
+import secrets
 import time
 import uuid
 import shutil
@@ -30,7 +31,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List, Any, Literal
 
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
@@ -42,6 +43,7 @@ from app.capture_jobs import (
     CaptureStore,
     CaptureUnavailableError,
 )
+from app.coordinate_frame import SceneFrame, enu_to_sionna, scene_frame_from_metadata
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -842,6 +844,10 @@ class SceneTaskCreateRequest(BaseModel):
     auto_run: bool = True
 
 
+class SceneDisplayNameRequest(BaseModel):
+    display_name: str
+
+
 class BuildingCheckRequest(BaseModel):
     lat: float = Field(..., ge=-90.0, le=90.0)
     lon: float = Field(..., ge=-180.0, le=180.0)
@@ -1113,6 +1119,7 @@ def _scene_index_entry(task: Dict[str, Any], indexed_at: str) -> Optional[Dict[s
         "id": task.get("id"),
         "sceneKey": scene_key,
         "sceneName": task.get("sceneName"),
+        "displayName": task.get("displayName"),
         "location": task.get("location"),
         "modelUrl": task.get("modelUrl") or _artifact_url(artifact_paths["glb"]),
         "sionnaSceneXml": task.get("sionnaSceneXml") or str(artifact_paths["xml"]),
@@ -1135,6 +1142,49 @@ def rebuild_scene_index() -> List[Dict[str, Any]]:
     ]
     _write_json_list(SCENE_INDEX_JSON, scenes)
     return scenes
+
+
+def _scene_admin_error(token: Optional[str]) -> Optional[JSONResponse]:
+    configured = os.environ.get("SCENE_ADMIN_TOKEN", "")
+    if not configured:
+        return JSONResponse({"success": False, "error": "Scene administration is unavailable"}, status_code=503)
+    if not token or not secrets.compare_digest(token, configured):
+        return JSONResponse({"success": False, "error": "Invalid scene administration token"}, status_code=403)
+    return None
+
+
+def _scene_task_ready(task: Dict[str, Any]) -> bool:
+    if _scene_index_entry(task, datetime.now().isoformat()) is None:
+        return False
+    scene_dir = _generated_scene_dir(task)
+    if not scene_dir:
+        return False
+    metadata_path = scene_dir / "scene_metadata.json"
+    try:
+        scene_frame_from_metadata(json.loads(metadata_path.read_text(encoding="utf-8")))
+        return True
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _generated_scene_dir(task: Dict[str, Any]) -> Optional[Path]:
+    scene_key = _task_scene_key(task)
+    if not scene_key:
+        return None
+    root = SCENE_DIR.resolve()
+    target = (SCENE_DIR / scene_key).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+    return target
+
+
+async def _refresh_scene_index_after_mutation() -> None:
+    try:
+        await asyncio.to_thread(rebuild_scene_index)
+    except Exception:
+        logger.exception("Scene mutation succeeded, but the generated scene index could not be refreshed")
 
 
 def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -1171,6 +1221,10 @@ def _reconcile_task_from_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
         inferred_error = metadata.get("import_error") or metadata.get("error")
     elif _task_scene_key(task):
         if metadata.get("status") == "completed" and glb_path.exists() and xml_path.exists():
+            try:
+                scene_frame_from_metadata(metadata)
+            except ValueError:
+                return task
             inferred_status = "completed"
     elif glb_path.exists() or metadata.get("status") == "completed":
         inferred_status = "completed"
@@ -1276,6 +1330,7 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
     if metadata_path.exists():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            scene_frame_from_metadata(metadata)
             if metadata.get("status") == "failed":
                 return {
                     "success": False,
@@ -1286,6 +1341,17 @@ def _run_blender_task_sync(task_id: str) -> Dict[str, Any]:
                     "modelUrl": _artifact_url(artifact_paths["glb"]),
                     "sionnaSceneXml": str(artifact_paths["xml"]),
                 }
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_type": "scene_frame_invalid",
+                "outputDir": str(out_dir),
+                "blenderPath": blender_exe,
+                "sceneKey": scene_key,
+                "modelUrl": _artifact_url(artifact_paths["glb"]),
+                "sionnaSceneXml": str(artifact_paths["xml"]),
+            }
         except Exception:
             # If metadata can't be parsed, keep subprocess success result.
             pass
@@ -1320,7 +1386,15 @@ def _prepare_iss_unet_dataset_for_scene_task(scene_key: str) -> Dict[str, Any]:
     from app.iss_unet_dataset_service import prepare_iss_unet_dataset
 
     try:
-        result = prepare_iss_unet_dataset(scene_key, scene_dir=SCENE_DIR)
+        resolutions = {}
+        for pixel_size_m in (1, 2, 4):
+            resolutions[f"{pixel_size_m}m"] = prepare_iss_unet_dataset(
+                scene_key,
+                scene_dir=SCENE_DIR,
+                pixel_size_m=pixel_size_m,
+            )
+        result = dict(resolutions["4m"])
+        result["resolutions"] = resolutions
         return {
             "stage": "iss_unet_dataset_prepared",
             "note": "Blender stage completed and ISS_UNET dataset prepared",
@@ -1522,7 +1596,7 @@ async def create_scene_task(req: SceneTaskCreateRequest):
 @app.get("/api/scene-tasks")
 async def list_scene_tasks():
     with SCENE_TASKS_LOCK:
-        tasks = _read_json_list(SCENE_TASKS_JSON)
+        tasks = [task for task in _read_json_list(SCENE_TASKS_JSON) if task.get("status") != "deleted"]
     # Reconcile stale running/queued tasks by checking generated artifacts.
     reconciled_tasks = [
         _reconcile_task_from_artifacts(task) if task.get("status") in {"running", "queued"} else task
@@ -1533,7 +1607,23 @@ async def list_scene_tasks():
 
 @app.get("/api/generated-scenes")
 async def list_generated_scenes():
-    scenes = _read_scene_index()
+    with SCENE_TASKS_LOCK:
+        tasks = {
+            task.get("id"): task
+            for task in _read_json_list(SCENE_TASKS_JSON)
+            if task.get("status") == "completed"
+        }
+    scenes = []
+    for cached in _read_scene_index():
+        task = tasks.get(cached.get("id"))
+        if not task:
+            continue
+        scene = {**cached}
+        if task.get("displayName"):
+            scene["displayName"] = task["displayName"]
+        else:
+            scene.pop("displayName", None)
+        scenes.append(scene)
     return {"success": True, "scenes": scenes, "count": len(scenes)}
 
 
@@ -1541,6 +1631,64 @@ async def list_generated_scenes():
 async def refresh_generated_scenes():
     scenes = await asyncio.to_thread(rebuild_scene_index)
     return {"success": True, "scenes": scenes, "count": len(scenes)}
+
+
+@app.patch("/api/scene-tasks/{task_id}/display-name")
+async def update_scene_display_name(
+    task_id: str,
+    req: SceneDisplayNameRequest,
+    x_scene_admin_token: Optional[str] = Header(default=None),
+):
+    if error := _scene_admin_error(x_scene_admin_token):
+        return error
+
+    display_name = req.display_name.strip()
+    if not display_name or len(display_name) > 80:
+        return JSONResponse({"success": False, "error": "Display name must be 1-80 characters"}, status_code=422)
+
+    task = _get_task(task_id)
+    if not task:
+        return JSONResponse({"success": False, "error": f"task not found: {task_id}"}, status_code=404)
+    if task.get("status") != "completed" or not _scene_task_ready(task):
+        return JSONResponse({"success": False, "error": "Only ready scenes can be renamed"}, status_code=409)
+
+    updated = await asyncio.to_thread(_update_task, task_id, {"displayName": display_name})
+    await _refresh_scene_index_after_mutation()
+    return {"success": True, "task": updated}
+
+
+@app.delete("/api/scene-tasks/{task_id}")
+async def delete_scene_task(
+    task_id: str,
+    x_scene_admin_token: Optional[str] = Header(default=None),
+):
+    if error := _scene_admin_error(x_scene_admin_token):
+        return error
+
+    task = _get_task(task_id)
+    if not task:
+        return JSONResponse({"success": False, "error": f"task not found: {task_id}"}, status_code=404)
+    if task.get("status") not in {"completed", "failed"}:
+        return JSONResponse({"success": False, "error": "Only completed or failed scenes can be deleted"}, status_code=409)
+
+    scene_dir = _generated_scene_dir(task)
+    if not scene_dir:
+        return JSONResponse({"success": False, "error": "Invalid generated scene path"}, status_code=409)
+    try:
+        if scene_dir.exists():
+            await asyncio.wait_for(asyncio.to_thread(shutil.rmtree, scene_dir), timeout=30)
+    except Exception as exc:
+        return JSONResponse({"success": False, "error": f"Failed to delete scene data: {exc}"}, status_code=500)
+
+    deleted_at = datetime.now().isoformat()
+    updated = await asyncio.to_thread(_update_task, task_id, {
+        "status": "deleted",
+        "stage": "deleted",
+        "deletedAt": deleted_at,
+        "note": "Scene data deleted",
+    })
+    await _refresh_scene_index_after_mutation()
+    return {"success": True, "task": updated}
 
 
 @app.get("/api/scene-tasks/{task_id}")
@@ -1572,7 +1720,10 @@ async def get_scene_task_metadata(task_id: str):
     
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        scene_frame_from_metadata(metadata)
         return {"success": True, "metadata": metadata}
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc), "error_type": "scene_frame_invalid"}, status_code=409)
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -1646,12 +1797,16 @@ BUILTIN_SCENE_NAMES = {
     "nycu": "NYCU",
 }
 
+class ENUIn(BaseModel):
+    east_m: float
+    north_m: float
+    up_m: float
+
+
 class DeviceIn(BaseModel):
     name: str
     role: str
-    x: float
-    y: float
-    z: float
+    enu: ENUIn
     power_dbm: Optional[float] = Field(default=None)
 
 
@@ -1873,6 +2028,7 @@ async def iss_unet_reconstruct_upload_post(
     seed: int = Form(41),
     cfar_enabled: bool = Form(True),
     apply_building_mask: bool = Form(True),
+    filter_noise: bool = Form(True),
     devices_json: str = Form(""),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
@@ -1916,6 +2072,7 @@ async def iss_unet_reconstruct_upload_post(
             gps_csv=gps_csv,
             noise_csv=noise_csv,
             apply_building_mask=apply_building_mask,
+            filter_noise=filter_noise,
             scene_dir=SCENE_DIR,
             devices=devices,
             scene_xml_path=scene_xml,
@@ -1962,6 +2119,7 @@ async def iss_unet_statistics_upload_post(
     scene: str = Form(...),
     pixel_size_m: int = Form(4),
     apply_building_mask: bool = Form(True),
+    filter_noise: bool = Form(True),
     devices_json: str = Form(""),
     gps_file: UploadFile | None = File(None),
     noise_file: UploadFile | None = File(None),
@@ -2004,6 +2162,7 @@ async def iss_unet_statistics_upload_post(
             gps_csv=gps_csv,
             noise_csv=noise_csv,
             apply_building_mask=apply_building_mask,
+            filter_noise=filter_noise,
             scene_dir=SCENE_DIR,
             devices=devices,
             scene_xml_path=scene_xml,
@@ -2454,25 +2613,27 @@ def _sionna_device_config(devices: List[DeviceIn]) -> tuple[List[tuple], tuple]:
     tx_list = []
     for d in tx_devices:
         power_dbm = _device_power_dbm(d)
+        position = enu_to_sionna(d.enu.east_m, d.enu.north_m, d.enu.up_m)
         tx_list.append((
             d.name,
-            [d.x, -d.z, d.y],
+            list(position),
             [0.0, 0.0, 0.0],
             "desired",
             power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["tx"],
         ))
     for d in jammer_devices:
         power_dbm = _device_power_dbm(d)
+        position = enu_to_sionna(d.enu.east_m, d.enu.north_m, d.enu.up_m)
         tx_list.append((
             d.name,
-            [d.x, -d.z, d.y],
+            list(position),
             [0.0, 0.0, 0.0],
             "jammer",
             power_dbm if power_dbm is not None else DEFAULT_POWER_DBM_BY_ROLE["jammer"],
         ))
 
     rx = rx_devices[0]
-    return tx_list, (rx.name, [rx.x, -rx.z, rx.y])
+    return tx_list, (rx.name, list(enu_to_sionna(rx.enu.east_m, rx.enu.north_m, rx.enu.up_m)))
 
 
 @app.post("/api/sionna/cfr-plot")
@@ -2635,9 +2796,9 @@ async def simulate(req: SimulateRequest):
         device_payload = {
             "name": d.name,
             "role": d.role,
-            "x": d.x,
-            "y": d.y,
-            "z": d.z,
+            "east_m": d.enu.east_m,
+            "north_m": d.enu.north_m,
+            "up_m": d.enu.up_m,
         }
         if power_dbm is not None:
             device_payload["power_dbm"] = power_dbm

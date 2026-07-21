@@ -9,14 +9,15 @@ import {
 
 describe('GPS replay utilities', () => {
   it('sorts GPS CSV rows by earliest timestamp', () => {
-    const points = parseGpsReplayCsv(`time_stamp,lat,lon,alt
-2026-05-11T16:52:17.302053,24.3,121.3,40
-2026-05-11T16:52:16.306518,24.1,121.1,20
-2026-05-11T16:52:16.803713,24.2,121.2,30
+    const points = parseGpsReplayCsv(`time_stamp,lat,lon,alt,alt_mode
+2026-05-11T16:52:17.302053,24.3,121.3,40,amsl
+2026-05-11T16:52:16.306518,24.1,121.1,20,relative
+2026-05-11T16:52:16.803713,24.2,121.2,30,amsl
 `);
 
     assert.deepEqual(points.map((point) => point.lat), [24.1, 24.2, 24.3]);
     assert.deepEqual(points.map((point) => point.alt), [20, 30, 40]);
+    assert.deepEqual(points.map((point) => point.altMode), ['relative', 'amsl', 'amsl']);
   });
 
   it('keeps replay timing at 2 points per second for 1x', () => {
