@@ -1427,12 +1427,12 @@ canvas {
   flex: 0 1 auto;
   gap: 8px;
   justify-content: flex-end;
+  width: 100%;
   min-width: 0;
-  margin-left: auto;
 }
 
 .workspace__statusbar .status-panel {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   position: relative;
   min-width: 0;
   overflow: visible;
@@ -1814,7 +1814,6 @@ canvas {
     flex: 0 1 auto;
     justify-content: flex-end;
     max-width: 100%;
-    margin-left: auto;
   }
 
   .workspace__statusbar .scene-switcher {
