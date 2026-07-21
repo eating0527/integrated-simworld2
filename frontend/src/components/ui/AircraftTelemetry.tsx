@@ -62,7 +62,10 @@ export function AircraftTelemetry({
   const summary = statusBar ? (
     <span className="status-summary status-summary--telemetry" aria-label="GPS 狀態摘要">
       <span className="status-summary__icon" aria-hidden="true">⌖</span>
-      {device ? (
+      <span className={`status-summary__state status-summary__state--${device ? 'identified' : 'unidentified'}`}>
+        {device ? '已識別' : '未識別'}
+      </span>
+      {device && Number.isFinite(device.lat) && Number.isFinite(device.lon) && Number.isFinite(device.alt) ? (
         <span className="status-summary__data">
           <span>{device.lat.toFixed(3)}</span>
           <span>{device.lon.toFixed(3)}</span>

@@ -15,6 +15,38 @@ describe('AircraftTelemetry', () => {
     expect(screen.getAllByText('無人機遙測')).toHaveLength(1);
   });
 
+  it('shows an unidentified state and N/A without a device', () => {
+    render(<AircraftTelemetry statusBar device={null} isTracked={false} />);
+
+    const summary = screen.getByLabelText('GPS 狀態摘要');
+    expect(summary).toHaveTextContent('未識別');
+    expect(summary).toHaveTextContent('N/A');
+    expect(summary.querySelector('.status-summary__state')).toHaveClass('status-summary__state--unidentified');
+  });
+
+  it('shows N/A when device coordinates are unavailable', () => {
+    render(
+      <AircraftTelemetry
+        statusBar
+        device={{
+          lat: Number.NaN,
+          lon: 121.7654321,
+          alt: 88.4,
+          accuracy: 2.5,
+          deviceId: 'uav-1',
+          deviceName: 'M4P TOP Aircraft',
+          deviceType: 'uav',
+          timestamp: 1,
+          lastUpdateTime: Date.now(),
+        }}
+        isTracked={false}
+      />,
+    );
+
+    expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('已識別');
+    expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('N/A');
+  });
+
   it('shows a collapsed coordinate summary and expands telemetry details', async () => {
     const user = userEvent.setup();
     render(
@@ -37,6 +69,8 @@ describe('AircraftTelemetry', () => {
       />,
     );
 
+    expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('已識別');
+    expect(screen.getByLabelText('GPS 狀態摘要').querySelector('.status-summary__state')).toHaveClass('status-summary__state');
     expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('24.123');
     expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('121.765');
     expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('88.4');

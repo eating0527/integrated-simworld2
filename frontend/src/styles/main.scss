@@ -1358,11 +1358,11 @@ canvas {
 
 .workspace__statusbar {
   position: relative;
-  display: flex;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   min-height: 46px;
-  padding-inline: 46px;
+  padding-inline: 12px;
   overflow: visible;
   border: 1px solid rgba(120, 180, 255, 0.18);
   border-radius: 12px;
@@ -1374,12 +1374,10 @@ canvas {
 }
 
 .workspace__statusbar .scene-switcher {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  grid-column: 2;
+  position: relative;
   width: 210px;
-  max-width: 210px;
+  max-width: 100%;
   padding: 0;
   overflow: visible;
   border: 0;
@@ -1423,9 +1421,10 @@ canvas {
 }
 
 .workspace__statusbar-items {
+  grid-column: 3;
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   gap: 8px;
   justify-content: flex-end;
   min-width: 0;
@@ -1450,11 +1449,11 @@ canvas {
 }
 
 .workspace__statusbar .status-panel--telemetry {
-  width: min(370px, 30vw);
+  min-width: 0;
 }
 
 .workspace__statusbar .status-panel--connection {
-  width: min(210px, 18vw);
+  min-width: 0;
 }
 
 .workspace__statusbar .status-panel .min-panel__bar {
@@ -1807,22 +1806,19 @@ canvas {
 
 @media (max-width: 1320px) {
   .workspace__statusbar {
-    display: flex;
-    flex-wrap: nowrap;
-    justify-content: space-between;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     padding: 4px 12px;
   }
 
   .workspace__statusbar-items {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     justify-content: flex-end;
-    max-width: calc(50% - clamp(63px, 21vw, 105px));
+    max-width: 100%;
     margin-left: auto;
   }
 
   .workspace__statusbar .scene-switcher {
     width: clamp(126px, 42vw, 210px);
-    max-width: calc(100% - 24px);
   }
 
   .workspace__statusbar .status-panel {
@@ -1848,17 +1844,25 @@ canvas {
   }
 
   .workspace__statusbar-items {
-    flex: 0 0 100px;
-    width: 100px;
-    max-width: 100px;
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 100%;
     gap: 4px;
   }
 
   .workspace__statusbar .status-panel--telemetry,
   .workspace__statusbar .status-panel--connection {
-    flex: 0 0 calc(50% - 2px);
-    width: calc(50% - 2px);
+    flex: 0 1 auto;
+    width: auto;
     min-width: 0;
+  }
+
+  .workspace__statusbar .status-panel--telemetry .status-summary__data {
+    display: none;
+  }
+
+  .workspace__statusbar .status-panel--connection .status-summary__count {
+    display: none;
   }
 
   .workspace__statusbar .status-panel .min-panel__bar {

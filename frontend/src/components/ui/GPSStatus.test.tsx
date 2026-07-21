@@ -59,12 +59,36 @@ describe('GPSStatus', () => {
     expect(screen.getByRole('button', { name: '改名' })).toBeInTheDocument();
   });
 
+  it.each([
+    ['connected', '已連線'],
+    ['connecting', '連線中'],
+    ['failed', '連線失敗'],
+    ['disconnected', '離線'],
+  ] as const)('shows the mapped label for %s', (connectionStatus, label) => {
+    render(
+      <GPSStatus
+        myDeviceId="device-123456"
+        deviceName="Drone"
+        onRenameClick={() => {}}
+        allDevices={new Map()}
+        uavPath={[]}
+        onClearPath={() => {}}
+        connectionStatus={connectionStatus}
+        statusBar
+      />,
+    );
+
+    const summary = screen.getByLabelText('連線狀態摘要');
+    expect(summary).toHaveTextContent(label);
+    expect(summary.querySelector('.status-summary__state')).toHaveClass('status-summary__state');
+  });
+
   it('shows connection light and device count in the collapsed status summary', async () => {
     const user = userEvent.setup();
     renderPanel(true);
 
     expect(screen.getByLabelText('連線狀態摘要')).toHaveTextContent('1 台');
-    expect(screen.getByLabelText('連線狀態摘要')).not.toHaveTextContent('已連線');
+    expect(screen.getByLabelText('連線狀態摘要')).toHaveTextContent('已連線');
     expect(screen.queryByRole('button', { name: '改名' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /restore 連線狀態/i }));
