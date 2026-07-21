@@ -24,6 +24,8 @@ tools/scrcpy/*.zip
 .idea/
 /.claude/settings.local.json
 /.claude/worktrees/
+/.agents
+/skills-lock.json
 
 ## 本機模型權重與覆寫設定
 backend/app/model_artifacts/
