@@ -40,5 +40,3 @@ export function NTPUScene() {
     </group>
   );
 }
-
-useGLTF.preload(NTPU_CONFIG.scene.modelPath);

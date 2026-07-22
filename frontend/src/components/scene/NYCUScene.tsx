@@ -39,5 +39,3 @@ export function NYCUScene() {
     </group>
   );
 }
-
-useGLTF.preload(NYCU_CONFIG.scene.modelPath);

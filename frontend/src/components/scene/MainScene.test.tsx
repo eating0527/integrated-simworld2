@@ -20,8 +20,15 @@ const sceneMocks = vi.hoisted(() => ({
   failDynamic: false,
 }));
 
+const canvasMock = vi.hoisted(() => ({
+  dpr: undefined as number | [number, number] | undefined,
+}));
+
 vi.mock('@react-three/fiber', () => ({
-  Canvas: ({ children }: { children: ReactNode }) => <div data-testid="canvas">{children}</div>,
+  Canvas: ({ children, dpr }: { children: ReactNode; dpr?: number | [number, number] }) => {
+    canvasMock.dpr = dpr;
+    return <div data-testid="canvas">{children}</div>;
+  },
 }));
 
 vi.mock('@react-three/drei', () => ({
@@ -75,6 +82,12 @@ beforeEach(() => {
 });
 
 describe('MainScene device visibility', () => {
+  it('caps render density for high-DPI displays', () => {
+    render(<MainScene />);
+
+    expect(canvasMock.dpr).toEqual([1, 1.5]);
+  });
+
   it.each([
     ['tx', 'tx-model', 0, 1],
     ['jammer', 'jam-model', 2, 0],

@@ -170,6 +170,7 @@ export function MainScene({
       {sceneStatus}
       <Canvas
         shadows
+        dpr={[1, 1.5]}
         gl={{
           toneMapping: ACESFilmicToneMapping,
           toneMappingExposure: 1.2,
@@ -200,8 +201,8 @@ export function MainScene({
           castShadow
           position={[0, 50, 0]}
           intensity={1.5}
-          shadow-mapSize-width={4096}
-          shadow-mapSize-height={4096}
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
           shadow-camera-near={1}
           shadow-camera-far={1000}
           shadow-camera-top={500}
