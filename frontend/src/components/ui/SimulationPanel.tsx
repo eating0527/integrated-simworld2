@@ -553,7 +553,7 @@ export function SimulationPanel({
                   fontSize:     11,
                   fontWeight:   tab === key ? 700 : 400,
                   cursor:       disabled ? 'not-allowed' : 'pointer',
-                  transition:   'all .15s',
+                  transition:   'background-color .15s, border-color .15s, color .15s',
                   whiteSpace:   'nowrap',
                 }}
               >
@@ -926,7 +926,7 @@ export function SimulationPanel({
                 fontWeight:     700,
                 fontSize:       13,
                 cursor:         cur.loading ? 'not-allowed' : 'pointer',
-                transition:     'all .2s',
+                transition:     'background-color .2s, color .2s',
                 letterSpacing:  '.5px',
                 marginBottom:   12,
               }}
@@ -1063,7 +1063,7 @@ function ISSUNetResultView({
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
-            transition: 'all .2s',
+            transition: 'background-color .2s, border-color .2s, color .2s',
           }}
         >
           {ISS_UNET_VIEW_LABELS['comparison']}
@@ -1080,7 +1080,7 @@ function ISSUNetResultView({
             fontSize: 12,
             fontWeight: 600,
             cursor: cfarAvailable ? 'pointer' : 'not-allowed',
-            transition: 'all .2s',
+            transition: 'background-color .2s, border-color .2s, color .2s',
           }}
           title={!cfarAvailable ? '請先啟用 CFAR' : ''}
         >
@@ -1554,7 +1554,7 @@ function ToggleSwitch({
         display: 'flex',
         alignItems: 'center',
         justifyContent: checked ? 'flex-end' : 'flex-start',
-        transition: 'all .15s',
+        transition: 'background-color .15s, border-color .15s, opacity .15s',
         opacity: disabled ? 0.55 : 1,
       }}
       title={disabled ? 'Noise with GPS only' : (checked ? 'On' : 'Off')}

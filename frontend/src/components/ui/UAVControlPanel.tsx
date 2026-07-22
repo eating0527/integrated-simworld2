@@ -106,7 +106,7 @@ function toggleBtn(active: boolean, accent: string): React.CSSProperties {
     fontWeight: 600,
     fontSize: '12px',
     cursor: 'pointer',
-    transition: 'all 0.18s',
+    transition: 'background-color 0.18s, border-color 0.18s, color 0.18s',
     letterSpacing: '0.04em',
   };
 }

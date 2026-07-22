@@ -1942,15 +1942,42 @@ canvas {
   }
 }
 
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-ring {
+  from { opacity: 0.7; transform: scale(0.92); }
+  to { opacity: 0; transform: scale(1.12); }
+}
+
+@keyframes spin-glow {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+:where(button):focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+:where(button):active:not(:disabled) {
+  filter: brightness(0.86);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .workspace__rail,
-  .workspace__backdrop,
-  .min-panel,
-  .min-panel__body,
-  .min-panel__chevron,
-  .photo-viewer {
-    transition-duration: 0.01ms;
-    animation-duration: 0.01ms;
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

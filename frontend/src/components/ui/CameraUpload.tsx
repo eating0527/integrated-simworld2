@@ -120,7 +120,7 @@ export function CameraUpload({ currentPosition, deviceId, onUploadSuccess }: Pro
         boxShadow: uploading
           ? 'none'
           : '0 0 0 1px rgba(0,212,255,0.4), 0 0 24px rgba(0,212,255,0.4), 0 8px 20px rgba(0,0,0,0.5)',
-        transition: 'all 0.3s ease',
+        transition: 'background-color 0.3s ease, box-shadow 0.3s ease',
         userSelect: 'none',
         position: 'relative',
         overflow: 'hidden',
