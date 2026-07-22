@@ -81,18 +81,42 @@ winget install --id LLVM.LLVM --exact --accept-package-agreements --accept-sourc
 
 ## 設定變數
 
-專案根目錄建立 `.env`。密碼與 token 只放在本機，不要放到 `frontend/.env`，也不要提交。
+第一次建立專案時，先從範本建立根目錄 `.env`：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+再編輯 `.env`。密碼與 token 只放在本機，不要放到 `frontend/.env`，也不要提交。
 
 ```dotenv
 RASPI_HOST=<Raspberry Pi IP，例如 192.168.1.50>
 RASPI_USER=<Raspberry Pi 帳號，例如 user>
 RASPI_PSW=<Raspberry Pi 密碼>
 RASPI_PORT=22
-USRP_UPLOAD_API_URL=http://<這台電腦的區網 IP>:8888/api/usrp/upload-noise-csv
+USRP_UPLOAD_API_URL=http://<這台電腦的區網 IPv4>:8888/api/usrp/upload-noise-csv
 
 # 有 Cloudflare token 時才填
 CLOUDFLARED_TOKEN=<Cloudflare tunnel token>
 ```
+
+`USRP_UPLOAD_API_URL` 是 Raspberry Pi 在 mission 停止時回傳 `noise.csv` 的位址，必須使用**目前執行 backend 這台電腦**的 Wi-Fi 或有線網路 IPv4。不要填 `localhost`、`127.0.0.1`、Raspberry Pi IP，或從另一台電腦複製過來的舊 IP。
+
+Windows 可用以下命令找出和 Raspberry Pi 位於同一區網的 IPv4：
+
+```powershell
+Get-NetIPAddress -AddressFamily IPv4 |
+  Where-Object { $_.IPAddress -notlike '127.*' -and $_.AddressState -eq 'Preferred' } |
+  Select-Object InterfaceAlias, IPAddress
+```
+
+啟動 backend 後，應在 Raspberry Pi 上確認回傳位址可連線：
+
+```bash
+curl --connect-timeout 5 http://<這台電腦的區網 IPv4>:8888/docs
+```
+
+如果逾時，先確認 backend 已啟動，並允許 Windows 防火牆接收該區網介面的 TCP 8888 連線。Start mission 只會測試「電腦連到 Raspberry Pi」，不代表 Stop mission 所需的「Raspberry Pi 連回電腦」也可用。
 
 前端環境檔位於 `frontend/.env`。本機預設可使用：
 

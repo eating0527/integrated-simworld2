@@ -101,15 +101,35 @@ Start-Process -FilePath $py `
 
 ## Raspberry Pi USRP
 
-根目錄 `.env`：
+根目錄 `.env` 應由範本建立：
+
+```powershell
+Copy-Item .env.example .env
+```
 
 ```dotenv
 RASPI_HOST=<Raspberry Pi IP>
 RASPI_USER=<Raspberry Pi 帳號>
 RASPI_PSW=<Raspberry Pi 密碼>
 RASPI_PORT=22
-USRP_UPLOAD_API_URL=http://<這台電腦的區網 IP>:8888/api/usrp/upload-noise-csv
+USRP_UPLOAD_API_URL=http://<這台電腦的區網 IPv4>:8888/api/usrp/upload-noise-csv
 ```
+
+`USRP_UPLOAD_API_URL` 是 Raspberry Pi 停止 mission 後回傳 `noise.csv` 的目的地。必須填目前執行 backend 的電腦，且該 IPv4 必須和 Raspberry Pi 互通；不可使用 `localhost`、`127.0.0.1`、Raspberry Pi IP 或另一台電腦的舊 IP。
+
+```powershell
+Get-NetIPAddress -AddressFamily IPv4 |
+  Where-Object { $_.IPAddress -notlike '127.*' -and $_.AddressState -eq 'Preferred' } |
+  Select-Object InterfaceAlias, IPAddress
+```
+
+啟動 backend 後，從 Raspberry Pi 驗證反向連線：
+
+```bash
+curl --connect-timeout 5 http://<這台電腦的區網 IPv4>:8888/docs
+```
+
+若逾時，檢查 backend 是否監聽 TCP 8888，以及 Windows 防火牆是否允許 Raspberry Pi 所在區網連入。SSH Start 成功只證明電腦可以連到 Raspberry Pi，不能證明 Stop 所需的 CSV 反向上傳可用。
 
 Raspberry Pi 端安裝：
 
