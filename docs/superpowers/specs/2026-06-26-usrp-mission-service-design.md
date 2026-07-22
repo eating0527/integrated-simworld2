@@ -68,7 +68,7 @@ Environment=START_JAMMER=0
 EnvironmentFile=-/run/simworld/usrp.env
 ExecStart=/bin/bash /home/user/pi_radio_stack.sh
 KillMode=control-group
-TimeoutStopSec=0
+TimeoutStopSec=20s
 Restart=no
 ```
 
@@ -87,7 +87,7 @@ Environment=START_JAMMER=0
 EnvironmentFile=-/run/simworld/usrp.env
 ExecStart=/bin/bash /home/user/pi_radio_stack.sh
 KillMode=control-group
-TimeoutStopSec=0
+TimeoutStopSec=20s
 Restart=no
 ```
 
@@ -130,11 +130,10 @@ wrapper 狀態流程：
 2. 寫 `mission.json`：`state=starting`, `upload_state=recording`。
 3. 啟動 `RX_SCRIPT`。
 4. RX running 後寫 `state=running`。
-5. stop/TERM/EXIT 時進入 finalization。
-6. 先把工作目錄的 `NOISE_CSV` copy 到 mission dir 的 `noise.csv`。
-7. 從 mission dir 上傳 `noise.csv`。
-8. 成功後寫 `upload_state=uploaded`。
-9. 失敗時保留檔案並寫 `upload_state=upload_pending`。
+5. stop/TERM/EXIT 時進入 `stopping_service`，bounded cleanup 最多 graceful 10 秒，再 force confirmation 2 秒。
+6. 寫 `phase=finalizing_file`，先把工作目錄的 `NOISE_CSV` copy 到 mission dir 的 `noise.csv`。
+7. 寫 `state=stopped`, `upload_state=upload_pending`，讓 service 先正常結束；上傳由主機背景 retry 或手動 retry 執行。
+8. 上傳成功後寫 `upload_state=uploaded`；失敗時保留檔案與 `upload_pending`。
 
 檔案保護規則：
 

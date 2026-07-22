@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { USRPTelemetry } from './USRPTelemetry';
@@ -8,6 +8,7 @@ type ChildOverrides = {
   connection?: string;
   service?: string;
   file?: string;
+  phase?: string;
   error?: string;
 };
 
@@ -87,7 +88,10 @@ describe('USRPTelemetry capture controls', () => {
       .toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('button', { name: 'Start UAV' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/capture/status?usrp_mode=test');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/status?usrp_mode=test',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it('starts USRP independently when UAV is offline', async () => {
@@ -205,6 +209,63 @@ describe('USRPTelemetry capture controls', () => {
       '/api/capture/usrp/stop?mission_id=noise_job',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('renders independent current phases for bound children', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_phases',
+      bind: true,
+      overall: 'finalizing',
+      uav: { service: 'stopping', file: 'finalizing', phase: 'finalizing_file' },
+      usrp: { service: 'stopped', file: 'upload_pending', phase: 'upload_pending' },
+    })));
+
+    await openTelemetry();
+
+    const uavProgress = await screen.findByLabelText('無人機 GPS 採樣 progress');
+    const usrpProgress = screen.getByLabelText('USRP 干擾採樣 progress');
+    expect(within(uavProgress).getByText(/Finalize CSV — current/)).toBeInTheDocument();
+    expect(within(usrpProgress).getByText(/Upload — current/)).toBeInTheDocument();
+    expect(within(usrpProgress).getByText(/Connect — completed/)).toBeInTheDocument();
+  });
+
+  it('retries a saved USRP upload without restarting capture', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input) => jsonResponse(captureStatus({
+      missionId: 'noise_pending',
+      overall: 'finalizing',
+      usrp: {
+        service: 'stopped',
+        file: String(input).includes('/upload/retry') ? 'uploaded' : 'upload_pending',
+        phase: String(input).includes('/upload/retry') ? 'completed' : 'upload_pending',
+      },
+    })));
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: 'Retry upload' }));
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/usrp/upload/retry?mission_id=noise_pending',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('shows reconciliation and child failures accessibly', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'noise_uncertain',
+      usrp: {
+        connection: 'offline',
+        service: 'presumed_running',
+        file: 'finalizing',
+        phase: 'reconciling',
+        error: 'remote command timed out',
+      },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('Reconciling presumed-running state')).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByRole('alert')).toHaveTextContent('remote command timed out');
+    expect(screen.getByText(/reconcile status before stopping/i)).toBeInTheDocument();
   });
 
   it('shows plain text start failures without a JSON parse error', async () => {

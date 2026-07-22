@@ -31,7 +31,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List, Any, Literal
 
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query, Header
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
@@ -2232,6 +2232,13 @@ def _capture_error(exc: Exception):
     raise exc
 
 
+async def _capture_call(fn, *args, **kwargs):
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args, **kwargs), timeout=30)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail='capture operation timed out; status is being reconciled') from exc
+
+
 @app.get("/api/capture/status")
 async def capture_status_get(usrp_mode: Literal["test", "usrp"] = Query("test")):
     try:
@@ -2243,7 +2250,7 @@ async def capture_status_get(usrp_mode: Literal["test", "usrp"] = Query("test"))
 @app.post("/api/capture/uav/start")
 async def capture_uav_start_post():
     try:
-        return await asyncio.to_thread(capture_coordinator.start_uav)
+        return await _capture_call(capture_coordinator.start_uav)
     except Exception as exc:
         _capture_error(exc)
 
@@ -2251,7 +2258,7 @@ async def capture_uav_start_post():
 @app.post("/api/capture/uav/stop")
 async def capture_uav_stop_post(mission_id: str = Query(...)):
     try:
-        return await asyncio.to_thread(capture_coordinator.stop_uav, mission_id)
+        return await _capture_call(capture_coordinator.stop_uav, mission_id)
     except Exception as exc:
         _capture_error(exc)
 
@@ -2259,7 +2266,7 @@ async def capture_uav_stop_post(mission_id: str = Query(...)):
 @app.post("/api/capture/usrp/start")
 async def capture_usrp_start_post(req: CaptureStartRequest):
     try:
-        return await asyncio.to_thread(
+        return await _capture_call(
             capture_coordinator.start_usrp,
             req.usrp_mode,
             scene=req.scene,
@@ -2269,10 +2276,24 @@ async def capture_usrp_start_post(req: CaptureStartRequest):
         _capture_error(exc)
 
 
-@app.post("/api/capture/usrp/stop")
-async def capture_usrp_stop_post(mission_id: str = Query(...)):
+@app.post("/api/capture/usrp/upload/retry")
+async def capture_usrp_retry_upload_post(mission_id: str = Query(...), background_tasks: BackgroundTasks = None):
     try:
-        return await asyncio.to_thread(capture_coordinator.stop_usrp, mission_id)
+        if background_tasks is not None:
+            background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
+            return await _capture_call(capture_coordinator.store.load, mission_id)
+        return await _capture_call(capture_coordinator.retry_usrp_upload, mission_id)
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/usrp/stop")
+async def capture_usrp_stop_post(mission_id: str = Query(...), background_tasks: BackgroundTasks = None):
+    try:
+        result = await _capture_call(capture_coordinator.stop_usrp, mission_id)
+        if background_tasks is not None and result.usrp.file == "upload_pending":
+            background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
+        return result
     except Exception as exc:
         _capture_error(exc)
 
@@ -2280,7 +2301,7 @@ async def capture_usrp_stop_post(mission_id: str = Query(...)):
 @app.post("/api/capture/bind/start")
 async def capture_bind_start_post(req: CaptureStartRequest):
     try:
-        return await asyncio.to_thread(
+        return await _capture_call(
             capture_coordinator.start_bind,
             req.usrp_mode,
             scene=req.scene,
@@ -2293,7 +2314,7 @@ async def capture_bind_start_post(req: CaptureStartRequest):
 @app.post("/api/capture/bind/stop")
 async def capture_bind_stop_post(mission_id: str = Query(...)):
     try:
-        return await asyncio.to_thread(capture_coordinator.stop_bind, mission_id)
+        return await _capture_call(capture_coordinator.stop_bind, mission_id)
     except Exception as exc:
         _capture_error(exc)
 

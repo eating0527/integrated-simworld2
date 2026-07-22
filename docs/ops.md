@@ -138,7 +138,12 @@ sudo cp tools/pi_radio_stack.sh /home/user/pi_radio_stack.sh
 sudo cp tools/pi_radio_stack.service.example /etc/systemd/system/drone.service
 sudo cp tools/pi_radio_stack.test.service.example /etc/systemd/system/drone_test.service
 sudo systemctl daemon-reload
+sudo systemctl show drone -p TimeoutStopUSec -p KillMode
 ```
+
+預期顯示 `TimeoutStopUSec=20s` 與 `KillMode=control-group`。若目前 mission 正在執行，先不要覆寫或 reload 該 service；等 mission inactive 後再部署。部署後 Stop 只負責停止採樣、保存 CSV 並回報 `upload_pending`，上傳由主機背景工作或面板的 `Retry upload` 執行。
+
+Timeout 階段：Pi 子程序 10 秒 graceful + 2 秒 force confirmation；systemd 20 秒；SSH stop command 25 秒；backend capture API 30 秒；前端 POST 35 秒。停止命令超時會顯示 `presumed_running/reconciling`，不可當作已停止；服務已確認停止但網路上傳失敗則保留 `stopped/upload_pending`。
 
 不要把 `drone.service` 或 `drone_test.service` 設成開機自動啟動；由 `採樣控制面板` 在每次 mission 啟動時控制。
 
@@ -147,8 +152,8 @@ sudo systemctl daemon-reload
 - `Test` 會使用 `drone_test.service`
 - `USRP` 會使用 `drone.service`
 - `Start USRP` 開始 USRP 干擾採樣
-- `Stop USRP` 停止並等待檔案 finalize、upload、verify
-- `Pending upload` 表示 Raspberry Pi 上的 CSV 保留，可重試
+- `Stop USRP` 停止採樣並等待本地檔案 finalize；上傳獨立執行，不阻塞 Stop
+- `Pending upload` 表示 Raspberry Pi 上的 CSV 保留，可用 `Retry upload` 重試
 
 輸出檔：
 

@@ -38,19 +38,13 @@ class PiRadioStackContractTests(unittest.TestCase):
         self.assertEqual(contract["default_started_roles"], ["rx"])
         self.assertEqual(
             contract["finalize_missing_noise"],
-            ('write_state "failed" "failed" "noise.csv is missing or empty"', 1),
+            ('write_state "failed" "failed" "failed" "noise.csv is missing or empty"', 1),
         )
         self.assertEqual(
             contract["finalize_copy_failure"],
-            ('write_state "failed" "failed" "failed to copy noise.csv"', 1),
+            ('write_state "failed" "failed" "failed" "failed to copy noise.csv"', 1),
         )
-        self.assertEqual(
-            contract["finalize_upload_states"],
-            [
-                'write_state "${final_state}" "uploaded" "${JOB_ERROR}"',
-                'write_state "${final_state}" "upload_pending" "${JOB_ERROR}"',
-            ],
-        )
+        self.assertEqual(contract["finalize_upload_states"], [])
 
     def test_shell_startup_plan_defaults_to_rx_only_without_bash(self):
         stack = (ROOT / "tools" / "pi_radio_stack.sh").read_text(encoding="utf-8")
@@ -69,10 +63,10 @@ class PiRadioStackContractTests(unittest.TestCase):
         self.assertIn('START_TX="${START_TX:-0}"', stack)
         self.assertIn('START_JAMMER="${START_JAMMER:-0}"', stack)
         self.assertIn('cp "${NOISE_CSV}" "${MISSION_NOISE_CSV}"', stack)
-        self.assertIn('write_state "running"', stack)
-        self.assertIn('write_state "finalizing"', stack)
-        self.assertIn('write_state "${final_state}" "upload_pending"', stack)
-        self.assertIn('write_state "${final_state}" "uploaded"', stack)
+        self.assertIn('write_state "recording" "running"', stack)
+        self.assertIn('write_state "finalizing_file"', stack)
+        self.assertIn('write_state "upload_pending"', stack)
+        self.assertNotIn('write_state "${final_state}" "uploaded"', stack)
         self.assertNotIn("chan_est_rx.py", stack)
         self.assertNotIn("chan_est_tx.py", stack)
         self.assertNotIn("noise.py", stack)
@@ -91,7 +85,7 @@ class PiRadioStackContractTests(unittest.TestCase):
         self.assertIn("START_JAMMER=0", usrp_unit)
         self.assertIn("EnvironmentFile=-/run/simworld/usrp.env", usrp_unit)
         self.assertIn("KillMode=control-group", usrp_unit)
-        self.assertIn("TimeoutStopSec=0", usrp_unit)
+        self.assertIn("TimeoutStopSec=20s", usrp_unit)
         self.assertIn("Restart=no", usrp_unit)
 
         self.assertIn("Environment=MODE=test", test_unit)
@@ -102,7 +96,7 @@ class PiRadioStackContractTests(unittest.TestCase):
         self.assertIn("START_JAMMER=0", test_unit)
         self.assertIn("EnvironmentFile=-/run/simworld/usrp.env", test_unit)
         self.assertIn("KillMode=control-group", test_unit)
-        self.assertIn("TimeoutStopSec=0", test_unit)
+        self.assertIn("TimeoutStopSec=20s", test_unit)
         self.assertIn("Restart=no", test_unit)
 
     def test_finalize_keeps_mission_noise_copy_and_marks_upload_pending(self):
@@ -177,7 +171,7 @@ class PiRadioStackContractTests(unittest.TestCase):
             mission_state = mission_path / "mission.json"
             self.assertTrue((mission_path / "noise.csv").exists())
             self.assertIn('"upload_state": "upload_pending"', mission_state.read_text(encoding="utf-8"))
-            self.assertEqual(upload_log.read_text(encoding="utf-8").splitlines(), ["upload"])
+            self.assertFalse(upload_log.exists())
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -242,12 +236,12 @@ class PiRadioStackContractTests(unittest.TestCase):
                 stack, {}
             ),
             "finalize_missing_noise": (
-                'write_state "failed" "failed" "noise.csv is missing or empty"',
-                stack.count('write_state "failed" "failed" "noise.csv is missing or empty"'),
+                'write_state "failed" "failed" "failed" "noise.csv is missing or empty"',
+                stack.count('write_state "failed" "failed" "failed" "noise.csv is missing or empty"'),
             ),
             "finalize_copy_failure": (
-                'write_state "failed" "failed" "failed to copy noise.csv"',
-                stack.count('write_state "failed" "failed" "failed to copy noise.csv"'),
+                'write_state "failed" "failed" "failed" "failed to copy noise.csv"',
+                stack.count('write_state "failed" "failed" "failed" "failed to copy noise.csv"'),
             ),
             "finalize_upload_states": re.findall(
                 r'write_state "\$\{final_state\}" "(?:uploaded|upload_pending)" "\$\{JOB_ERROR\}"',

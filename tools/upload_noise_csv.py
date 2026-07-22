@@ -75,7 +75,7 @@ def post_noise(url: str, fields: dict[str, str], noise_csv_path: Path) -> dict:
         headers={"Content-Type": content_type},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=15) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return json.loads(response.read().decode(charset))
 

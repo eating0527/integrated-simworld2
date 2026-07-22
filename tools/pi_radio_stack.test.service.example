@@ -19,7 +19,7 @@ Environment=NOISE_CSV=/home/user/rx_sampling/noise.csv
 EnvironmentFile=-/run/simworld/usrp.env
 ExecStart=/bin/bash /home/user/pi_radio_stack.sh
 KillMode=control-group
-TimeoutStopSec=0
+TimeoutStopSec=20s
 Restart=no
 
 [Install]

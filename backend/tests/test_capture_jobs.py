@@ -490,41 +490,39 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.overall_state, "finalizing")
         self.assertNotEqual(dashboard.overall_state, "completed")
 
-    def test_stop_bind_retries_pending_upload_on_second_stop(self):
+    def test_stop_bind_leaves_pending_upload_for_explicit_retry(self):
         state = self.coordinator.start_bind("usrp")
-        self.backend.stop_capture_job.side_effect = [
-            {
-                "success": True,
-                "service_state": "stopped",
-                "mission_state": {
-                    "state": "stopped",
-                    "upload_state": "upload_pending",
-                },
+        self.backend.stop_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "state": "stopped",
+                "upload_state": "upload_pending",
             },
-            {
-                "success": True,
-                "service_state": "stopped",
-                "mission_state": {
-                    "state": "stopped",
-                    "upload_state": "uploaded",
-                },
+        }
+        self.backend.retry_capture_upload.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "state": "stopped",
+                "upload_state": "uploaded",
             },
-        ]
+        }
 
         first = self.coordinator.stop_bind(state.mission_id)
         after_first = self.coordinator.store.load(state.mission_id)
-        second = self.coordinator.stop_bind(state.mission_id)
+        second = self.coordinator.retry_usrp_upload(state.mission_id)
         after_second = self.coordinator.store.load(state.mission_id)
 
         self.assertEqual(first.usrp.service, "stopped")
         self.assertEqual(first.usrp.file, "upload_pending")
-        self.assertEqual(after_first.usrp.service, "stopped")
         self.assertEqual(after_first.usrp.file, "upload_pending")
         self.assertEqual(second.usrp.file, "uploaded")
         self.assertEqual(after_second.usrp.service, "stopped")
         self.assertEqual(after_second.usrp.file, "uploaded")
         self.assertEqual(after_second.overall_state, "completed")
-        self.assertEqual(self.backend.stop_capture_job.call_count, 2)
+        self.backend.stop_capture_job.assert_called_once_with("usrp", state.mission_id)
+        self.backend.retry_capture_upload.assert_called_once_with("usrp", state.mission_id)
 
     def test_stop_bind_does_not_block_noise_upload_ack_callback(self):
         state = self.coordinator.start_bind("usrp")

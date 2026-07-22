@@ -9,6 +9,7 @@ type SamplingMode = 'test' | 'usrp';
 type ConnectionState = 'ready' | 'offline' | 'unknown';
 type ServiceState = 'idle' | 'starting' | 'running' | 'presumed_running' | 'stopping' | 'stopped' | 'failed';
 type FileState = 'none' | 'recording' | 'finalizing' | 'ready' | 'upload_pending' | 'uploaded' | 'failed';
+type CapturePhase = 'idle' | 'preflight' | 'connecting' | 'configuring' | 'starting_service' | 'recording' | 'stopping_service' | 'finalizing_file' | 'upload_pending' | 'uploading' | 'completed' | 'reconciling' | 'failed';
 
 interface ChildState {
   mission_id: string;
@@ -18,6 +19,7 @@ interface ChildState {
   error: string;
   path: string;
   pid: number | null;
+  phase?: CapturePhase;
 }
 
 interface CaptureStatus {
@@ -41,6 +43,14 @@ const EMPTY_CHILD: ChildState = {
   error: '',
   path: '',
   pid: null,
+  phase: 'idle',
+};
+
+const PHASE_LABELS: Record<CapturePhase, string> = {
+  idle: 'Idle', preflight: 'Preflight', connecting: 'Connecting', configuring: 'Configuring',
+  starting_service: 'Starting service', recording: 'Recording', stopping_service: 'Stopping service',
+  finalizing_file: 'Finalizing CSV', upload_pending: 'Upload pending', uploading: 'Uploading',
+  completed: 'Complete', reconciling: 'Reconciling presumed-running state', failed: 'Failed',
 };
 
 const CONNECTION_LABELS: Record<ConnectionState, string> = {
@@ -163,11 +173,51 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 700,
   },
+  steps: {
+    display: 'grid',
+    gap: 3,
+    marginTop: 8,
+    fontSize: 10,
+  },
 };
 
 function isActive(service: ServiceState): boolean {
   return ['starting', 'running', 'presumed_running', 'stopping'].includes(service);
 }
+
+function isPollingPhase(phase?: CapturePhase): boolean {
+  return Boolean(phase && !['idle', 'completed', 'failed'].includes(phase));
+}
+
+const STEP_PHASES: Record<string, CapturePhase[]> = {
+  'Start recorder': ['starting_service'],
+  'Record': ['recording'],
+  'Stop recorder': ['stopping_service'],
+  'Finalize CSV': ['finalizing_file'],
+  'Connect': ['connecting'],
+  'Configure': ['configuring', 'preflight'],
+  'Start service': ['starting_service'],
+  'Stop service': ['stopping_service'],
+  'Upload': ['upload_pending', 'uploading'],
+  'Complete': ['completed'],
+};
+
+function stepState(step: string, child: ChildState, index: number, steps: string[]): 'completed' | 'current' | 'waiting' | 'warning' | 'error' {
+  if (child.error || child.phase === 'failed' || child.file === 'failed' || child.service === 'failed') return 'error';
+  if (child.service === 'presumed_running' || child.phase === 'reconciling') return 'warning';
+  const phase = child.phase ?? 'idle';
+  const currentIndex = steps.findIndex(item => (STEP_PHASES[item] ?? []).includes(phase));
+  if (phase === 'completed' || (child.file === 'uploaded' && index === steps.length - 1)) return 'completed';
+  if (phase === 'upload_pending' || phase === 'uploading') {
+    if (step === 'Upload') return 'current';
+    if (step === 'Complete') return 'waiting';
+  }
+  if (currentIndex >= 0) return index < currentIndex ? 'completed' : index === currentIndex ? 'current' : 'waiting';
+  if (phase === 'idle') return 'waiting';
+  return index === 0 ? 'current' : 'waiting';
+}
+
+const STEP_MARKERS = { completed: '✓', current: '●', waiting: '○', warning: '!', error: '×' };
 
 function canStop(service: ServiceState): boolean {
   return ['starting', 'running', 'presumed_running'].includes(service);
@@ -231,13 +281,17 @@ export function USRPTelemetry() {
   }, []);
 
   const loadStatus = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`);
+      const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`, { signal: controller.signal });
       const data = await readCaptureResponse(response, 'Status request failed');
       applyStatus(data);
       setError('');
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Status request failed');
+      setError(requestError instanceof Error && requestError.name === 'AbortError' ? 'Status request timed out' : requestError instanceof Error ? requestError.message : 'Status request failed');
+    } finally {
+      window.clearTimeout(timeout);
     }
   }, [applyStatus, mode]);
 
@@ -247,7 +301,9 @@ export function USRPTelemetry() {
 
   const shouldPoll = Boolean(
     status && (
+      isPollingPhase(status.uav.phase) ||
       isActive(status.uav.service) ||
+      isPollingPhase(status.usrp.phase) ||
       isActive(status.usrp.service) ||
       ['finalizing', 'upload_pending'].includes(status.uav.file) ||
       ['finalizing', 'upload_pending'].includes(status.usrp.file)
@@ -261,11 +317,13 @@ export function USRPTelemetry() {
   }, [loadStatus, shouldPoll]);
 
   const request = useCallback(async (path: string, body?: object) => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 35000);
     setBusy(true);
     setError('');
     try {
       const response = await fetch(`${API}${path}`, {
-        method: 'POST',
+        method: 'POST', signal: controller.signal,
         ...(body
           ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
           : {}),
@@ -273,8 +331,9 @@ export function USRPTelemetry() {
       const data = await readCaptureResponse(response, 'Capture request failed');
       applyStatus(data);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Capture request failed');
+      setError(requestError instanceof Error && requestError.name === 'AbortError' ? 'Capture request timed out; operation status is being reconciled while polling continues.' : requestError instanceof Error ? requestError.message : 'Capture request failed');
     } finally {
+      window.clearTimeout(timeout);
       setBusy(false);
     }
   }, [applyStatus]);
@@ -296,18 +355,30 @@ export function USRPTelemetry() {
     title: string,
     child: ChildState,
     actions: React.ReactNode,
+    steps: string[],
   ) => (
     <section style={S.section}>
       <div style={S.sectionTitle}>{title}</div>
       <div style={S.rows}>
         <span style={S.key}>Connection</span>
         <span style={S.value}>{CONNECTION_LABELS[child.connection]}</span>
+        <span style={S.key}>Phase</span>
+        <span style={S.value} aria-live="polite">{PHASE_LABELS[child.phase ?? 'idle']}</span>
         <span style={S.key}>Service</span>
         <span style={S.value}>{SERVICE_LABELS[child.service]}</span>
         <span style={S.key}>File</span>
         <span style={S.value}>{FILE_LABELS[child.file]}</span>
       </div>
+      <div style={S.steps} aria-label={`${title} progress`}>
+        {steps.map((step, index) => {
+          const state = stepState(step, child, index, steps);
+          return <div key={step} data-step-state={state}>{STEP_MARKERS[state]} {step} — {state}</div>;
+        })}
+      </div>
       {child.error ? <div role="alert" style={S.error}>{child.error}</div> : null}
+      {child.service === 'presumed_running' ? <div style={S.error}>Presumed running; reconcile status before stopping.</div> : null}
+      {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>Stopped; upload pending.</div> : null}
+      {child.file === 'upload_pending' && title.includes('USRP') ? <button type="button" style={S.button} disabled={busy} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}
       {actions}
     </section>
   );
@@ -321,6 +392,7 @@ export function USRPTelemetry() {
       <div style={S.control}>
         <div style={S.topRow}>
           <strong>裝置綁定</strong>
+          <button type="button" style={S.button} disabled={busy} onClick={() => void loadStatus()}>Refresh status</button>
           <button
             type="button"
             role="switch"
@@ -355,6 +427,7 @@ export function USRPTelemetry() {
               Stop UAV
             </button>
           </div>,
+          ['Start recorder', 'Record', 'Stop recorder', 'Finalize CSV', 'Complete'],
         )}
 
         {childSection(
@@ -399,6 +472,7 @@ export function USRPTelemetry() {
               </button>
             </div>
           </>,
+          ['Connect', 'Configure', 'Start service', 'Record', 'Stop service', 'Finalize CSV', 'Upload', 'Complete'],
         )}
 
         {bind ? (

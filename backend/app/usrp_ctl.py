@@ -1,13 +1,19 @@
 import json
 import os
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Literal
+from typing import Callable, Literal
 
 
 ServiceMode = Literal["test", "usrp"]
 ServiceState = Literal["running", "stopped", "unknown"]
+
+CONNECT_TIMEOUT_SECONDS = 8
+REMOTE_COMMAND_TIMEOUT_SECONDS = 10
+REMOTE_STOP_TIMEOUT_SECONDS = 25
+REMOTE_START_TIMEOUT_SECONDS = 25
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,10 @@ REMOTE_UPLOAD_HELPER = "/home/user/upload_noise_csv.py"
 
 
 class UsrpControlError(RuntimeError):
+    pass
+
+
+class UsrpCommandTimeout(UsrpControlError):
     pass
 
 
@@ -104,9 +114,9 @@ def _ssh_client(config: RaspiConfig):
             port=config.port,
             username=config.user,
             password=config.password,
-            timeout=8,
-            banner_timeout=8,
-            auth_timeout=8,
+            timeout=CONNECT_TIMEOUT_SECONDS,
+            banner_timeout=CONNECT_TIMEOUT_SECONDS,
+            auth_timeout=CONNECT_TIMEOUT_SECONDS,
             look_for_keys=False,
             allow_agent=False,
         )
@@ -118,13 +128,13 @@ def _ssh_client(config: RaspiConfig):
     return client
 
 
-def _run_remote(command: str, use_sudo_password: bool = False) -> tuple[int, str, str]:
+def _run_remote(command: str, use_sudo_password: bool = False, timeout: float = REMOTE_COMMAND_TIMEOUT_SECONDS) -> tuple[int, str, str]:
     client = _ssh_client(_config_from_env())
     try:
         remote_command = command
         if use_sudo_password:
             remote_command = f"sudo -S -p '' {command}"
-        stdin, stdout, stderr = client.exec_command(remote_command, timeout=10)
+        stdin, stdout, stderr = client.exec_command(remote_command, timeout=timeout)
         if use_sudo_password:
             stdin.write(os.environ.get("RASPI_PSW", "") + "\n")
             stdin.flush()
@@ -132,13 +142,29 @@ def _run_remote(command: str, use_sudo_password: bool = False) -> tuple[int, str
             stdin.close()
         except Exception:
             pass
-        exit_code = stdout.channel.recv_exit_status()
+        channel = stdout.channel
+        if not hasattr(channel, "exit_status_ready"):
+            exit_code = channel.recv_exit_status()
+        else:
+            deadline = time.monotonic() + timeout
+            while not channel.exit_status_ready():
+                if time.monotonic() >= deadline:
+                    channel.close()
+                    raise UsrpCommandTimeout(f"remote command timed out after {timeout:g}s")
+                time.sleep(0.05)
+            exit_code = channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace").strip()
         err = stderr.read().decode("utf-8", errors="replace").strip()
         return exit_code, _redact(out), _redact(err)
+    except UsrpCommandTimeout:
+        raise
     except Exception as exc:
         raise UsrpControlError(_redact(f"remote command failed: {exc}")) from exc
     finally:
+        try:
+            stdout.channel.close()
+        except Exception:
+            pass
         client.close()
 
 
@@ -146,8 +172,10 @@ def _state_from_active_output(output: str, exit_code: int) -> ServiceState:
     value = output.strip().lower()
     if exit_code == 0 and value == "active":
         return "running"
-    if value in {"inactive", "failed", "deactivating"}:
+    if value in {"inactive", "failed"}:
         return "stopped"
+    if value == "deactivating":
+        return "unknown"
     return "unknown"
 
 
@@ -204,10 +232,18 @@ def _needs_interactive_auth(out: str, err: str) -> bool:
     )
 
 
-def _run_service_control(command: str) -> tuple[int, str, str]:
-    exit_code, out, err = _run_remote(command)
+def _run_service_control(command: str, *, timeout: float = REMOTE_COMMAND_TIMEOUT_SECONDS) -> tuple[int, str, str]:
+    try:
+        result = _run_remote(command, timeout=timeout)
+    except TypeError:
+        result = _run_remote(command)
+    exit_code, out, err = result
     if exit_code != 0 and _needs_interactive_auth(out, err):
-        exit_code, out, err = _run_remote(command, use_sudo_password=True)
+        try:
+            result = _run_remote(command, use_sudo_password=True, timeout=timeout)
+        except TypeError:
+            result = _run_remote(command, use_sudo_password=True)
+        exit_code, out, err = result
     return exit_code, out, err
 
 
@@ -239,7 +275,7 @@ def get_drone_messages(mode: str = "test") -> dict:
 
 def start_drone_service(mode: str = "test") -> dict:
     target = _service_target(mode)
-    exit_code, out, err = _run_service_control(f"systemctl start {target.unit}")
+    exit_code, out, err = _run_service_control(f"systemctl start {target.unit}", timeout=REMOTE_START_TIMEOUT_SECONDS)
     if exit_code != 0:
         raise UsrpControlError(err or out or f"systemctl start {target.unit} failed")
     status = get_drone_status(mode)
@@ -250,7 +286,7 @@ def start_drone_service(mode: str = "test") -> dict:
 
 def stop_drone_service(mode: str = "test") -> dict:
     target = _service_target(mode)
-    exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}")
+    exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}", timeout=REMOTE_STOP_TIMEOUT_SECONDS)
     if exit_code != 0:
         raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
     status = get_drone_status(mode)
@@ -297,6 +333,7 @@ def _mission_environment(mission: RemoteMission) -> str:
 def _mission_metadata(mission: RemoteMission, *, state: str, upload_state: str) -> dict[str, str]:
     return {
         "mission_id": mission.mission_id,
+        "phase": state,
         "state": state,
         "upload_state": upload_state,
         "noise_csv": mission.noise_csv,
@@ -310,9 +347,11 @@ def _write_remote_mission_state(mission: RemoteMission, payload: dict) -> tuple[
     path = _mission_state_path(mission)
     directory = str(PurePosixPath(path).parent)
     compact = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    temp_path = f"{path}.tmp.$$"
     script = (
         f"mkdir -p {shlex.quote(directory)} && "
-        f"printf '%s\\n' {shlex.quote(compact)} > {shlex.quote(path)}"
+        f"printf '%s\\n' {shlex.quote(compact)} > {shlex.quote(temp_path)} && "
+        f"mv -f {shlex.quote(temp_path)} {shlex.quote(path)}"
     )
     return _run_service_control(f"sh -c {shlex.quote(script)}")
 
@@ -387,7 +426,7 @@ def get_capture_job(mode: str, mission_id: str, state_dir: str | None = None) ->
     return status
 
 
-def start_capture_job(mode: str, mission: RemoteMission) -> dict:
+def start_capture_job(mode: str, mission: RemoteMission, progress: Callable[[str], None] | None = None) -> dict:
     target = _service_target(mode)
     runtime_dir = str(PurePosixPath(mission.env_file).parent)
     mission_dir = str(PurePosixPath(mission.state_dir) / mission.mission_id)
@@ -399,6 +438,12 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
         _write_remote_mission_state.__name__,
         f"systemctl start {target.unit}",
     ):
+        if command == f"install -d {shlex.quote(runtime_dir)}":
+            progress and progress("connecting")
+        elif command == _mission_environment(mission):
+            progress and progress("configuring")
+        elif command == f"systemctl start {target.unit}":
+            progress and progress("starting_service")
         if command == _write_remote_mission_state.__name__:
             exit_code, out, err = _write_remote_mission_state(
                 mission,
@@ -408,6 +453,7 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
             exit_code, out, err = _run_service_control(command)
         if exit_code != 0:
             raise UsrpControlError(err or out or f"{command} failed")
+    progress and progress("recording")
     status = get_capture_job(mode, mission.mission_id, mission.state_dir)
     status["message"] = f"{target.service_name} started"
     return status
@@ -415,37 +461,61 @@ def start_capture_job(mode: str, mission: RemoteMission) -> dict:
 
 def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
     target = _service_target(mode)
-    exit_code, out, err = _run_service_control(f"systemctl stop {target.unit}")
+    exit_code, out, err = _run_service_control(
+        f"systemctl stop {target.unit}", timeout=REMOTE_STOP_TIMEOUT_SECONDS
+    )
     if exit_code != 0:
         raise UsrpControlError(err or out or f"systemctl stop {target.unit} failed")
     status = get_capture_job(mode, mission_id, state_dir)
     mission_state = status.get("mission_state") or {}
-    pending = mission_state.get("upload_state") in {
-        "recording",
-        "finalizing",
-        "upload_pending",
-    } or mission_state.get("state") == "upload_pending"
-    if status.get("service_state") == "stopped" and pending:
+    if status.get("service_state") != "stopped":
+        status["service_state"] = "unknown"
+        status["message"] = f"{target.service_name} stop is reconciling"
+        return status
+    if mission_state:
         mission_state = _repair_mission_state(mission_id, mission_state, state_dir)
-        exit_code, out, err = _run_service_control(_remote_upload_command(mission_state))
-        if exit_code == 0:
-            mission_state["state"] = "stopped"
-            mission_state["upload_state"] = "uploaded"
-        elif mission_state.get("state") != "failed":
+        mission_state.setdefault("phase", mission_state.get("state", "stopped"))
+        if mission_state.get("upload_state") in {"recording", "finalizing", "upload_pending"}:
+            mission_state["phase"] = "stopped"
             mission_state["state"] = "stopped"
             mission_state["upload_state"] = "upload_pending"
-        _persist_remote_mission_state(
-            RemoteMission(
-                mission_id=mission_state["mission_id"],
-                api_url=mission_state["api_url"],
-                scene=mission_state["scene"],
-                map_type=mission_state["map_type"],
-                noise_csv=mission_state["noise_csv"],
-                work_dir=str(PurePosixPath(mission_state["noise_csv"]).parent),
-                state_dir=(state_dir or os.environ.get("RASPI_STATE_DIR", "/var/lib/simworld/capture")),
-            ),
-            mission_state,
-        )
+            _persist_remote_mission_state(
+                RemoteMission(
+                    mission_id=mission_state.get("mission_id", mission_id),
+                    api_url=mission_state.get("api_url", ""),
+                    scene=mission_state.get("scene", "NTPU"),
+                    map_type=mission_state.get("map_type", "iss"),
+                    noise_csv=mission_state.get("noise_csv", "/home/user/rx_sampling/noise.csv"),
+                    work_dir=str(PurePosixPath(mission_state.get("noise_csv", "/home/user/rx_sampling/noise.csv")).parent),
+                    state_dir=(state_dir or os.environ.get("RASPI_STATE_DIR", "/var/lib/simworld/capture")),
+                ),
+                mission_state,
+            )
         status["mission_state"] = mission_state
     status["message"] = f"{target.service_name} stopped"
+    return status
+
+
+def retry_capture_upload(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+    status = get_capture_job(mode, mission_id, state_dir)
+    mission_state = status.get("mission_state") or {}
+    if not mission_state:
+        raise UsrpControlError("mission state is unavailable")
+    mission_state = _repair_mission_state(mission_id, mission_state, state_dir)
+    exit_code, out, err = _run_service_control(_remote_upload_command(mission_state), timeout=15)
+    if exit_code == 0:
+        mission_state["phase"] = "stopped"
+        mission_state["state"] = "stopped"
+        mission_state["upload_state"] = "uploaded"
+    else:
+        mission_state["phase"] = "stopped"
+        mission_state["state"] = "stopped"
+        mission_state["upload_state"] = "upload_pending"
+    _persist_remote_mission_state(RemoteMission(
+        mission_id=mission_state["mission_id"], api_url=mission_state["api_url"],
+        scene=mission_state.get("scene", "NTPU"), map_type=mission_state.get("map_type", "iss"),
+        noise_csv=mission_state["noise_csv"], work_dir=str(PurePosixPath(mission_state["noise_csv"]).parent),
+        state_dir=(state_dir or os.environ.get("RASPI_STATE_DIR", "/var/lib/simworld/capture"))), mission_state)
+    status["mission_state"] = mission_state
+    status["message"] = "upload retried" if exit_code == 0 else (err or out or "upload pending")
     return status

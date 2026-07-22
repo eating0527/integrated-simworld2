@@ -23,16 +23,34 @@ PIDS=()
 FINALIZED=0
 JOB_STATE="running"
 JOB_ERROR=""
+CHILD_STOP_TIMEOUT=10
+CHILD_KILL_TIMEOUT=2
 
 write_state() {
-  local state="$1"
-  local upload_state="${2:-recording}"
-  local error="${3:-}"
-  local temp_file="${STATE_FILE}.tmp"
+  local phase="$1"
+  local state="$2"
+  local upload_state="${3:-recording}"
+  local error="${4:-}"
+  local temp_file="${STATE_FILE}.tmp.$$"
   mkdir -p "${MISSION_DIR}"
-  printf '{\n  "mission_id": "%s",\n  "state": "%s",\n  "upload_state": "%s",\n  "noise_csv": "%s",\n  "error": "%s",\n  "updated_at": "%s"\n}\n' \
-    "${MISSION_ID}" "${state}" "${upload_state}" "${MISSION_NOISE_CSV}" "${error}" "$(date -Iseconds)" \
-    > "${temp_file}"
+  "${PYTHON_BIN}" - "${temp_file}" "${MISSION_ID}" "${phase}" "${state}" "${upload_state}" "${MISSION_NOISE_CSV}" "${error}" <<'PY'
+import json
+import sys
+from datetime import datetime
+
+path, mission_id, phase, state, upload_state, noise_csv, error = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({
+        "mission_id": mission_id,
+        "phase": phase,
+        "state": state,
+        "upload_state": upload_state,
+        "noise_csv": noise_csv,
+        "error": error,
+        "updated_at": datetime.now().astimezone().isoformat(),
+    }, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
   mv "${temp_file}" "${STATE_FILE}"
 }
 
@@ -63,12 +81,37 @@ cleanup() {
   fi
   FINALIZED=1
   trap - EXIT INT TERM
-  write_state "finalizing" "finalizing" "${JOB_ERROR}"
+  write_state "stopping_service" "stopping" "finalizing" "${JOB_ERROR}"
   echo "[pi-radio-stack] stopping child processes"
   for pid in "${PIDS[@]:-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
     fi
+  done
+
+  local deadline=$((SECONDS + CHILD_STOP_TIMEOUT))
+  while (( SECONDS < deadline )); do
+    local alive=0
+    for pid in "${PIDS[@]:-}"; do
+      if kill -0 "${pid}" 2>/dev/null; then alive=1; fi
+    done
+    if (( alive == 0 )); then break; fi
+    sleep 1
+  done
+
+  for pid in "${PIDS[@]:-}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  done
+  deadline=$((SECONDS + CHILD_KILL_TIMEOUT))
+  while (( SECONDS < deadline )); do
+    local alive=0
+    for pid in "${PIDS[@]:-}"; do
+      if kill -0 "${pid}" 2>/dev/null; then alive=1; fi
+    done
+    if (( alive == 0 )); then break; fi
+    sleep 1
   done
   wait || true
 
@@ -77,20 +120,17 @@ cleanup() {
     final_state="stopped"
   fi
 
+  write_state "finalizing_file" "${final_state}" "finalizing" "${JOB_ERROR}"
   mkdir -p "${MISSION_DIR}"
   if [[ ! -s "${NOISE_CSV}" ]]; then
-    write_state "failed" "failed" "noise.csv is missing or empty"
+    write_state "failed" "failed" "failed" "noise.csv is missing or empty"
     exit 1
   fi
   if ! cp "${NOISE_CSV}" "${MISSION_NOISE_CSV}"; then
-    write_state "failed" "failed" "failed to copy noise.csv"
+    write_state "failed" "failed" "failed" "failed to copy noise.csv"
     exit 1
   fi
-  if upload_noise; then
-    write_state "${final_state}" "uploaded" "${JOB_ERROR}"
-  else
-    write_state "${final_state}" "upload_pending" "${JOB_ERROR}"
-  fi
+  write_state "upload_pending" "${final_state}" "upload_pending" "${JOB_ERROR}"
 }
 
 trap cleanup EXIT
@@ -98,7 +138,7 @@ trap 'cleanup; exit 0' INT TERM
 
 mkdir -p "${MISSION_DIR}"
 cd "${WORKDIR}"
-write_state "starting" "recording"
+write_state "starting_service" "starting" "recording"
 
 start_bg "rx" "${PYTHON_BIN}" "${RX_SCRIPT}"
 if [[ "${START_TX}" == "1" ]]; then
@@ -108,7 +148,7 @@ if [[ "${START_JAMMER}" == "1" ]]; then
   start_bg "jammer" "${PYTHON_BIN}" "${JAMMER_SCRIPT}"
 fi
 
-write_state "running" "recording"
+write_state "recording" "running" "recording"
 
 set +e
 wait -n
