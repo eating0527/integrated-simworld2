@@ -62,7 +62,6 @@ function textResponse(payload: string, ok = false) {
 async function openTelemetry() {
   const user = userEvent.setup();
   render(<USRPTelemetry />);
-  await user.click(screen.getByRole('button', { name: 'Restore 採樣控制面板' }));
   return user;
 }
 
@@ -77,11 +76,10 @@ describe('USRPTelemetry capture controls', () => {
   });
 
   it('defaults Bind off and exposes independent UAV and USRP controls', async () => {
-    const user = userEvent.setup();
     render(<USRPTelemetry />);
 
-    expect(screen.getByRole('button', { name: 'Restore 採樣控制面板' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Restore 採樣控制面板' }));
+    expect(screen.getByRole('button', { name: 'Minimize 採樣控制面板' }))
+      .toHaveAttribute('aria-expanded', 'true');
 
     expect(await screen.findByText('無人機 GPS 採樣')).toBeInTheDocument();
     expect(screen.getByText('USRP 干擾採樣')).toBeInTheDocument();

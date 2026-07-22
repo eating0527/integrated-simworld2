@@ -69,6 +69,13 @@ beforeEach(() => {
 });
 
 describe('DevicePanel 3D visibility', () => {
+  it('keeps device settings closed by default', () => {
+    renderPanel();
+
+    expect(screen.getByRole('button', { name: 'Restore 裝置設定' }))
+      .toHaveAttribute('aria-expanded', 'false');
+  });
+
   it.each([
     ['TX', 'tx'],
     ['RX', 'rx'],

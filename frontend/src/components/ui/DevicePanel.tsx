@@ -328,7 +328,7 @@ export function DevicePanel({
   const jammerDevices = devices.filter((device) => device.role === 'jammer');
 
   return (
-    <MinPanel as="aside" className="device-panel" title="裝置設定">
+    <MinPanel as="aside" className="device-panel" title="裝置設定" defaultMinimized>
       <div className="dp-coordinate-toolbar">
         <span>{coordMode === 'gps' ? 'GPS 經緯度' : 'XYZ 座標'}</span>
         <button

@@ -316,7 +316,6 @@ export function USRPTelemetry() {
     <MinPanel
       title="採樣控制面板"
       className="panel-ui"
-      defaultMinimized
       actions={<PanelStatus tone={anyActive ? 'live' : 'waiting'} label={anyActive ? 'Active' : 'Ready'} />}
     >
       <div style={S.control}>
