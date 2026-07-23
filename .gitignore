@@ -22,8 +22,7 @@ tools/scrcpy/*.zip
 .DS_Store
 .vscode/
 .idea/
-/.claude/settings.local.json
-/.claude/worktrees/
+/.claude
 /.agents
 /skills-lock.json
 
