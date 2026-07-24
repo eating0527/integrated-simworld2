@@ -31,7 +31,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List, Any, Literal
 
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query, Header
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, Query, Header, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
@@ -83,6 +83,9 @@ FIXED_GENERATION_ZOOM = BASEMAP_GENERATION_ZOOM
 DETAIL_BBOX_SPAN_TILES = 2.6
 BUILDING_CHECK_TOTAL_TIMEOUT_SECONDS = 14.0
 BUILDING_CHECK_REQUEST_TIMEOUT_SECONDS = 5.0
+CAPTURE_STATUS_TIMEOUT_SECONDS = 5
+CAPTURE_REFRESH_TIMEOUT_SECONDS = 30
+CAPTURE_OPERATION_TIMEOUT_SECONDS = 40
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://z.overpass-api.de/api/interpreter",
@@ -750,30 +753,6 @@ def _read_scene_index() -> List[Dict[str, Any]]:
     return _read_json_list(SCENE_INDEX_JSON)
 
 
-def _image_format(content: bytes) -> Optional[str]:
-    if content.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if content.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
-        return "image/gif"
-    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
-        return "image/webp"
-    return None
-
-
-def _safe_upload_name(name: Optional[str], image_type: str) -> str:
-    stem = Path(Path((name or '').replace('\\', '/')).name).stem.strip()
-    safe_stem = re.sub(r'[^A-Za-z0-9._-]+', '_', stem).strip('._')
-    extension = {
-        'image/jpeg': '.jpg',
-        'image/png': '.png',
-        'image/gif': '.gif',
-        'image/webp': '.webp',
-    }[image_type]
-    return f'{safe_stem[:80]}{extension}' if safe_stem else ''
-
-
 @app.post("/api/upload-photo")
 async def upload_photo(
     photo: UploadFile = File(...),
@@ -787,19 +766,9 @@ async def upload_photo(
         if len(content) > 10 * 1024 * 1024:
             return JSONResponse({"success": False, "error": "檔案超過 10MB 限制"}, status_code=413)
 
-        image_type = _image_format(content)
-        if not content or image_type is None or photo.content_type != image_type:
-            return JSONResponse({"success": False, "error": "不支援的圖片格式"}, status_code=415)
-
-        client_name = _safe_upload_name(photo.filename, image_type)
-        if not client_name:
-            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{ts}_{client_name}"
-        path = (UPLOAD_DIR / filename).resolve()
-        if path.parent != UPLOAD_DIR.resolve():
-            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
-        path.write_bytes(content)
+        filename = f"{ts}_{photo.filename}"
+        (UPLOAD_DIR / filename).write_bytes(content)
 
         record = {
             "filename": filename,
@@ -824,9 +793,9 @@ async def upload_photo(
         logger.info(f"📸 照片已儲存: {filename}  deviceId={deviceId}")
         return JSONResponse({"success": True, **record})
 
-    except Exception:
-        logger.exception("照片上傳失敗")
-        return JSONResponse({"success": False, "error": "照片上傳失敗"}, status_code=500)
+    except Exception as e:
+        logger.error(f"❌ 照片上傳失敗: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @app.get("/api/photo-history")
@@ -838,18 +807,11 @@ async def photo_history():
 @app.delete("/api/delete-photo/{filename}")
 async def delete_photo(filename: str):
     try:
-        if not filename or Path(filename).name != filename or any(separator in filename for separator in ("/", "\\")):
-            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
-        photos = _load_photos()
-        if not any(p.get("filename") == filename for p in photos):
-            return JSONResponse({"success": False, "error": "照片不存在"}, status_code=404)
-        path = (UPLOAD_DIR / filename).resolve()
-        if path.parent != UPLOAD_DIR.resolve():
-            return JSONResponse({"success": False, "error": "無效的檔案名稱"}, status_code=400)
+        path = UPLOAD_DIR / filename
         if path.exists():
             path.unlink()
 
-        photos = [p for p in photos if p.get("filename") != filename]
+        photos = [p for p in _load_photos() if p.get("filename") != filename]
         _save_photos(photos)
 
         await gps_manager.broadcast(json.dumps({
@@ -859,9 +821,8 @@ async def delete_photo(filename: str):
         }))
 
         return {"success": True, "filename": filename}
-    except Exception:
-        logger.exception("照片刪除失敗")
-        return JSONResponse({"success": False, "error": "照片刪除失敗"}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ──────────────────────────────────────────────
@@ -2222,7 +2183,35 @@ async def iss_unet_statistics_upload_post(
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+def _capture_refresh_warning(
+    device: str,
+    mission_id: str | None,
+    exc: Exception,
+    state: Any = None,
+    *,
+    logger: logging.Logger = logger,
+):
+    child = getattr(state, device, None) if state is not None else None
+    logger.warning(
+        "Capture refresh failed",
+        extra={
+            "device": device,
+            "mission_id": mission_id,
+            "attempt": getattr(child, "last_attempt_at", None),
+            "last_success": getattr(child, "last_success_at", None),
+            "next_retry": getattr(child, "next_retry_at", None),
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+
+def _capture_timeout_response():
+    return JSONResponse({"detail": "Capture operation timed out"}, status_code=504)
+
+
 def _capture_error(exc: Exception):
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return _capture_timeout_response()
     if isinstance(exc, CaptureNotFoundError):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, CaptureConflictError):
@@ -2232,91 +2221,139 @@ def _capture_error(exc: Exception):
     raise exc
 
 
-async def _capture_call(fn, *args, **kwargs):
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(fn, *args, **kwargs), timeout=30)
-    except asyncio.TimeoutError as exc:
-        raise HTTPException(status_code=504, detail='capture operation timed out; status is being reconciled') from exc
-
-
 @app.get("/api/capture/status")
-async def capture_status_get(usrp_mode: Literal["test", "usrp"] = Query("test")):
+async def capture_status_get(
+    background_tasks: BackgroundTasks,
+    usrp_mode: Literal["test", "usrp"] = Query("test"),
+):
     try:
-        return await asyncio.to_thread(capture_coordinator.status, usrp_mode)
+        state = await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.status, usrp_mode),
+            timeout=CAPTURE_STATUS_TIMEOUT_SECONDS,
+        )
+        if background_tasks is not None:
+            for mission_id in capture_coordinator.reconcile_due():
+                background_tasks.add_task(capture_coordinator.reconcile_usrp, mission_id)
+        return state
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        _capture_refresh_warning("status", None, exc)
+        return _capture_timeout_response()
     except Exception as exc:
         _capture_error(exc)
+
+
+@app.post("/api/capture/gps/refresh")
+async def capture_gps_refresh_post(mission_id: str | None = Query(None)):
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.refresh_gps, mission_id),
+            timeout=CAPTURE_REFRESH_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        _capture_refresh_warning("uav", mission_id, exc)
+        return _capture_timeout_response()
+    except Exception as exc:
+        _capture_refresh_warning("uav", mission_id, exc)
+        result = _capture_error(exc)
+        return result
+
+
+@app.post("/api/capture/usrp/refresh")
+async def capture_usrp_refresh_post(mission_id: str = Query(...)):
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.refresh_usrp, mission_id),
+            timeout=CAPTURE_REFRESH_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        _capture_refresh_warning("usrp", mission_id, exc)
+        return _capture_timeout_response()
+    except Exception as exc:
+        _capture_refresh_warning("usrp", mission_id, exc)
+        result = _capture_error(exc)
+        return result
 
 
 @app.post("/api/capture/uav/start")
 async def capture_uav_start_post():
     try:
-        return await _capture_call(capture_coordinator.start_uav)
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.start_uav),
+            timeout=CAPTURE_OPERATION_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        _capture_error(exc)
+        result = _capture_error(exc)
+        return result
 
 
 @app.post("/api/capture/uav/stop")
 async def capture_uav_stop_post(mission_id: str = Query(...)):
     try:
-        return await _capture_call(capture_coordinator.stop_uav, mission_id)
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.stop_uav, mission_id),
+            timeout=CAPTURE_OPERATION_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        _capture_error(exc)
+        result = _capture_error(exc)
+        return result
 
 
 @app.post("/api/capture/usrp/start")
 async def capture_usrp_start_post(req: CaptureStartRequest):
     try:
-        return await _capture_call(
-            capture_coordinator.start_usrp,
-            req.usrp_mode,
-            scene=req.scene,
-            map_type=req.map_type,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                capture_coordinator.start_usrp,
+                req.usrp_mode,
+                scene=req.scene,
+                map_type=req.map_type,
+            ),
+            timeout=CAPTURE_OPERATION_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        _capture_error(exc)
-
-
-@app.post("/api/capture/usrp/upload/retry")
-async def capture_usrp_retry_upload_post(mission_id: str = Query(...), background_tasks: BackgroundTasks = None):
-    try:
-        if background_tasks is not None:
-            background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
-            return await _capture_call(capture_coordinator.store.load, mission_id)
-        return await _capture_call(capture_coordinator.retry_usrp_upload, mission_id)
-    except Exception as exc:
-        _capture_error(exc)
+        result = _capture_error(exc)
+        return result
 
 
 @app.post("/api/capture/usrp/stop")
-async def capture_usrp_stop_post(mission_id: str = Query(...), background_tasks: BackgroundTasks = None):
+async def capture_usrp_stop_post(mission_id: str = Query(...)):
     try:
-        result = await _capture_call(capture_coordinator.stop_usrp, mission_id)
-        if background_tasks is not None and result.usrp.file == "upload_pending":
-            background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
-        return result
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.stop_usrp, mission_id),
+            timeout=CAPTURE_OPERATION_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        _capture_error(exc)
+        result = _capture_error(exc)
+        return result
 
 
 @app.post("/api/capture/bind/start")
 async def capture_bind_start_post(req: CaptureStartRequest):
     try:
-        return await _capture_call(
-            capture_coordinator.start_bind,
-            req.usrp_mode,
-            scene=req.scene,
-            map_type=req.map_type,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                capture_coordinator.start_bind,
+                req.usrp_mode,
+                scene=req.scene,
+                map_type=req.map_type,
+            ),
+            timeout=CAPTURE_OPERATION_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        _capture_error(exc)
+        result = _capture_error(exc)
+        return result
 
 
 @app.post("/api/capture/bind/stop")
 async def capture_bind_stop_post(mission_id: str = Query(...)):
     try:
-        return await _capture_call(capture_coordinator.stop_bind, mission_id)
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.stop_bind, mission_id),
+            timeout=CAPTURE_OPERATION_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        _capture_error(exc)
+        result = _capture_error(exc)
+        return result
 
 
 def _usrp_sampling_error_response(exc: Exception, mode: Literal["test", "usrp"] = "test") -> JSONResponse:

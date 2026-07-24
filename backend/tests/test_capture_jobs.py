@@ -18,6 +18,32 @@ class CaptureStoreTests(unittest.TestCase):
         self.root = repo_root / ".test_tmp" / uuid.uuid4().hex
         self.root.mkdir(parents=True)
 
+    def test_old_capture_json_loads_child_state_defaults(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=False, selected_usrp_mode="test", target="uav")
+        path = store.path(state.mission_id)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for child in (payload["uav"], payload["usrp"]):
+            for key in (
+                "last_attempt_at",
+                "last_success_at",
+                "refresh_state",
+                "consecutive_failures",
+                "next_retry_at",
+            ):
+                child.pop(key, None)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        loaded = store.load(state.mission_id)
+
+        self.assertIsNone(loaded.uav.last_attempt_at)
+        self.assertIsNone(loaded.uav.last_success_at)
+        self.assertEqual(loaded.uav.refresh_state, "idle")
+        self.assertEqual(loaded.uav.consecutive_failures, 0)
+        self.assertIsNone(loaded.uav.next_retry_at)
+
     def test_store_round_trips_capture_state(self):
         from app.capture_jobs import CaptureStore
 
@@ -413,12 +439,42 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(stopped.usrp.file, "uploaded")
         self.assertEqual(stopped.overall_state, "completed")
 
-    def test_idle_status_reports_independent_readiness(self):
+    def test_idle_status_is_local_only(self):
         state = self.coordinator.status("test")
 
-        self.assertEqual(state.uav.connection, "ready")
-        self.assertEqual(state.usrp.connection, "ready")
-        self.backend.get_drone_status.assert_called_with("test")
+        self.assertEqual(state.uav.connection, "unknown")
+        self.assertEqual(state.usrp.connection, "unknown")
+        self.backend.get_drone_status.side_effect = AssertionError("hardware call")
+        self.backend.get_capture_job.side_effect = AssertionError("hardware call")
+        self.run_command.side_effect = AssertionError("hardware call")
+
+        state = self.coordinator.status("test")
+
+        self.assertEqual(state.uav.connection, "unknown")
+        self.assertEqual(state.usrp.connection, "unknown")
+        self.backend.get_drone_status.assert_not_called()
+        self.backend.get_capture_job.assert_not_called()
+        self.run_command.assert_not_called()
+
+    def test_status_keeps_persisted_last_known_state(self):
+        from app.capture_jobs import CaptureCoordinator
+
+        state = self.coordinator.store.create(
+            bind=False, selected_usrp_mode="usrp", target="usrp",
+            mission_id="last_known_state",
+        )
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+        state.usrp.last_success_at = "2026-06-24T00:00:00+00:00"
+        state.usrp.last_attempt_at = "2026-06-24T00:00:01+00:00"
+        self.coordinator.store.save(state)
+
+        dashboard = self.coordinator.status("usrp")
+
+        self.assertEqual(dashboard.usrp.service, "presumed_running")
+        self.assertEqual(dashboard.usrp.last_success_at, "2026-06-24T00:00:00+00:00")
+        self.assertEqual(dashboard.usrp.last_attempt_at, "2026-06-24T00:00:01+00:00")
+        self.backend.get_capture_job.assert_not_called()
 
     def test_status_merges_simultaneous_independent_jobs(self):
         uav_state = self.coordinator.start_uav()
@@ -447,8 +503,7 @@ class BindCoordinatorTests(unittest.TestCase):
         dashboard = restarted.status("test")
 
         self.assertEqual(dashboard.uav.mission_id, state.mission_id)
-        self.assertEqual(dashboard.uav.service, "failed")
-        self.assertIn("process", dashboard.uav.error.lower())
+        self.assertEqual(dashboard.uav.service, "presumed_running")
 
     def test_status_does_not_mark_stopping_uav_as_lost_process(self):
         state = self.coordinator.start_bind("test")
@@ -473,15 +528,13 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.uav.error, "")
 
     def test_status_surfaces_upload_pending_without_marking_completed(self):
-        state = self.coordinator.start_usrp("usrp")
-        self.backend.get_capture_job.return_value = {
-            "success": True,
-            "service_state": "stopped",
-            "mission_state": {
-                "state": "stopped",
-                "upload_state": "upload_pending",
-            },
-        }
+        state = self.coordinator.store.create(
+            bind=False, selected_usrp_mode="usrp", target="usrp",
+            mission_id="upload_pending_status",
+        )
+        state.usrp.service = "stopped"
+        state.usrp.file = "upload_pending"
+        self.coordinator.store.save(state)
 
         dashboard = self.coordinator.status("usrp")
 
@@ -490,39 +543,41 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.overall_state, "finalizing")
         self.assertNotEqual(dashboard.overall_state, "completed")
 
-    def test_stop_bind_leaves_pending_upload_for_explicit_retry(self):
+    def test_stop_bind_retries_pending_upload_on_second_stop(self):
         state = self.coordinator.start_bind("usrp")
-        self.backend.stop_capture_job.return_value = {
-            "success": True,
-            "service_state": "stopped",
-            "mission_state": {
-                "state": "stopped",
-                "upload_state": "upload_pending",
+        self.backend.stop_capture_job.side_effect = [
+            {
+                "success": True,
+                "service_state": "stopped",
+                "mission_state": {
+                    "state": "stopped",
+                    "upload_state": "upload_pending",
+                },
             },
-        }
-        self.backend.retry_capture_upload.return_value = {
-            "success": True,
-            "service_state": "stopped",
-            "mission_state": {
-                "state": "stopped",
-                "upload_state": "uploaded",
+            {
+                "success": True,
+                "service_state": "stopped",
+                "mission_state": {
+                    "state": "stopped",
+                    "upload_state": "uploaded",
+                },
             },
-        }
+        ]
 
         first = self.coordinator.stop_bind(state.mission_id)
         after_first = self.coordinator.store.load(state.mission_id)
-        second = self.coordinator.retry_usrp_upload(state.mission_id)
+        second = self.coordinator.stop_bind(state.mission_id)
         after_second = self.coordinator.store.load(state.mission_id)
 
         self.assertEqual(first.usrp.service, "stopped")
         self.assertEqual(first.usrp.file, "upload_pending")
+        self.assertEqual(after_first.usrp.service, "stopped")
         self.assertEqual(after_first.usrp.file, "upload_pending")
         self.assertEqual(second.usrp.file, "uploaded")
         self.assertEqual(after_second.usrp.service, "stopped")
         self.assertEqual(after_second.usrp.file, "uploaded")
         self.assertEqual(after_second.overall_state, "completed")
-        self.backend.stop_capture_job.assert_called_once_with("usrp", state.mission_id)
-        self.backend.retry_capture_upload.assert_called_once_with("usrp", state.mission_id)
+        self.assertEqual(self.backend.stop_capture_job.call_count, 2)
 
     def test_stop_bind_does_not_block_noise_upload_ack_callback(self):
         state = self.coordinator.start_bind("usrp")
@@ -780,9 +835,168 @@ class CaptureApiTests(unittest.TestCase):
         coordinator.start_uav.assert_called_once()
         coordinator.start_usrp.assert_called_once()
         coordinator.stop_bind.assert_called_once_with("flight_api")
+    def test_capture_routes_use_stage2c_timeouts(self):
+        from fastapi import BackgroundTasks
+
+        coordinator = Mock()
+        coordinator.reconcile_due.return_value = []
+        calls = []
+        timeouts = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            calls.append((func, args, kwargs))
+            return "ok"
+
+        async def fake_wait_for(awaitable, *, timeout):
+            timeouts.append(timeout)
+            return await awaitable
+
+        with patch.object(self.main, "capture_coordinator", coordinator), \
+             patch.object(self.main.asyncio, "to_thread", fake_to_thread), \
+             patch.object(self.main.asyncio, "wait_for", fake_wait_for):
+            self.assertEqual(
+                asyncio.run(self.main.capture_status_get(BackgroundTasks())),
+                "ok",
+            )
+            self.assertEqual(asyncio.run(self.main.capture_gps_refresh_post(None)), "ok")
+            self.assertEqual(asyncio.run(self.main.capture_usrp_refresh_post("mission")), "ok")
+            self.assertEqual(asyncio.run(self.main.capture_uav_start_post()), "ok")
+            self.assertEqual(asyncio.run(self.main.capture_uav_stop_post("mission")), "ok")
+            request = self.main.CaptureStartRequest(usrp_mode="test")
+            self.assertEqual(asyncio.run(self.main.capture_usrp_start_post(request)), "ok")
+            self.assertEqual(asyncio.run(self.main.capture_usrp_stop_post("mission")), "ok")
+            self.assertEqual(asyncio.run(self.main.capture_bind_start_post(request)), "ok")
+            self.assertEqual(asyncio.run(self.main.capture_bind_stop_post("mission")), "ok")
+
+        self.assertEqual(
+            timeouts,
+            [
+                self.main.CAPTURE_STATUS_TIMEOUT_SECONDS,
+                self.main.CAPTURE_REFRESH_TIMEOUT_SECONDS,
+                self.main.CAPTURE_REFRESH_TIMEOUT_SECONDS,
+                self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS,
+                self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS,
+                self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS,
+                self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS,
+                self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS,
+                self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS,
+            ],
+        )
+
+    def test_capture_status_timeout_is_safe_and_logs_only_structured_fields(self):
+        from fastapi import BackgroundTasks
+
+        coordinator = Mock()
+        warnings = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return "unobserved"
+
+        async def fake_wait_for(awaitable, *, timeout):
+            awaitable.close()
+            raise asyncio.TimeoutError("RASPI_PSW=secret https://user:token@example")
+
+        with patch.object(self.main, "capture_coordinator", coordinator), \
+             patch.object(self.main.asyncio, "to_thread", fake_to_thread), \
+             patch.object(self.main.asyncio, "wait_for", fake_wait_for), \
+             patch.object(self.main.logger, "warning", side_effect=lambda *a, **kw: warnings.append((a, kw))):
+            response = asyncio.run(self.main.capture_status_get(BackgroundTasks()))
+
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(json.loads(response.body), {"detail": "Capture operation timed out"})
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(
+            set(warnings[0][1]["extra"]),
+            {"device", "mission_id", "attempt", "last_success", "next_retry", "exception_type"},
+        )
+        self.assertNotIn("secret", json.dumps(warnings[0]))
+
+    def test_refresh_routes_delegate_none_and_map_unknown_missions_to_404(self):
+        from app.capture_jobs import CaptureNotFoundError
+        from fastapi import HTTPException
+
+        coordinator = Mock()
+        coordinator.refresh_gps.return_value = self._state("uav")
+        coordinator.refresh_usrp.return_value = self._state("usrp")
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        async def fake_wait_for(awaitable, *, timeout):
+            self.assertEqual(timeout, self.main.CAPTURE_REFRESH_TIMEOUT_SECONDS)
+            return await awaitable
+
+        with patch.object(self.main, "capture_coordinator", coordinator), \
+             patch.object(self.main.asyncio, "to_thread", fake_to_thread), \
+             patch.object(self.main.asyncio, "wait_for", fake_wait_for):
+            asyncio.run(self.main.capture_gps_refresh_post(None))
+            asyncio.run(self.main.capture_usrp_refresh_post("mission"))
+
+        coordinator.refresh_gps.assert_called_once_with(None)
+        coordinator.refresh_usrp.assert_called_once_with("mission")
+
+        for route, argument, method in (
+            (self.main.capture_gps_refresh_post, None, "refresh_gps"),
+            (self.main.capture_usrp_refresh_post, "missing", "refresh_usrp"),
+        ):
+            coordinator.reset_mock()
+            getattr(coordinator, method).side_effect = CaptureNotFoundError("missing")
+            with patch.object(self.main, "capture_coordinator", coordinator):
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(route(argument))
+            self.assertEqual(raised.exception.status_code, 404)
+
+    def test_capture_operation_timeouts_return_safe_504(self):
+        coordinator = Mock()
+        routes = (
+            lambda: self.main.capture_uav_start_post(),
+            lambda: self.main.capture_uav_stop_post("mission"),
+            lambda: self.main.capture_usrp_start_post(self.main.CaptureStartRequest(usrp_mode="test")),
+            lambda: self.main.capture_usrp_stop_post("mission"),
+            lambda: self.main.capture_bind_start_post(self.main.CaptureStartRequest(usrp_mode="test")),
+            lambda: self.main.capture_bind_stop_post("mission"),
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return "unobserved"
+
+        async def fake_wait_for(awaitable, *, timeout):
+            awaitable.close()
+            self.assertEqual(timeout, self.main.CAPTURE_OPERATION_TIMEOUT_SECONDS)
+            raise TimeoutError("private exception")
+
+        with patch.object(self.main, "capture_coordinator", coordinator), \
+             patch.object(self.main.asyncio, "to_thread", fake_to_thread), \
+             patch.object(self.main.asyncio, "wait_for", fake_wait_for):
+            for route in routes:
+                response = asyncio.run(route())
+                self.assertEqual(response.status_code, 504)
+                self.assertEqual(json.loads(response.body), {"detail": "Capture operation timed out"})
+
+    def test_refresh_warning_uses_snapshot_fields_without_exception_text(self):
+        state = self._state("usrp")
+        state.usrp.last_attempt_at = "2026-06-24T00:00:01+00:00"
+        state.usrp.last_success_at = "2026-06-24T00:00:00+00:00"
+        state.usrp.next_retry_at = "2026-06-24T00:00:06+00:00"
+        warning = Mock()
+
+        self.main._capture_refresh_warning(
+            "usrp", "mission", RuntimeError("password=https://private?token=secret"), state,
+            logger=warning,
+        )
+
+        warning.warning.assert_called_once()
+        fields = warning.warning.call_args.kwargs["extra"]
+        self.assertEqual(fields["device"], "usrp")
+        self.assertEqual(fields["mission_id"], "mission")
+        self.assertEqual(fields["attempt"], state.usrp.last_attempt_at)
+        self.assertEqual(fields["last_success"], state.usrp.last_success_at)
+        self.assertEqual(fields["next_retry"], state.usrp.next_retry_at)
+        self.assertEqual(fields["exception_type"], "RuntimeError")
+        self.assertNotIn("secret", json.dumps(warning.warning.call_args))
 
 
-class NoiseUploadTests(unittest.TestCase):
+
     def setUp(self):
         from app import main
         from app.capture_jobs import CaptureCoordinator, CaptureStore
@@ -863,7 +1077,83 @@ class NoiseUploadTests(unittest.TestCase):
         )
 
 
-class NoiseUploaderTests(unittest.TestCase):
+class ReconcileStage2BTests(BindCoordinatorTests):
+    def test_reconcile_retry_schedule_uses_injected_clock(self):
+        from datetime import datetime, timedelta, timezone
+
+        state = self.coordinator.store.create(bind=False, selected_usrp_mode="usrp", target="usrp", mission_id="retry_schedule")
+        clock = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+        self.coordinator.now = lambda: clock[0]
+        self.backend.get_capture_job.side_effect = RuntimeError("offline")
+        expected = [5, 10, 20, 30, 30]
+        for delay in expected:
+            self.coordinator.reconcile_usrp(state.mission_id, force=True)
+            current = self.coordinator.store.load(state.mission_id)
+            due = datetime.fromisoformat(current.usrp.next_retry_at)
+            self.assertEqual((due - clock[0]).total_seconds(), delay)
+            calls = self.backend.get_capture_job.call_count
+            clock[0] = due - timedelta(seconds=1)
+            self.coordinator.reconcile_usrp(state.mission_id)
+            self.assertEqual(self.backend.get_capture_job.call_count, calls)
+            clock[0] = due
+        self.backend.get_capture_job.side_effect = None
+        self.backend.get_capture_job.return_value = {"service_state": "running", "mission_state": {"upload_state": "recording"}}
+        self.coordinator.reconcile_usrp(state.mission_id)
+        current = self.coordinator.store.load(state.mission_id)
+        self.assertEqual(current.usrp.consecutive_failures, 0)
+        self.assertIsNone(current.usrp.next_retry_at)
+        self.assertEqual(current.usrp.refresh_state, "idle")
+        self.assertEqual(current.usrp.last_success_at, clock[0].isoformat())
+
+    def test_reconcile_offline_preserves_active_file_phases(self):
+        state = self.coordinator.store.create(bind=False, selected_usrp_mode="usrp", target="usrp", mission_id="offline_active")
+        self.backend.get_capture_job.side_effect = RuntimeError("offline")
+        for phase in ("recording", "finalizing", "upload_pending"):
+            current = self.coordinator.store.load(state.mission_id)
+            current.usrp.service = "presumed_running"
+            current.usrp.file = phase
+            self.coordinator.store.save(current)
+            result = self.coordinator.reconcile_usrp(state.mission_id, force=True)
+            self.assertEqual(result.usrp.service, "presumed_running")
+            self.assertEqual(result.usrp.file, phase)
+            self.assertEqual(result.usrp.connection, "offline")
+
+    def test_force_reconcile_second_call_returns_promptly(self):
+        import time
+        entered = threading.Event()
+        release = threading.Event()
+        self.backend.get_capture_job.side_effect = lambda *args: (entered.set(), release.wait(2), {"service_state": "running"})[2]
+        state = self.coordinator.store.create(bind=False, selected_usrp_mode="usrp", target="usrp", mission_id="force_once")
+        state.target = "usrp"
+        self.coordinator.store.save(state)
+        first = threading.Thread(target=self.coordinator.reconcile_usrp, args=(state.mission_id,), kwargs={"force": True})
+        first.start(); self.assertTrue(entered.wait(1))
+        started = time.monotonic(); snapshot = self.coordinator.reconcile_usrp(state.mission_id, force=True); elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 0.5); self.assertEqual(snapshot.usrp.refresh_state, "checking")
+        release.set(); first.join(2)
+        self.assertEqual(self.backend.get_capture_job.call_count, 1)
+
+    def test_reconcile_remote_call_does_not_hold_main_lock(self):
+        entered = threading.Event(); release = threading.Event()
+        self.backend.get_capture_job.side_effect = lambda *args: (entered.set(), release.wait(2), {"service_state": "running"})[2]
+        state = self.coordinator.store.create(bind=False, selected_usrp_mode="usrp", target="usrp", mission_id="nonblocking")
+        thread = threading.Thread(target=self.coordinator.reconcile_usrp, args=(state.mission_id,), kwargs={"force": True}); thread.start(); self.assertTrue(entered.wait(1))
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.coordinator.status(), done.set())).start()
+        self.assertTrue(done.wait(1)); release.set(); thread.join(2)
+
+    def test_stale_reconcile_cannot_overwrite_stop_or_upload_ack(self):
+        entered = threading.Event(); release = threading.Event()
+        self.backend.get_capture_job.side_effect = lambda *args: (entered.set(), release.wait(2), {"service_state": "running", "mission_state": {"upload_state": "recording"}})[2]
+        state = self.coordinator.store.create(bind=False, selected_usrp_mode="usrp", target="usrp", mission_id="stale_ops")
+        state.usrp.service = "running"; state.usrp.file = "recording"; self.coordinator.store.save(state)
+        thread = threading.Thread(target=self.coordinator.reconcile_usrp, args=(state.mission_id,), kwargs={"force": True}); thread.start(); self.assertTrue(entered.wait(1))
+        self.coordinator.ack_noise_upload(state.mission_id, path=Path("uploaded.csv"), size=1, sha256="x")
+        release.set(); thread.join(2)
+        current = self.coordinator.store.load(state.mission_id)
+        self.assertEqual((current.usrp.service, current.usrp.file), ("stopped", "uploaded"))
+
+
     @classmethod
     def setUpClass(cls):
         script = Path(__file__).resolve().parents[2] / "tools" / "upload_noise_csv.py"

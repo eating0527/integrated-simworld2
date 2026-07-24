@@ -141,9 +141,13 @@ sudo systemctl daemon-reload
 sudo systemctl show drone -p TimeoutStopUSec -p KillMode
 ```
 
-預期顯示 `TimeoutStopUSec=20s` 與 `KillMode=control-group`。若目前 mission 正在執行，先不要覆寫或 reload 該 service；等 mission inactive 後再部署。部署後 Stop 只負責停止採樣、保存 CSV 並回報 `upload_pending`，上傳由主機背景工作或面板的 `Retry upload` 執行。
+預期顯示 `TimeoutStopUSec=20s` 與 `KillMode=control-group`。若目前 mission 正在執行，先不要覆寫或 reload 該 service；等 mission inactive 後再部署。部署後 Stop 只負責停止採樣、保存 CSV 並回報 `upload_pending`，上傳由獨立的 upload retry 流程處理；目前前端沒有呼叫不存在的 upload retry route，會顯示 CSV 已保存並要求人工 Refresh 或使用後端既有上傳流程。
 
-Timeout 階段：Pi 子程序 10 秒 graceful + 2 秒 force confirmation；systemd 20 秒；SSH stop command 25 秒；backend capture API 30 秒；前端 POST 35 秒。停止命令超時會顯示 `presumed_running/reconciling`，不可當作已停止；服務已確認停止但網路上傳失敗則保留 `stopped/upload_pending`。
+狀態判讀：`status` 是快速的主機本地 snapshot，不會等待 Raspberry Pi SSH；Pi 無法連線時，USRP 會顯示 `Offline`，並保留最後可信的 `running`/`stopping` 為 `presumed_running`，不可推論為已停止。`reconciling` 表示正在重新確認，`upload_pending` 表示 Pi 上的 CSV 已完成但尚未傳回，只有實際取得 service/file 證據後才會改成 `stopped`、`uploaded` 或 `failed`。GPS 與 USRP 狀態、last-seen 時間及重試倒數分開顯示。
+
+Timeout 階段：Pi 子程序 10 秒 graceful + 2 秒 force confirmation；systemd 20 秒；SSH stop command 25 秒；backend capture API 30 秒；前端 status snapshot 5 秒、refresh 30 秒、Start/Stop 40 秒。USRP reconciliation 自動以 5、10、20、30 秒（之後固定 30 秒）backoff 重試；手動 `Refresh GPS`、`Refresh USRP` 或 `Refresh all` 會跳過 backoff，但不會強制寫入 running/stopped，也不會偷偷上傳檔案。停止命令超時會顯示 `presumed_running/reconciling`，不可當作已停止；服務已確認停止但網路上傳失敗則保留 `stopped/upload_pending`。
+
+若需調查 refresh 失敗，查看 `.logs/backend.log` 與 `.logs/backend.log.err` 的 structured warning；只會記錄 device、mission id、attempt、last success、next retry 與 exception type，不應把密碼、token、完整 URL 或 `.env` 內容寫入 log。
 
 不要把 `drone.service` 或 `drone_test.service` 設成開機自動啟動；由 `採樣控制面板` 在每次 mission 啟動時控制。
 
@@ -151,9 +155,10 @@ Timeout 階段：Pi 子程序 10 秒 graceful + 2 秒 force confirmation；syste
 
 - `Test` 會使用 `drone_test.service`
 - `USRP` 會使用 `drone.service`
-- `Start USRP` 開始 USRP 干擾採樣
-- `Stop USRP` 停止採樣並等待本地檔案 finalize；上傳獨立執行，不阻塞 Stop
-- `Pending upload` 表示 Raspberry Pi 上的 CSV 保留，可用 `Retry upload` 重試
+- `Start GPS` / `Stop GPS · Recording` 控制 GPS，`Refresh GPS` 只做本地狀態確認
+- `Start USRP` / `Stop USRP · Recording` 控制 USRP；`Starting…`、`Stopping service…`、`Saving CSV…` 反映目前 phase
+- `Refresh all` 先取得本地 snapshot，再分別觸發 GPS 與 USRP reconciliation；任何一張卡離線時另一張仍可操作
+- `Pending upload` 表示 Raspberry Pi 上的 CSV 保留；前端顯示 `CSV saved`，不呼叫未提供的 upload retry API，操作者可手動 Refresh 確認狀態
 
 輸出檔：
 

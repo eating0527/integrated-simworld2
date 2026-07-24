@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -47,13 +47,17 @@ UsrpMode = Literal["test", "usrp"]
 
 class ChildState(BaseModel):
     mission_id: str = ""
-    phase: str = "idle"
     connection: ConnectionState = "unknown"
     service: ServiceState = "idle"
     file: FileState = "none"
     error: str = ""
     path: str = ""
     pid: int | None = None
+    last_attempt_at: str | None = None
+    last_success_at: str | None = None
+    refresh_state: Literal["idle", "checking", "retry_wait"] = "idle"
+    consecutive_failures: int = 0
+    next_retry_at: str | None = None
 
 
 class CaptureState(BaseModel):
@@ -219,6 +223,9 @@ class CaptureCoordinator:
         self.usrp_backend = usrp_backend
         self._lock = threading.RLock()
         self._uav_processes: dict[str, subprocess.Popen] = {}
+        self._reconcile_guards: set[tuple[str, str]] = set()
+        self._reconcile_lock = threading.Lock()
+        self.now = lambda: datetime.now(timezone.utc)
 
     def _active_uav(self) -> CaptureState | None:
         for state in reversed(self.store.list()):
@@ -321,17 +328,6 @@ class CaptureCoordinator:
             run_user=os.environ.get("RASPI_USER", "user"),
         )
 
-    def _save_usrp_phase(self, mission_id: str, phase: str) -> None:
-        with self._lock:
-            state = self.store.load(mission_id)
-            state.usrp.phase = phase
-            if phase == "recording":
-                state.usrp.service = "running"
-                state.usrp.file = "recording"
-            elif phase == "starting_service":
-                state.usrp.service = "starting"
-            self.store.save(state)
-
     def _launch_usrp(
         self,
         state: CaptureState,
@@ -347,7 +343,6 @@ class CaptureCoordinator:
         remote = self.usrp_backend.start_capture_job(
             state.selected_usrp_mode,
             self._remote_mission(state, scene=scene, map_type=map_type),
-            progress=lambda phase: self._save_usrp_phase(state.mission_id, phase),
         )
         state.usrp.service = (
             "running" if remote.get("service_state") == "running" else "starting"
@@ -479,43 +474,103 @@ class CaptureCoordinator:
             return self.store.save(state)
 
     def refresh_usrp(self, mission_id: str) -> CaptureState:
+        return self.reconcile_usrp(mission_id, force=True)
+    def _reconcile_due(self, child: ChildState) -> bool:
+        if child.refresh_state == "checking":
+            return False
+        if child.next_retry_at is None:
+            return True
+        try:
+            return datetime.fromisoformat(child.next_retry_at) <= self.now()
+        except ValueError:
+            return True
+
+    def reconcile_due(self) -> list[str]:
+        due: list[str] = []
+        for state in self.store.list():
+            if state.target in {"usrp", "bind"} and self._reconcile_due(state.usrp):
+                due.append(state.mission_id)
+        return due
+
+    def reconcile_usrp(self, mission_id: str, force: bool = False) -> CaptureState:
+        key = ("usrp", mission_id)
+        with self._reconcile_lock:
+            if key in self._reconcile_guards:
+                return self.store.load(mission_id)
+            current = self.store.load(mission_id)
+            if not force and not self._reconcile_due(current.usrp):
+                return current
+            self._reconcile_guards.add(key)
+        attempt = self.now().isoformat()
         with self._lock:
             state = self.store.load(mission_id)
-            try:
-                remote = self.usrp_backend.get_capture_job(
-                    state.selected_usrp_mode,
-                    mission_id,
-                )
-            except Exception as exc:
-                state.usrp.connection = "offline"
-                if state.usrp.service in {"starting", "running", "presumed_running"}:
-                    state.usrp.service = "presumed_running"
-                state.usrp.error = str(exc)
-                return self.store.save(state)
+            state.usrp.refresh_state = "checking"
+            state.usrp.last_attempt_at = attempt
+            fence = (state.usrp.service, state.usrp.file, state.usrp.path, state.usrp.pid)
+            self.store.save(state)
+            mode = state.selected_usrp_mode
+        try:
+            remote = self.usrp_backend.get_capture_job(mode, mission_id)
+        except Exception as exc:
+            with self._lock:
+                state = self.store.load(mission_id)
+                child = state.usrp
+                failures = child.consecutive_failures + 1
+                delay = min(5 * (2 ** (failures - 1)), 30)
+                unchanged = (child.service, child.file, child.path, child.pid) == fence
+                if unchanged:
+                    child.connection = "offline"
+                    if child.service in {"starting", "running", "presumed_running", "stopping"}:
+                        child.service = "presumed_running"
+                    child.error = str(exc)
+                child.refresh_state = "retry_wait"
+                child.consecutive_failures = failures
+                child.next_retry_at = (self.now() + timedelta(seconds=delay)).isoformat()
+                result = self.store.save(state)
+        else:
+            with self._lock:
+                state = self.store.load(mission_id)
+                child = state.usrp
+                unchanged = (child.service, child.file, child.path, child.pid) == fence
+                if unchanged:
+                    child.connection = "ready"
+                    child.error = ""
+                    child.refresh_state = "idle"
+                    child.consecutive_failures = 0
+                    child.next_retry_at = None
+                    child.last_success_at = self.now().isoformat()
+                    service = remote.get("service_state")
+                    if service in {"running", "stopped"}:
+                        child.service = service
+                    mission_state = remote.get("mission_state") or {}
+                    upload_state = mission_state.get("upload_state")
+                    if upload_state in {"recording", "finalizing", "upload_pending", "uploaded", "failed"}:
+                        child.file = upload_state
+                result = self.store.save(state)
+        finally:
+            with self._reconcile_lock:
+                self._reconcile_guards.discard(key)
+        return result
 
-            state.usrp.connection = "ready"
-            state.usrp.error = ""
-            service_state = remote.get("service_state", "unknown")
-            if service_state in {"running", "stopped"}:
-                state.usrp.service = service_state
-            mission_state = remote.get("mission_state") or {}
-            remote_state = mission_state.get("state")
-            if remote_state == "failed":
-                state.usrp.service = "failed"
-            upload_state = mission_state.get("upload_state")
-            if upload_state in {
-                "recording",
-                "finalizing",
-                "upload_pending",
-                "uploaded",
-                "failed",
-            }:
-                state.usrp.file = upload_state
-            return self.store.save(state)
+    def refresh_gps(self, mission_id: str | None = None) -> CaptureState:
+        state = self.store.load(mission_id) if mission_id else self._active_uav()
+        if state is None:
+            return self.status()
+        with self._lock:
+            process = self._uav_processes.get(state.mission_id)
+            current = self.store.load(state.mission_id)
+            current.uav.last_attempt_at = _now_iso()
+            if process is not None and process.poll() is None:
+                current.uav.connection = "ready"
+                current.uav.last_success_at = _now_iso()
+                current.uav.refresh_state = "idle"
+                current.uav.consecutive_failures = 0
+                current.uav.next_retry_at = None
+            return self.store.save(current)
 
     def status(self, mode: UsrpMode = "test") -> CaptureState:
-        states = self.store.list()
         with self._lock:
+            states = self.store.list()
             uav_state = next(
                 (item for item in reversed(states) if item.target in {"uav", "bind"}),
                 None,
@@ -531,11 +586,15 @@ class CaptureCoordinator:
                 "presumed_running",
             }:
                 process = self._uav_processes.get(uav_state.mission_id)
-                if process is None or process.poll() is not None:
+                if process is not None and process.poll() is not None:
                     uav_state.uav.connection = "offline"
                     uav_state.uav.service = "failed"
                     uav_state.uav.file = "failed"
-                    uav_state.uav.error = "UAV capture process is no longer owned by the backend"
+                    uav_state.uav.error = "UAV capture process exited unexpectedly"
+                    self.store.save(uav_state)
+                elif process is None and uav_state.uav.service != "presumed_running":
+                    uav_state.uav.service = "presumed_running"
+                    uav_state.uav.connection = "unknown"
                     self.store.save(uav_state)
             elif (
                 uav_state
@@ -549,14 +608,6 @@ class CaptureCoordinator:
                     "UAV stop/finalization path is no longer safely owned by the backend"
                 )
                 self.store.save(uav_state)
-
-            if usrp_state and usrp_state.usrp.service in {
-                "starting",
-                "running",
-                "presumed_running",
-                "stopping",
-            }:
-                usrp_state = self.refresh_usrp(usrp_state.mission_id)
 
             same_mission = bool(
                 uav_state
@@ -587,41 +638,6 @@ class CaptureCoordinator:
                 )
                 state.overall_state = _aggregate_state(state)
 
-            uav_active = state.uav.service in {
-                "starting",
-                "running",
-                "presumed_running",
-                "stopping",
-            }
-            usrp_active = state.usrp.service in {
-                "starting",
-                "running",
-                "presumed_running",
-                "stopping",
-            }
-            if not uav_active:
-                try:
-                    self.preflight_uav()
-                    state.uav.connection = "ready"
-                    if state.uav.service != "failed":
-                        state.uav.error = ""
-                except CaptureError as exc:
-                    state.uav.connection = "offline"
-                    state.uav.error = str(exc)
-            if not usrp_active:
-                state.selected_usrp_mode = mode
-                try:
-                    self.preflight_usrp(mode)
-                    state.usrp.connection = "ready"
-                    if state.usrp.service != "failed":
-                        state.usrp.error = ""
-                except CaptureConflictError:
-                    state.usrp.connection = "ready"
-                except CaptureError as exc:
-                    state.usrp.connection = "offline"
-                    state.usrp.error = str(exc)
-            if same_mission and state.mission_id:
-                return self.store.save(state)
             return state
 
     def stop_usrp(self, mission_id: str) -> CaptureState:
@@ -629,19 +645,22 @@ class CaptureCoordinator:
             state = self.store.load(mission_id)
             if state.usrp.service == "stopped" and state.usrp.file == "uploaded":
                 return state
-            state.usrp.phase = "stopping"
             state.usrp.service = "stopping"
             state.usrp.file = "finalizing"
             self.store.save(state)
             selected_usrp_mode = state.selected_usrp_mode
         try:
-            remote = self.usrp_backend.stop_capture_job(selected_usrp_mode, mission_id)
+            remote = self.usrp_backend.stop_capture_job(
+                selected_usrp_mode,
+                mission_id,
+            )
         except Exception as exc:
             with self._lock:
                 state = self.store.load(mission_id)
                 state.usrp.connection = "offline"
                 state.usrp.service = "presumed_running"
-                state.usrp.phase = "reconciling"
+                if state.usrp.file != "uploaded":
+                    state.usrp.file = "upload_pending"
                 state.usrp.error = str(exc)
                 return self.store.save(state)
 
@@ -649,32 +668,14 @@ class CaptureCoordinator:
             state = self.store.load(mission_id)
             state.usrp.connection = "ready"
             state.usrp.service = "stopped"
-            state.usrp.phase = "stopped"
             mission_state = remote.get("mission_state") or {}
             upload_state = mission_state.get("upload_state")
-            state.usrp.file = "uploaded" if upload_state == "uploaded" else "upload_pending"
+            if state.usrp.file != "uploaded":
+                state.usrp.file = (
+                    "uploaded" if upload_state == "uploaded" else "upload_pending"
+                )
             state.usrp.error = ""
             return self.store.save(state)
-
-    def retry_usrp_upload(self, mission_id: str) -> CaptureState:
-        with self._lock:
-            state = self.store.load(mission_id)
-            mode = state.selected_usrp_mode
-        try:
-            remote = self.usrp_backend.retry_capture_upload(mode, mission_id)
-            with self._lock:
-                state = self.store.load(mission_id)
-                state.usrp.connection = "ready"
-                state.usrp.service = "stopped"
-                state.usrp.file = "uploaded" if (remote.get("mission_state") or {}).get("upload_state") == "uploaded" else "upload_pending"
-                state.usrp.error = "" if state.usrp.file == "uploaded" else "upload retry failed"
-                return self.store.save(state)
-        except Exception as exc:
-            with self._lock:
-                state = self.store.load(mission_id)
-                state.usrp.file = "upload_pending"
-                state.usrp.error = str(exc)
-                return self.store.save(state)
 
     def stop_bind(self, mission_id: str) -> CaptureState:
         with self._lock:
@@ -685,11 +686,11 @@ class CaptureCoordinator:
         with self._lock:
             state = self.store.load(mission_id)
             needs_usrp_stop = state.usrp.service not in {"idle", "stopped", "failed"}
-            needs_usrp_retry = state.usrp.service == "stopped" and state.usrp.file == "upload_pending"
-        if needs_usrp_stop:
+            needs_usrp_retry = (
+                state.usrp.service == "stopped" and state.usrp.file == "upload_pending"
+            )
+        if needs_usrp_stop or needs_usrp_retry:
             self.stop_usrp(mission_id)
-        elif needs_usrp_retry:
-            self.retry_usrp_upload(mission_id)
         with self._lock:
             return self.store.load(mission_id)
 

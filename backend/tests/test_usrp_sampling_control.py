@@ -336,11 +336,10 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
                 return 0, "Active: active (running)", ""
             return 0, "", ""
 
-        phases: list[str] = []
         with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
-            result = usrp_ctl.start_capture_job("usrp", mission, progress=phases.append)
+            result = usrp_ctl.start_capture_job("usrp", mission)
 
-        self.assertEqual(phases, ["connecting", "configuring", "starting_service", "recording"])
+        self.assertEqual(result["mission_id"], "flight_001")
         self.assertEqual(commands[0], "install -d /run/simworld")
         self.assertEqual(commands[1], "install -d -o user /var/lib/simworld/capture")
         self.assertEqual(commands[2], "install -d -o user /var/lib/simworld/capture/flight_001")
@@ -377,8 +376,9 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
 
         calls: list[str] = []
         mission_path = "/var/lib/simworld/capture/flight_retry/mission.json"
+        env_path = "/run/simworld/usrp.env"
 
-        def fake_run(command: str, use_sudo_password: bool = False, timeout: float = 10):
+        def fake_run(command: str, use_sudo_password: bool = False):
             calls.append(command)
             if command == "systemctl stop drone":
                 return 0, "", ""
@@ -386,8 +386,10 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
                 return 3, "inactive", ""
             if command == f"cat {mission_path}":
                 return 0, '{"mission_id":"flight_retry","state":"upload_pending","upload_state":"upload_pending"}', ""
-            if command.startswith("cat /run/simworld/usrp.env"):
+            if command == f"cat {env_path}":
                 return 0, "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv", ""
+            if command.startswith("sh -c "):
+                return 0, "", ""
             if command.startswith("systemctl status") or command.startswith("journalctl"):
                 return 0, "Active: inactive", ""
             return 0, "", ""
@@ -399,7 +401,7 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertEqual(result["mission_state"]["upload_state"], "upload_pending")
         self.assertFalse(any("upload_noise_csv.py" in command for command in calls))
 
-    def test_explicit_retry_uploads_existing_pending_mission(self):
+    def test_remote_stop_does_not_upload_when_upload_state_is_pending(self):
         from app import usrp_ctl
 
         calls: list[str] = []
@@ -413,9 +415,17 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             if command == "systemctl is-active drone":
                 return 3, "inactive", ""
             if command == f"cat {mission_path}":
-                return 0, '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending"}', ""
+                return (
+                    0,
+                    '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending"}',
+                    "",
+                )
             if command == f"cat {env_path}":
-                return 0, "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv", ""
+                return (
+                    0,
+                    "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv",
+                    "",
+                )
             if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
                 return 0, "uploaded", ""
             if command.startswith("systemctl status") or command.startswith("journalctl"):
@@ -423,12 +433,10 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             return 0, "", ""
 
         with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
-            stopped = usrp_ctl.stop_capture_job("usrp", "flight_retry")
-            result = usrp_ctl.retry_capture_upload("usrp", "flight_retry")
+            result = usrp_ctl.stop_capture_job("usrp", "flight_retry")
 
-        self.assertEqual(stopped["mission_state"]["upload_state"], "upload_pending")
-        self.assertEqual(result["mission_state"]["upload_state"], "uploaded")
-        self.assertTrue(any("upload_noise_csv.py" in command for command in calls))
+        self.assertEqual(result["service_state"], "stopped")
+        self.assertFalse(any("upload_noise_csv.py" in command for command in calls))
 
     def test_remote_stop_converts_recording_state_to_pending_upload(self):
         from app import usrp_ctl
@@ -454,26 +462,34 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             return 0, "", ""
 
         with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
-            stopped = usrp_ctl.stop_capture_job("usrp", "flight_recording")
-            result = usrp_ctl.retry_capture_upload("usrp", "flight_recording")
+            result = usrp_ctl.stop_capture_job("usrp", "flight_recording")
 
-        self.assertEqual(stopped["mission_state"]["upload_state"], "upload_pending")
-        self.assertEqual(result["mission_state"]["upload_state"], "uploaded")
-        self.assertTrue(any("upload_noise_csv.py" in command for command in calls))
+        self.assertEqual(result["mission_state"]["upload_state"], "upload_pending")
+        self.assertFalse(any("upload_noise_csv.py" in command for command in calls))
 
-    def test_explicit_retry_write_back_failure_is_reported(self):
+    def test_remote_stop_raises_when_retry_write_back_fails(self):
         from app import usrp_ctl
 
         mission_path = "/var/lib/simworld/capture/flight_retry/mission.json"
         env_path = "/run/simworld/usrp.env"
 
         def fake_run(command: str, use_sudo_password: bool = False):
+            if command == "systemctl stop drone":
+                return 0, "", ""
             if command == "systemctl is-active drone":
                 return 3, "inactive", ""
             if command == f"cat {mission_path}":
-                return 0, '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending"}', ""
+                return (
+                    0,
+                    '{"mission_id":"flight_retry","state":"stopped","upload_state":"upload_pending"}',
+                    "",
+                )
             if command == f"cat {env_path}":
-                return 0, "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nNOISE_CSV=/home/user/rx_sampling/noise.csv", ""
+                return (
+                    0,
+                    "MISSION_ID=flight_retry\nUPLOAD_API_URL=http://127.0.0.1:8888/api/usrp/upload-noise-csv\nSCENE=NTPU\nMAP_TYPE=iss\nNOISE_CSV=/home/user/rx_sampling/noise.csv",
+                    "",
+                )
             if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
                 return 0, "uploaded", ""
             if command.startswith("sh -c ") and mission_path in command and '"upload_state":"uploaded"' in command:
@@ -483,10 +499,39 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
             return 0, "", ""
 
         with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
-            with self.assertRaisesRegex(usrp_ctl.UsrpControlError, "write failed"):
-                usrp_ctl.retry_capture_upload("usrp", "flight_retry")
+            result = usrp_ctl.stop_capture_job("usrp", "flight_retry")
 
-    def test_remote_setup_falls_back_to_sudo_for_permission_style_failures(self):
+        self.assertEqual(result["mission_state"]["upload_state"], "upload_pending")
+
+    def test_retry_capture_upload_uses_separate_upload_operation(self):
+        from app import usrp_ctl
+
+        calls: list[str] = []
+        mission_path = "/var/lib/simworld/capture/retry/mission.json"
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            calls.append(command)
+            if command == "systemctl is-active drone":
+                return 3, "inactive", ""
+            if command == f"cat {mission_path}":
+                return 0, '{"mission_id":"retry","state":"stopped","upload_state":"upload_pending","noise_csv":"/home/user/rx_sampling/noise.csv","api_url":"http://upload"}', ""
+            if command.startswith("cd /home/user/rx_sampling && python3"):
+                return 0, "uploaded", ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.retry_capture_upload("usrp", "retry")
+
+        self.assertEqual(result["mission_state"]["upload_state"], "uploaded")
+        self.assertTrue(any("upload_noise_csv.py" in command for command in calls))
+
+    def test_capture_operation_budgets_are_named(self):
+        from app import usrp_ctl
+
+        self.assertEqual(usrp_ctl.START_CAPTURE_BUDGET, 35.0)
+        self.assertEqual(usrp_ctl.STOP_CAPTURE_BUDGET, 35.0)
+        self.assertEqual(usrp_ctl.UPLOAD_CAPTURE_BUDGET, 20.0)
+
         from app import usrp_ctl
 
         mission = usrp_ctl.RemoteMission(
@@ -519,6 +564,252 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
 
                 self.assertIn((failing_command, False), calls)
                 self.assertIn((failing_command, True), calls)
+
+    def test_compound_status_uses_one_session_and_two_commands(self):
+        from app import usrp_ctl
+
+        class Channel:
+            def __init__(self):
+                self.closed = False
+
+            def exit_status_ready(self):
+                return True
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                self.closed = True
+
+        class Stream:
+            def __init__(self, value=b""):
+                self.channel = Channel()
+                self.value = value
+                self.closed = False
+            def read(self):
+                return self.value
+            def close(self):
+                self.closed = True
+
+        class Client:
+            def __init__(self):
+                self.commands = []
+                self.closed = False
+            def exec_command(self, command, timeout):
+                self.commands.append((command, timeout))
+                value = b"active" if len(self.commands) == 1 else b'{"state":"running"}'
+                return Stream(), Stream(value), Stream()
+            def close(self):
+                self.closed = True
+
+        client = Client()
+        with patch.object(usrp_ctl, "_config_from_env", return_value=usrp_ctl.RaspiConfig("h", "u", "p")):
+            with patch.object(usrp_ctl, "_ssh_client", return_value=client) as connect:
+                result = usrp_ctl.get_capture_job("usrp", "m1")
+        self.assertEqual(result["service_state"], "running")
+        self.assertEqual(len(client.commands), 2)
+        self.assertEqual(connect.call_count, 1)
+        self.assertTrue(client.closed)
+        self.assertTrue(all(timeout <= 8 for _, timeout in client.commands))
+
+    def test_compound_status_rejects_malformed_mission_json_and_closes(self):
+        from app import usrp_ctl
+
+        class Channel:
+            def exit_status_ready(self):
+                return True
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                return None
+
+        class Stream:
+            def __init__(self, value=b""):
+                self.channel = Channel()
+                self.value = value
+                self.closed = False
+
+            def read(self):
+                return self.value
+
+            def close(self):
+                self.closed = True
+
+        class Client:
+            def __init__(self):
+                self.closed = False
+                self.called = False
+
+            def exec_command(self, command, timeout):
+                value = b"active" if not self.called else b"{bad"
+                self.called = True
+                return Stream(), Stream(value), Stream()
+
+            def close(self):
+                self.closed = True
+        client = Client()
+        with patch.object(usrp_ctl, "_config_from_env", return_value=usrp_ctl.RaspiConfig("h", "u", "secret")):
+            with patch.object(usrp_ctl, "_ssh_client", return_value=client):
+                with self.assertRaises(usrp_ctl.UsrpControlError):
+                    usrp_ctl.get_capture_job("usrp", "m1")
+        self.assertTrue(client.closed)
+
+    def test_compound_status_uses_remaining_budget_for_second_command(self):
+        from app import usrp_ctl
+
+        class Channel:
+            def __init__(self, ready_after=0):
+                self.ready_after = ready_after
+                self.checks = 0
+                self.closed = False
+
+            def exit_status_ready(self):
+                self.checks += 1
+                return self.checks > self.ready_after
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                self.closed = True
+
+        class Stream:
+            def __init__(self, value, channel):
+                self.value = value
+                self.channel = channel
+
+            def read(self):
+                return self.value
+
+            def close(self):
+                return None
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+                self.channels = []
+                self.closed = False
+
+            def exec_command(self, command, timeout):
+                self.calls.append((command, timeout))
+                channel = Channel(1 if len(self.calls) == 1 else 0)
+                self.channels.append(channel)
+                value = b"active" if len(self.calls) == 1 else b'{"state":"running"}'
+                return Stream(b"", channel), Stream(value, channel), Stream(b"", channel)
+
+            def close(self):
+                self.closed = True
+
+        client = Client()
+        clock = iter((0.0, 1.0, 10.0, 20.0))
+        with patch.object(usrp_ctl, "time") as fake_time:
+            fake_time.monotonic.side_effect = clock
+            fake_time.sleep.return_value = None
+            with patch.object(usrp_ctl, "_config_from_env", return_value=usrp_ctl.RaspiConfig("h", "u", "p")):
+                with patch.object(usrp_ctl, "_ssh_client", return_value=client):
+                    result = usrp_ctl.get_capture_job("usrp", "m1")
+
+        self.assertEqual(result["mission_state"], {"state": "running"})
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(client.calls[0][1], usrp_ctl.COMMAND_TIMEOUT_CAP)
+        self.assertEqual(client.calls[1][1], 5.0)
+        self.assertTrue(client.closed)
+
+    def test_compound_status_timeout_closes_channel_and_skips_second_command(self):
+        from app import usrp_ctl
+
+        class Channel:
+            def __init__(self):
+                self.closed = False
+
+            def exit_status_ready(self):
+                return False
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                self.closed = True
+
+        class Stream:
+            def __init__(self, channel):
+                self.channel = channel
+
+            def read(self):
+                return b"active"
+
+            def close(self):
+                return None
+
+        class Client:
+            def __init__(self):
+                self.commands = 0
+                self.channel = Channel()
+                self.closed = False
+
+            def exec_command(self, command, timeout):
+                self.commands += 1
+                return Stream(self.channel), Stream(self.channel), Stream(self.channel)
+
+            def close(self):
+                self.closed = True
+
+        client = Client()
+        with patch.object(usrp_ctl, "time") as fake_time:
+            fake_time.monotonic.side_effect = (0.0, 1.0, 26.0)
+            with patch.object(usrp_ctl, "_config_from_env", return_value=usrp_ctl.RaspiConfig("h", "u", "p")):
+                with patch.object(usrp_ctl, "_ssh_client", return_value=client):
+                    with self.assertRaises(usrp_ctl.UsrpCommandTimeout):
+                        usrp_ctl.get_capture_job("usrp", "m1")
+
+        self.assertEqual(client.commands, 1)
+        self.assertTrue(client.channel.closed)
+        self.assertTrue(client.closed)
+
+    def test_compound_status_does_not_run_diagnostics(self):
+        from app import usrp_ctl
+        commands = []
+        class Channel:
+            def exit_status_ready(self):
+                return True
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                return None
+        class Stream:
+            def __init__(self, value): self.channel, self.value = Channel(), value
+            def read(self): return self.value
+            def close(self): pass
+        class Client:
+            def exec_command(self, command, timeout):
+                commands.append(command)
+                return Stream(b""), Stream(b"active" if len(commands) == 1 else b"{}"), Stream(b"")
+            def close(self): pass
+        with patch.object(usrp_ctl, "_config_from_env", return_value=usrp_ctl.RaspiConfig("h", "u", "p")):
+            with patch.object(usrp_ctl, "_ssh_client", return_value=Client()):
+                usrp_ctl.get_capture_job("usrp", "m1")
+        self.assertEqual(commands, ["systemctl is-active drone", "cat /var/lib/simworld/capture/m1/mission.json"])
+
+    def test_deactivating_service_is_unknown(self):
+        from app import usrp_ctl
+        with patch.object(usrp_ctl, "_run_remote", side_effect=[(3, "deactivating", ""), (0, "{}", "")]):
+            result = usrp_ctl.get_capture_job("usrp", "m1")
+        self.assertEqual(result["service_state"], "unknown")
+
+    def test_compound_command_errors_are_redacted(self):
+        from app import usrp_ctl
+        class Client:
+            def exec_command(self, command, timeout): raise RuntimeError("secret-password")
+            def close(self): pass
+        with patch.object(usrp_ctl, "_config_from_env", return_value=usrp_ctl.RaspiConfig("h", "u", "secret-password")):
+            with patch.object(usrp_ctl, "_ssh_client", return_value=Client()):
+                with self.assertRaises(usrp_ctl.UsrpControlError) as caught:
+                    usrp_ctl.get_capture_job("usrp", "m1")
+        self.assertNotIn("secret-password", str(caught.exception))
 
     def test_each_remote_command_closes_its_ssh_client(self):
         from app import usrp_ctl
