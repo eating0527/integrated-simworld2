@@ -280,12 +280,27 @@ class CaptureCoordinator:
         state.started_at = state.started_at or _now_iso()
         self.store.save(state)
 
+        sync_args: list[str] = []
+        sync_api_url = os.environ.get("GPS_SYNC_API_URL", "").strip()
+        if sync_api_url:
+            sync_args = [
+                "--sync-api-url",
+                sync_api_url,
+                "--sync-device-id",
+                os.environ.get("GPS_SYNC_DEVICE_ID", "align-m4p-top-aircraft"),
+                "--sync-device-name",
+                os.environ.get("GPS_SYNC_DEVICE_NAME", "M4P TOP Aircraft"),
+                "--sync-device-type",
+                os.environ.get("GPS_SYNC_DEVICE_TYPE", "uav"),
+            ]
+
         process = self.popen_factory(
             self._ap3_command(
                 "--mission-id",
                 state.mission_id,
                 "--incoming-dir",
                 str(self.store.root),
+                *sync_args,
             ),
             cwd=self.repo_root,
         )
@@ -302,6 +317,9 @@ class CaptureCoordinator:
         map_type: str,
     ):
         api_url = os.environ.get(
+            "USRP_UPLOAD_API_URLS",
+            "",
+        ).strip() or os.environ.get(
             "USRP_UPLOAD_API_URL",
             "http://127.0.0.1:8888/api/usrp/upload-noise-csv",
         )

@@ -10,9 +10,10 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Upload noise.csv only to the laptop backend. The laptop will pair it with gps.csv by mission_id."
+        description="Upload noise.csv to one or more laptop backends. Each backend will pair it with gps.csv by mission_id."
     )
     parser.add_argument("--api-url", default="http://127.0.0.1:8888/api/usrp/upload-noise-csv")
+    parser.add_argument("--api-urls", default="", help="Comma-separated upload endpoints. When set, these are tried in addition to --api-url.")
     parser.add_argument("--scene", default="NTPU")
     parser.add_argument("--mission-id", required=True)
     parser.add_argument("--noise-csv", required=True)
@@ -24,6 +25,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--role", default="rx", choices=["rx", "tx", "jammer"])
     parser.add_argument("--devices-file", default="")
     return parser.parse_args()
+
+
+def parse_upload_urls(*values: str) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for raw in str(value or "").split(","):
+            url = raw.strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 def load_devices_json(path_value: str) -> str:
@@ -99,18 +113,29 @@ def main() -> int:
         "devices_json": load_devices_json(args.devices_file),
         **file_metadata(noise_path),
     }
-    try:
-        response = post_noise(args.api_url, fields, noise_path)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        print(body or f"HTTP {exc.code}", file=sys.stderr)
-        return 1
-    except Exception as exc:
-        print(str(exc), file=sys.stderr)
+    urls = parse_upload_urls(args.api_urls, args.api_url)
+    if not urls:
+        print("no upload api url configured", file=sys.stderr)
         return 1
 
-    print(json.dumps(response, ensure_ascii=False, indent=2))
-    return 0
+    results: list[dict] = []
+    failures: list[dict] = []
+    for url in urls:
+        try:
+            response = post_noise(url, fields, noise_path)
+            results.append({"api_url": url, "success": True, "response": response})
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            failures.append({"api_url": url, "success": False, "error": body or f"HTTP {exc.code}"})
+        except Exception as exc:
+            failures.append({"api_url": url, "success": False, "error": str(exc)})
+
+    print(json.dumps({
+        "success": not failures,
+        "uploaded": results,
+        "failed": failures,
+    }, ensure_ascii=False, indent=2))
+    return 0 if not failures else 1
 
 
 if __name__ == "__main__":

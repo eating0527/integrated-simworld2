@@ -1,7 +1,10 @@
 import argparse
 import csv
+import json
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -52,6 +55,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--flush-every", type=int, default=1)
     parser.add_argument("--max-messages", type=int, default=0)
     parser.add_argument("--utc-offset-hours", type=float, default=8.0)
+    parser.add_argument("--sync-api-url", default="", help="Optional B laptop endpoint, e.g. http://192.168.1.20:8888/api/usrp/sync-gps-point.")
+    parser.add_argument("--sync-device-id", default="align-m4p-top-aircraft")
+    parser.add_argument("--sync-device-name", default="M4P TOP Aircraft")
+    parser.add_argument("--sync-device-type", default="uav")
+    parser.add_argument("--sync-timeout", type=float, default=2.0)
+    parser.add_argument("--sync-log-every", type=float, default=5.0)
     return parser.parse_args()
 
 
@@ -71,6 +80,66 @@ def ensure_csv(csv_path: Path) -> None:
             writer.writerow(["time_stamp", "lat", "lon", "alt", "alt_mode"])
 
 
+class GpsSyncClient:
+    def __init__(
+        self,
+        *,
+        api_url: str,
+        mission_id: str,
+        device_id: str,
+        device_name: str,
+        device_type: str,
+        timeout: float,
+        log_every: float,
+    ):
+        self.api_url = api_url.strip()
+        self.mission_id = mission_id
+        self.device_id = device_id
+        self.device_name = device_name
+        self.device_type = device_type
+        self.timeout = timeout
+        self.log_every = max(1.0, log_every)
+        self._last_error_log = 0.0
+        self._sent = 0
+        self._failed = 0
+
+    def send(self, *, timestamp: str, lat: float, lon: float, alt: float, alt_mode: str) -> None:
+        if not self.api_url:
+            return
+        payload = {
+            "mission_id": self.mission_id,
+            "time_stamp": timestamp,
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
+            "alt_mode": alt_mode,
+            "device_id": self.device_id,
+            "device_name": self.device_name,
+            "device_type": self.device_type,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.api_url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                if response.status >= 400:
+                    raise RuntimeError(f"HTTP {response.status}")
+            self._sent += 1
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            self._failed += 1
+            now = time.monotonic()
+            if now - self._last_error_log >= self.log_every:
+                self._last_error_log = now
+                print(
+                    f"gps sync warning: failed={self._failed} sent={self._sent} error={exc}",
+                    flush=True,
+                )
+
+
 def main() -> int:
     args = parse_args()
     if args.check:
@@ -85,9 +154,20 @@ def main() -> int:
     ensure_csv(csv_path)
     mav_url = resolve_mavlink_url(args)
     output_tz = timezone(timedelta(hours=args.utc_offset_hours))
+    sync_client = GpsSyncClient(
+        api_url=args.sync_api_url,
+        mission_id=args.mission_id,
+        device_id=args.sync_device_id,
+        device_name=args.sync_device_name,
+        device_type=args.sync_device_type,
+        timeout=args.sync_timeout,
+        log_every=args.sync_log_every,
+    )
 
     print(f"writing GPS CSV to {csv_path}")
     print(f"reading AP3 MAVLink from {mav_url}")
+    if args.sync_api_url:
+        print(f"syncing GPS points to {args.sync_api_url}")
 
     written = 0
     with csv_path.open("a", newline="", encoding="utf-8") as handle:
@@ -110,6 +190,13 @@ def main() -> int:
                     alt = rel_alt if args.altitude == "relative" else amsl_alt
                     timestamp = datetime.now(output_tz).replace(tzinfo=None).isoformat(timespec="milliseconds")
                     writer.writerow([timestamp, lat, lon, alt, args.altitude])
+                    sync_client.send(
+                        timestamp=timestamp,
+                        lat=lat,
+                        lon=lon,
+                        alt=alt,
+                        alt_mode=args.altitude,
+                    )
                     written += 1
                     if written % max(1, args.flush_every) == 0:
                         handle.flush()

@@ -95,12 +95,20 @@ RASPI_USER=<Raspberry Pi 帳號，例如 user>
 RASPI_PSW=<Raspberry Pi 密碼>
 RASPI_PORT=22
 USRP_UPLOAD_API_URL=http://<這台電腦的區網 IPv4>:8888/api/usrp/upload-noise-csv
+USRP_UPLOAD_API_URLS=http://<A laptop IPv4>:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv
+GPS_SYNC_API_URL=http://<B laptop IPv4>:8888/api/usrp/sync-gps-point
+GPS_SYNC_DEVICE_ID=align-m4p-top-aircraft
+GPS_SYNC_DEVICE_NAME=M4P TOP Aircraft
 
 # 有 Cloudflare token 時才填
 CLOUDFLARED_TOKEN=<Cloudflare tunnel token>
 ```
 
 `USRP_UPLOAD_API_URL` 是 Raspberry Pi 在 mission 停止時回傳 `noise.csv` 的位址，必須使用**目前執行 backend 這台電腦**的 Wi-Fi 或有線網路 IPv4。不要填 `localhost`、`127.0.0.1`、Raspberry Pi IP，或從另一台電腦複製過來的舊 IP。
+
+`USRP_UPLOAD_API_URLS` 可設定多個 `noise.csv` 上傳目的地，用逗號分隔；有設定時會優先於 `USRP_UPLOAD_API_URL`。例如 A 筆電本機 backend 加上 B 筆電 Cloudflare backend：`http://<A laptop IPv4>:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv`。
+
+如果是 A 筆電接遙控器、B 筆電跑 backend，把 A 筆電的 `GPS_SYNC_API_URL` 設成 `http://<B laptop IPv4>:8888/api/usrp/sync-gps-point`。A 筆電每收到一筆 AP3/controller GPS，就會同步 append 到 B 筆電的 `incoming/<mission-id>/gps.csv`，同時透過既有 GPS WebSocket 廣播給前端，並寫入 `incoming/<mission-id>/gps_sync.log`。可用 `http://<B laptop IPv4>:8888/api/usrp/gps-sync/logs?mission_id=<mission-id>` 看最近同步 log。
 
 Windows 可用以下命令找出和 Raspberry Pi 位於同一區網的 IPv4：
 

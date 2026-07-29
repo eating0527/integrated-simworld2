@@ -67,6 +67,7 @@ capture_coordinator = CaptureCoordinator(
     CaptureStore(INCOMING_CSV_DIR),
     repo_root=REPO_ROOT,
 )
+GPS_SYNC_LOCK = threading.Lock()
 PHOTOS_JSON = UPLOAD_DIR / "photos.json"
 LOCATION_JSON = UPLOAD_DIR / "selected_locations.json"
 SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
@@ -1902,6 +1903,69 @@ class CaptureStartRequest(BaseModel):
     map_type: Literal["sinr", "iss", "tss", "cfar"] = "iss"
 
 
+class GpsSyncPointRequest(BaseModel):
+    mission_id: str
+    time_stamp: str
+    lat: float
+    lon: float
+    alt: float = 0.0
+    alt_mode: str = "relative"
+    device_id: str = "align-m4p-top-aircraft"
+    device_name: str = "M4P TOP Aircraft"
+    device_type: str = "uav"
+
+
+def _safe_incoming_bundle_id(mission_id: str) -> str:
+    bundle_id = mission_id.strip()
+    if not bundle_id:
+        raise ValueError("mission_id is required")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", bundle_id):
+        raise ValueError("mission_id may only contain letters, numbers, underscore, dash, and dot")
+    return bundle_id
+
+
+def _append_gps_sync_log(bundle_dir: Path, line: str) -> None:
+    log_path = bundle_dir / "gps_sync.log"
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(line.rstrip() + "\n")
+
+
+def _tail_text_file(path: Path, limit: int) -> list[str]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-max(1, min(limit, 500)):]
+
+
+def _incoming_mission_summary(bundle_dir: Path) -> dict[str, Any] | None:
+    if not bundle_dir.is_dir():
+        return None
+    gps_path = bundle_dir / "gps.csv"
+    noise_path = bundle_dir / "noise.csv"
+    log_path = bundle_dir / "gps_sync.log"
+    if not (gps_path.exists() or noise_path.exists() or log_path.exists()):
+        return None
+
+    mtimes = [
+        path.stat().st_mtime
+        for path in (gps_path, noise_path, log_path)
+        if path.exists()
+    ]
+    latest_mtime = max(mtimes) if mtimes else bundle_dir.stat().st_mtime
+    gps_lines = _tail_text_file(gps_path, 2)
+    log_lines = _tail_text_file(log_path, 1)
+    return {
+        "mission_id": bundle_dir.name,
+        "updated_at": datetime.fromtimestamp(latest_mtime).isoformat(),
+        "has_gps": gps_path.exists(),
+        "has_noise": noise_path.exists(),
+        "gps_size": gps_path.stat().st_size if gps_path.exists() else 0,
+        "noise_size": noise_path.stat().st_size if noise_path.exists() else 0,
+        "last_gps_row": gps_lines[-1] if len(gps_lines) > 1 else "",
+        "last_log": log_lines[-1] if log_lines else "",
+    }
+
+
 def _coerce_iss_unet_pixel_size(value: Any) -> int:
     if isinstance(value, (int, float, str)):
         try:
@@ -2463,6 +2527,103 @@ async def usrp_upload_gps_csv_post(
         "bundle_dir": str(bundle_dir),
         "watch_dir": str(INCOMING_CSV_DIR),
         "metadata": metadata,
+    }
+
+
+@app.post("/api/usrp/sync-gps-point")
+async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
+    try:
+        bundle_id = _safe_incoming_bundle_id(point.mission_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    if not (
+        math.isfinite(point.lat)
+        and math.isfinite(point.lon)
+        and math.isfinite(point.alt)
+    ):
+        return JSONResponse({"success": False, "error": "lat, lon, and alt must be finite numbers"}, status_code=422)
+
+    bundle_dir = INCOMING_CSV_DIR / bundle_id
+    csv_path = bundle_dir / "gps.csv"
+    payload = {
+        "type": "gps",
+        "deviceId": point.device_id,
+        "deviceName": point.device_name,
+        "deviceType": point.device_type,
+        "lat": point.lat,
+        "lon": point.lon,
+        "alt": point.alt,
+        "timestamp": point.time_stamp,
+        "missionId": bundle_id,
+    }
+
+    with GPS_SYNC_LOCK:
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        needs_header = not csv_path.exists() or csv_path.stat().st_size == 0
+        with csv_path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            if needs_header:
+                writer.writerow(["time_stamp", "lat", "lon", "alt", "alt_mode"])
+            writer.writerow([point.time_stamp, point.lat, point.lon, point.alt, point.alt_mode])
+        log_line = (
+            f"{datetime.now().isoformat()} mission={bundle_id} "
+            f"device={point.device_id} lat={point.lat:.7f} lon={point.lon:.7f} alt={point.alt:.2f}"
+        )
+        _append_gps_sync_log(bundle_dir, log_line)
+
+    gps_manager.names[point.device_id] = point.device_name
+    gps_manager.update_gps(point.device_id, payload)
+    await gps_manager.broadcast(json.dumps(payload, ensure_ascii=False))
+    logger.info("GPS sync point received: %s", log_line)
+
+    return {
+        "success": True,
+        "mission_id": bundle_id,
+        "gps_csv": str(csv_path),
+        "log": log_line,
+    }
+
+
+@app.get("/api/usrp/gps-sync/logs")
+async def usrp_gps_sync_logs_get(
+    mission_id: str = Query(...),
+    limit: int = Query(100, ge=1, le=500),
+):
+    try:
+        bundle_id = _safe_incoming_bundle_id(mission_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+
+    bundle_dir = INCOMING_CSV_DIR / bundle_id
+    csv_path = bundle_dir / "gps.csv"
+    log_path = bundle_dir / "gps_sync.log"
+    lines = _tail_text_file(log_path, limit)
+    return {
+        "success": True,
+        "mission_id": bundle_id,
+        "gps_csv": str(csv_path),
+        "log_path": str(log_path),
+        "lines": lines,
+        "count": len(lines),
+    }
+
+
+@app.get("/api/usrp/gps-sync/missions")
+async def usrp_gps_sync_missions_get(limit: int = Query(20, ge=1, le=200)):
+    missions = [
+        summary
+        for summary in (
+            _incoming_mission_summary(path)
+            for path in INCOMING_CSV_DIR.iterdir()
+        )
+        if summary is not None
+    ]
+    missions.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return {
+        "success": True,
+        "missions": missions[:limit],
+        "count": min(len(missions), limit),
+        "total": len(missions),
     }
 
 

@@ -102,6 +102,33 @@ function Stop-PortListeners {
     Start-Sleep -Seconds 1
 }
 
+function Show-IncomingMissionSummary {
+    param(
+        [string]$BackendBaseUrl = "http://127.0.0.1:8888"
+    )
+
+    try {
+        $missionsUrl = "$BackendBaseUrl/api/usrp/gps-sync/missions?limit=5"
+        $response = Invoke-RestMethod -Uri $missionsUrl -TimeoutSec 5
+        if (-not $response.missions -or $response.missions.Count -eq 0) {
+            Info "A-site mission lookup: no incoming GPS/noise missions yet."
+            Info "   Check later: https://backend.simworld.website/api/usrp/gps-sync/missions"
+            return
+        }
+
+        $latest = $response.missions[0]
+        Info "A-site latest mission id: $($latest.mission_id)"
+        Info "   GPS received: $($latest.has_gps)  Noise received: $($latest.has_noise)"
+        if ($latest.last_log) {
+            Info "   Last GPS: $($latest.last_log)"
+        }
+        Info "   Logs: https://backend.simworld.website/api/usrp/gps-sync/logs?mission_id=$([System.Uri]::EscapeDataString($latest.mission_id))"
+    } catch {
+        Warn "A-site mission lookup failed: $($_.Exception.Message)"
+        Warn "   Check manually: https://backend.simworld.website/api/usrp/gps-sync/missions"
+    }
+}
+
 # Load .env
 if (Test-Path $EnvFile) {
     Get-Content $EnvFile | ForEach-Object {
@@ -197,6 +224,10 @@ if ($Reload) {
 }
 
 Start-Sleep -Seconds 2
+
+if ($NoAP3) {
+    Show-IncomingMissionSummary
+}
 
 # --- Frontend ---
 Info "Starting frontend (port 5173)..."

@@ -430,6 +430,36 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertEqual(result["mission_state"]["upload_state"], "uploaded")
         self.assertTrue(any("upload_noise_csv.py" in command for command in calls))
 
+    def test_explicit_retry_uses_multi_upload_urls_when_available(self):
+        from app import usrp_ctl
+
+        calls: list[str] = []
+        mission_path = "/var/lib/simworld/capture/flight_multi/mission.json"
+        env_path = "/run/simworld/usrp.env"
+        urls = "http://a.local:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv"
+
+        def fake_run(command: str, use_sudo_password: bool = False):
+            calls.append(command)
+            if command == "systemctl is-active drone":
+                return 3, "inactive", ""
+            if command == f"cat {mission_path}":
+                return 0, '{"mission_id":"flight_multi","state":"stopped","upload_state":"upload_pending"}', ""
+            if command == f"cat {env_path}":
+                return 0, f"MISSION_ID=flight_multi\nUPLOAD_API_URLS={urls}\nSCENE=NTPU\nMAP_TYPE=iss\nWORKDIR=/home/user/rx_sampling\nNOISE_CSV=/home/user/rx_sampling/noise.csv", ""
+            if command.startswith("cd /home/user/rx_sampling && python3 /home/user/upload_noise_csv.py "):
+                return 0, "uploaded", ""
+            if command.startswith("systemctl status") or command.startswith("journalctl"):
+                return 0, "Active: inactive", ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.retry_capture_upload("usrp", "flight_multi")
+
+        upload_command = next(command for command in calls if "upload_noise_csv.py" in command)
+        self.assertIn("--api-urls", upload_command)
+        self.assertIn("https://backend.simworld.website/api/usrp/upload-noise-csv", upload_command)
+        self.assertEqual(result["mission_state"]["upload_state"], "uploaded")
+
     def test_remote_stop_converts_recording_state_to_pending_upload(self):
         from app import usrp_ctl
 

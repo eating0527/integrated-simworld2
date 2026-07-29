@@ -113,9 +113,15 @@ RASPI_USER=<Raspberry Pi 帳號>
 RASPI_PSW=<Raspberry Pi 密碼>
 RASPI_PORT=22
 USRP_UPLOAD_API_URL=http://<這台電腦的區網 IPv4>:8888/api/usrp/upload-noise-csv
+USRP_UPLOAD_API_URLS=http://<A laptop IPv4>:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv
+GPS_SYNC_API_URL=http://<B laptop IPv4>:8888/api/usrp/sync-gps-point
 ```
 
 `USRP_UPLOAD_API_URL` 是 Raspberry Pi 停止 mission 後回傳 `noise.csv` 的目的地。必須填目前執行 backend 的電腦，且該 IPv4 必須和 Raspberry Pi 互通；不可使用 `localhost`、`127.0.0.1`、Raspberry Pi IP 或另一台電腦的舊 IP。
+
+`USRP_UPLOAD_API_URLS` 支援多個 `noise.csv` 上傳目的地，用逗號分隔；有設定時優先於 `USRP_UPLOAD_API_URL`。A+B 同時上傳可設成 `http://<A laptop IPv4>:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv`。
+
+A 筆電接遙控器、B 筆電跑 backend 時，在 A 筆電設定 `GPS_SYNC_API_URL=http://<B laptop IPv4>:8888/api/usrp/sync-gps-point`。每筆 AP3/controller GPS 會即時寫到 B 筆電的 `incoming/<mission-id>/gps.csv`，同步 log 在 `incoming/<mission-id>/gps_sync.log`，也可用 `http://<B laptop IPv4>:8888/api/usrp/gps-sync/logs?mission_id=<mission-id>` 查最近 log。
 
 ```powershell
 Get-NetIPAddress -AddressFamily IPv4 |
@@ -159,6 +165,7 @@ Timeout 階段：Pi 子程序 10 秒 graceful + 2 秒 force confirmation；syste
 
 ```text
 incoming/<mission-id>/gps.csv
+incoming/<mission-id>/gps_sync.log
 incoming/<mission-id>/noise.csv
 ```
 

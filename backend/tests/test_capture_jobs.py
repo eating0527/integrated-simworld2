@@ -155,6 +155,50 @@ class IndependentUavTests(unittest.TestCase):
         check_command = self.run_command.call_args_list[0].args[0]
         self.assertIn("--check", check_command)
 
+    def test_uav_start_passes_optional_gps_sync_endpoint(self):
+        coordinator = self._coordinator()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "GPS_SYNC_API_URL": "http://192.168.1.20:8888/api/usrp/sync-gps-point",
+                "GPS_SYNC_DEVICE_ID": "ap3-a",
+                "GPS_SYNC_DEVICE_NAME": "AP3 A",
+            },
+        ):
+            coordinator.start_uav()
+
+        command = self.popen.call_args.args[0]
+        self.assertIn("--sync-api-url", command)
+        self.assertIn("http://192.168.1.20:8888/api/usrp/sync-gps-point", command)
+        self.assertIn("--sync-device-id", command)
+        self.assertIn("ap3-a", command)
+        self.assertIn("--sync-device-name", command)
+        self.assertIn("AP3 A", command)
+
+    def test_usrp_remote_mission_prefers_multi_upload_urls(self):
+        coordinator = self._coordinator()
+        state = coordinator.store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="noise_multi",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "USRP_UPLOAD_API_URL": "http://a.local:8888/api/usrp/upload-noise-csv",
+                "USRP_UPLOAD_API_URLS": "http://a.local:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv",
+            },
+        ):
+            mission = coordinator._remote_mission(state, scene="NTPU", map_type="iss")
+
+        self.assertEqual(
+            mission.api_url,
+            "http://a.local:8888/api/usrp/upload-noise-csv,https://backend.simworld.website/api/usrp/upload-noise-csv",
+        )
+
     def test_uav_stop_waits_for_process_and_marks_file_ready(self):
         coordinator = self._coordinator()
         state = coordinator.start_uav()
@@ -249,6 +293,36 @@ class Ap3CliTests(unittest.TestCase):
         self.module.ensure_csv(path)
         self.assertEqual(path.read_text(encoding="utf-8").splitlines()[0], "time_stamp,lat,lon,alt,alt_mode")
 
+    def test_gps_sync_client_posts_json_payload(self):
+        response = Mock()
+        response.__enter__ = Mock(return_value=Mock(status=200))
+        response.__exit__ = Mock(return_value=None)
+        client = self.module.GpsSyncClient(
+            api_url="http://192.168.1.20:8888/api/usrp/sync-gps-point",
+            mission_id="flight_sync",
+            device_id="ap3-a",
+            device_name="AP3 A",
+            device_type="uav",
+            timeout=2.0,
+            log_every=5.0,
+        )
+
+        with patch.object(self.module.urllib.request, "urlopen", return_value=response) as urlopen:
+            client.send(
+                timestamp="2026-07-29T10:00:00.000",
+                lat=24.943476,
+                lon=121.370054,
+                alt=12.5,
+                alt_mode="relative",
+            )
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(request.full_url, "http://192.168.1.20:8888/api/usrp/sync-gps-point")
+        self.assertEqual(payload["mission_id"], "flight_sync")
+        self.assertEqual(payload["device_id"], "ap3-a")
+        self.assertEqual(payload["lat"], 24.943476)
+
     def test_simulator_payload_declares_altitude_mode(self):
         script = Path(__file__).resolve().parents[2] / "tools" / "ap3_to_simulator.py"
         spec = importlib.util.spec_from_file_location("ap3_to_simulator_payload_test", script)
@@ -285,6 +359,15 @@ class StartupScriptTests(unittest.TestCase):
 
         self.assertNotIn("Get-NetTCPConnection", script)
         self.assertIn("netstat -ano -p TCP", script)
+
+    def test_startup_noap3_queries_incoming_missions(self):
+        script = (
+            Path(__file__).resolve().parents[2] / "start.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function Show-IncomingMissionSummary", script)
+        self.assertIn("/api/usrp/gps-sync/missions?limit=5", script)
+        self.assertIn("if ($NoAP3)", script)
 
 
 class UsrpRecoveryTests(unittest.TestCase):
@@ -863,6 +946,74 @@ class NoiseUploadTests(unittest.TestCase):
         )
 
 
+class GpsSyncTests(unittest.TestCase):
+    def setUp(self):
+        from app import main
+
+        self.main = main
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.root = self.repo_root / ".test_tmp" / uuid.uuid4().hex
+        self.root.mkdir(parents=True)
+
+    def test_sync_gps_point_appends_csv_and_log(self):
+        point = self.main.GpsSyncPointRequest(
+            mission_id="flight_sync",
+            time_stamp="2026-07-29T10:00:00.000",
+            lat=24.943476,
+            lon=121.370054,
+            alt=12.5,
+            alt_mode="relative",
+            device_id="ap3-a",
+            device_name="AP3 A",
+        )
+
+        with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
+            response = asyncio.run(self.main.usrp_sync_gps_point_post(point))
+            logs = asyncio.run(self.main.usrp_gps_sync_logs_get("flight_sync", limit=100))
+
+        self.assertTrue(response["success"])
+        csv_lines = (self.root / "flight_sync" / "gps.csv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(csv_lines[0], "time_stamp,lat,lon,alt,alt_mode")
+        self.assertIn("2026-07-29T10:00:00.000,24.943476,121.370054,12.5,relative", csv_lines[1])
+        self.assertEqual(logs["count"], 1)
+        self.assertIn("mission=flight_sync", logs["lines"][0])
+        self.assertIn("device=ap3-a", logs["lines"][0])
+
+    def test_sync_gps_point_rejects_unsafe_mission_id(self):
+        point = self.main.GpsSyncPointRequest(
+            mission_id="../bad",
+            time_stamp="2026-07-29T10:00:00.000",
+            lat=24.0,
+            lon=121.0,
+        )
+
+        response = asyncio.run(self.main.usrp_sync_gps_point_post(point))
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_sync_missions_lists_recent_incoming_data(self):
+        bundle = self.root / "flight_visible"
+        bundle.mkdir(parents=True)
+        (bundle / "gps.csv").write_text(
+            "time_stamp,lat,lon,alt,alt_mode\n2026-07-29T10:00:00.000,24.0,121.0,10,relative\n",
+            encoding="utf-8",
+        )
+        (bundle / "noise.csv").write_text("time_stamp,noise_floor_db\n", encoding="utf-8")
+        (bundle / "gps_sync.log").write_text(
+            "2026-07-29T10:00:01 mission=flight_visible device=ap3-a lat=24.0000000 lon=121.0000000 alt=10.00\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
+            response = asyncio.run(self.main.usrp_gps_sync_missions_get(limit=10))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["missions"][0]["mission_id"], "flight_visible")
+        self.assertTrue(response["missions"][0]["has_gps"])
+        self.assertTrue(response["missions"][0]["has_noise"])
+        self.assertIn("mission=flight_visible", response["missions"][0]["last_log"])
+
+
 class NoiseUploaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -886,6 +1037,14 @@ class NoiseUploaderTests(unittest.TestCase):
             metadata["noise_sha256"],
             hashlib.sha256(data).hexdigest(),
         )
+
+    def test_parse_upload_urls_dedupes_comma_separated_values(self):
+        urls = self.module.parse_upload_urls(
+            "http://a/upload, https://b/upload",
+            "http://a/upload",
+        )
+
+        self.assertEqual(urls, ["http://a/upload", "https://b/upload"])
 
 
 if __name__ == "__main__":

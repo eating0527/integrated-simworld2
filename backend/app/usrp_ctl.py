@@ -319,6 +319,7 @@ def _mission_environment(mission: RemoteMission) -> str:
         "MISSION_ID": mission.mission_id,
         "MISSION_STATE_DIR": mission.state_dir,
         "UPLOAD_API_URL": mission.api_url,
+        "UPLOAD_API_URLS": mission.api_url,
         "SCENE": mission.scene,
         "MAP_TYPE": mission.map_type,
         "WORKDIR": mission.work_dir,
@@ -340,6 +341,7 @@ def _mission_metadata(mission: RemoteMission, *, state: str, upload_state: str) 
         "scene": mission.scene,
         "map_type": mission.map_type,
         "api_url": mission.api_url,
+        "api_urls": mission.api_url,
     }
 
 
@@ -382,10 +384,11 @@ def _repair_mission_state(mission_id: str, mission_state: dict, state_dir: str |
     merged.setdefault("scene", env.get("SCENE", "NTPU"))
     merged.setdefault("map_type", env.get("MAP_TYPE", "iss"))
     merged.setdefault("api_url", env.get("UPLOAD_API_URL", ""))
+    merged.setdefault("api_urls", env.get("UPLOAD_API_URLS") or merged.get("api_url", ""))
     path = _mission_state_path(mission_id, state_dir)
     mission = RemoteMission(
         mission_id=merged["mission_id"],
-        api_url=merged["api_url"],
+        api_url=merged.get("api_urls") or merged["api_url"],
         scene=merged["scene"],
         map_type=merged["map_type"],
         noise_csv=merged["noise_csv"],
@@ -399,6 +402,7 @@ def _repair_mission_state(mission_id: str, mission_state: dict, state_dir: str |
 def _remote_upload_command(mission_state: dict) -> str:
     noise_csv = mission_state["noise_csv"]
     work_dir = str(PurePosixPath(noise_csv).parent)
+    api_urls = mission_state.get("api_urls") or mission_state.get("api_url", "")
     parts = [
         "python3",
         REMOTE_UPLOAD_HELPER,
@@ -406,8 +410,8 @@ def _remote_upload_command(mission_state: dict) -> str:
         mission_state["mission_id"],
         "--noise-csv",
         noise_csv,
-        "--api-url",
-        mission_state["api_url"],
+        "--api-urls",
+        api_urls,
     ]
     scene = mission_state.get("scene")
     map_type = mission_state.get("map_type")
@@ -482,7 +486,7 @@ def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -
             _persist_remote_mission_state(
                 RemoteMission(
                     mission_id=mission_state.get("mission_id", mission_id),
-                    api_url=mission_state.get("api_url", ""),
+                    api_url=mission_state.get("api_urls") or mission_state.get("api_url", ""),
                     scene=mission_state.get("scene", "NTPU"),
                     map_type=mission_state.get("map_type", "iss"),
                     noise_csv=mission_state.get("noise_csv", "/home/user/rx_sampling/noise.csv"),
@@ -512,7 +516,7 @@ def retry_capture_upload(mode: str, mission_id: str, state_dir: str | None = Non
         mission_state["state"] = "stopped"
         mission_state["upload_state"] = "upload_pending"
     _persist_remote_mission_state(RemoteMission(
-        mission_id=mission_state["mission_id"], api_url=mission_state["api_url"],
+        mission_id=mission_state["mission_id"], api_url=mission_state.get("api_urls") or mission_state["api_url"],
         scene=mission_state.get("scene", "NTPU"), map_type=mission_state.get("map_type", "iss"),
         noise_csv=mission_state["noise_csv"], work_dir=str(PurePosixPath(mission_state["noise_csv"]).parent),
         state_dir=(state_dir or os.environ.get("RASPI_STATE_DIR", "/var/lib/simworld/capture"))), mission_state)

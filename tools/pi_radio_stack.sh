@@ -13,6 +13,7 @@ PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 NOISE_UPLOAD_HELPER="${NOISE_UPLOAD_HELPER:-/home/user/upload_noise_csv.py}"
 NOISE_CSV="${NOISE_CSV:-$WORKDIR/noise.csv}"
 UPLOAD_API_URL="${UPLOAD_API_URL:-}"
+UPLOAD_API_URLS="${UPLOAD_API_URLS:-${UPLOAD_API_URL}}"
 SCENE="${SCENE:-NTPU}"
 MAP_TYPE="${MAP_TYPE:-iss}"
 
@@ -63,11 +64,11 @@ start_bg() {
 }
 
 upload_noise() {
-  if [[ ! -s "${MISSION_NOISE_CSV}" || -z "${UPLOAD_API_URL}" ]]; then
+  if [[ ! -s "${MISSION_NOISE_CSV}" || -z "${UPLOAD_API_URLS}" ]]; then
     return 1
   fi
   "${PYTHON_BIN}" "${NOISE_UPLOAD_HELPER}" \
-    --api-url "${UPLOAD_API_URL}" \
+    --api-urls "${UPLOAD_API_URLS}" \
     --scene "${SCENE}" \
     --mission-id "${MISSION_ID}" \
     --noise-csv "${MISSION_NOISE_CSV}" \
