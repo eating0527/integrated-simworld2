@@ -1894,7 +1894,7 @@ class SINRMapRequest(BaseSionnaRequest):
     sinr_vmin: float = Field(default=-20.0)
     sinr_vmax: float = Field(default=40.0)
     cell_size: float = Field(default=2.0)
-    samples_per_tx: int = Field(default=100000000)
+    samples_per_tx: int = Field(default=1000000)
 
 
 class CaptureStartRequest(BaseModel):
@@ -3000,7 +3000,7 @@ class SimulateRequest(BaseModel):
     scene: str
     map_type: str
     cell_size: float = Field(default=4.0, gt=0)
-    samples_per_tx: int = Field(default=100000000, ge=10000)
+    samples_per_tx: int = Field(default=1000000, ge=10000)
     sinr_vmin: float = Field(default=-20.0)
     sinr_vmax: float = Field(default=40.0)
     overlay_scene: bool = Field(default=False)
@@ -3013,6 +3013,11 @@ async def simulate(req: SimulateRequest):
 
     output_dir = str(BASE_DIR / "static" / "maps" / scene_xml.parent.name.lower())
     os.makedirs(output_dir, exist_ok=True)
+
+    if not any(d.role == "rx" for d in req.devices):
+        raise HTTPException(status_code=422, detail="At least one RX device is required.")
+    if req.map_type == "sinr" and not any(d.role == "tx" for d in req.devices):
+        raise HTTPException(status_code=422, detail="At least one TX device is required for a SINR map.")
 
     devices_dicts = []
     for d in req.devices:

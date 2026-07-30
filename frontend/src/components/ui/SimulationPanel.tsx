@@ -116,6 +116,23 @@ const ISS_UNET_RESOLUTION_OPTIONS: Array<{ value: ISSUNetPixelSizeM; label: stri
   { value: 4, label: '4 m/px (128)' },
 ];
 
+async function readHttpError(response: Response | undefined, fallback = 'HTTP Error') {
+  if (!response) return fallback;
+  const raw = await response.text().catch(() => '');
+  let detail = raw.trim();
+  if (detail) {
+    try {
+      const json = JSON.parse(detail) as { detail?: unknown; error?: unknown; missing_files?: unknown };
+      const message = json.detail ?? json.error;
+      const missing = Array.isArray(json.missing_files) ? `: ${json.missing_files.join(', ')}` : '';
+      detail = `${message ? String(message) : fallback}${missing}`;
+    } catch (_) {
+      detail = detail.slice(0, 300);
+    }
+  }
+  return `${response.status} ${response.statusText || fallback}${detail ? ` - ${detail}` : ''}`;
+}
+
 interface SimulationPanelProps {
   sceneId?: string | null;
   generatedScene?: boolean;
@@ -167,7 +184,7 @@ export function SimulationPanel({
     sinr_vmin: -20,
     sinr_vmax: 40,
     cell_size: 3.0,
-    samples_per_tx: 100000000,
+    samples_per_tx: 1000000,
   });
   const [issUnetParams, setIssUnetParams] = useState<ISSUNetParams>({
     mode: 'sim',
@@ -379,9 +396,7 @@ export function SimulationPanel({
       }
 
       if (!res || !res.ok) {
-        const json = res ? await res.json().catch(() => ({ error: 'HTTP Error' })) : { error: 'Unknown Error' };
-        const missing = Array.isArray(json.missing_files) ? `: ${json.missing_files.join(', ')}` : '';
-        throw new Error(`${json.detail || json.error || 'HTTP Error'}${missing}`);
+        throw new Error(await readHttpError(res, 'Simulation request failed'));
       }
 
       let url: string;
@@ -492,8 +507,7 @@ export function SimulationPanel({
         body: form,
       });
       if (!res.ok) {
-        const json = await res.json().catch(() => ({ error: 'HTTP Error' }));
-        throw new Error(json.detail || json.error || 'HTTP Error');
+        throw new Error(await readHttpError(res, 'Statistics request failed'));
       }
       const json = await res.json();
       const imagePath = json.images?.statistics;
@@ -602,8 +616,8 @@ export function SimulationPanel({
                   >
                     <option value={500000}>500K (less)</option>
                     <option value={1000000}>1M (medium)</option>
-                    <option value={100000000}>100M (recommend)</option>
-                    <option value={1000000000}>1B (more)</option>
+                    <option value={100000000}>100M (slower)</option>
+                    <option value={1000000000}>1B (very slow)</option>
                   </select>
                   {['sinr', 'iss', 'tss', 'cfar'].includes(tab) && (
                     <>

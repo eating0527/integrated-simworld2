@@ -3,7 +3,7 @@ import io
 import json
 import math
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, TextIO
 
@@ -24,6 +24,7 @@ BASE_DIR = Path(__file__).parent
 SAMPLE_DIR = BASE_DIR / "sample"
 SAMPLE_GPS_PATH = SAMPLE_DIR / "gps.csv"
 SAMPLE_NOISE_PATH = SAMPLE_DIR / "noise.csv"
+CSV_LOCAL_TIMEZONE = timezone(timedelta(hours=8))
 
 @dataclass(frozen=True)
 class GPSPoint:
@@ -94,7 +95,7 @@ def _parse_time(value: str) -> datetime:
         text = f"{text[:-1]}+00:00"
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=CSV_LOCAL_TIMEZONE)
     return dt.astimezone(timezone.utc)
 
 
