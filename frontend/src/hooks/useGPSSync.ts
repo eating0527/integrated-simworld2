@@ -88,6 +88,20 @@ function hasMoved(
   );
 }
 
+function finiteNumber(value: unknown, fallback: number): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function timestampSeconds(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed / 1000;
+  }
+  return Date.now() / 1000;
+}
+
 // ────────────────────────────── Hook ───────────────────────────────
 
 export function useGPSSync(
@@ -116,14 +130,22 @@ export function useGPSSync(
 
       // GPS data from another device
       if (msg.lat !== undefined && msg.lon !== undefined) {
-        const incoming = msg as GPSDevice;
+        const incoming = msg as Partial<GPSDevice>;
         if (incoming.deviceId === myDeviceId) return; // 自己的，跳過
+        const deviceId = incoming.deviceId || `unknown-${Date.now().toString(36)}`;
 
         setAllDevices(prev => {
           const next = new Map(prev);
-          next.set(incoming.deviceId, {
-            ...incoming,
+          next.set(deviceId, {
+            lat: finiteNumber(incoming.lat, 0),
+            lon: finiteNumber(incoming.lon, 0),
+            alt: finiteNumber(incoming.alt, 0),
             alt_mode: incoming.alt_mode === 'relative' ? 'relative' : 'amsl',
+            accuracy: finiteNumber(incoming.accuracy, 999),
+            deviceId,
+            deviceName: incoming.deviceName || deviceId,
+            deviceType: incoming.deviceType || 'unknown',
+            timestamp: timestampSeconds(incoming.timestamp),
             lastUpdateTime: Date.now(),
           });
           return next;

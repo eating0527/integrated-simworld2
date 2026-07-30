@@ -318,7 +318,11 @@ function Start-Ap3GpsCsvWriter {
         [string]$MissionId,
         [string]$IncomingDir,
         [string]$Altitude,
-        [string]$MavlinkUrl
+        [string]$MavlinkUrl,
+        [string]$SyncApiUrl,
+        [string]$SyncDeviceId,
+        [string]$SyncDeviceName,
+        [string]$SyncDeviceType
     )
 
     $writerArgs = @(
@@ -333,6 +337,14 @@ function Start-Ap3GpsCsvWriter {
     )
     if ($MavlinkUrl) {
         $writerArgs += @("--mavlink-url", $MavlinkUrl)
+    }
+    if ($SyncApiUrl) {
+        $writerArgs += @(
+            "--sync-api-url", $SyncApiUrl,
+            "--sync-device-id", $SyncDeviceId,
+            "--sync-device-name", $SyncDeviceName,
+            "--sync-device-type", $SyncDeviceType
+        )
     }
     return Start-Process -FilePath $PythonExe `
         -ArgumentList $writerArgs `
@@ -391,10 +403,17 @@ if ($enableGpsCsv) {
             -MissionId $GpsMissionId `
             -IncomingDir $IncomingDir `
             -Altitude $GpsAltitude `
-            -MavlinkUrl $GpsMavlinkUrl
+            -MavlinkUrl $GpsMavlinkUrl `
+            -SyncApiUrl $env:GPS_SYNC_API_URL `
+            -SyncDeviceId $(if ($env:GPS_SYNC_DEVICE_ID) { $env:GPS_SYNC_DEVICE_ID } else { "align-m4p-top-aircraft" }) `
+            -SyncDeviceName $(if ($env:GPS_SYNC_DEVICE_NAME) { $env:GPS_SYNC_DEVICE_NAME } else { "M4P TOP Aircraft" }) `
+            -SyncDeviceType $(if ($env:GPS_SYNC_DEVICE_TYPE) { $env:GPS_SYNC_DEVICE_TYPE } else { "uav" })
         $jobs += $gpsCsvJob
         Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
         Info "   GPS CSV target: $gpsCsvTarget"
+        if ($env:GPS_SYNC_API_URL) {
+            Info "   GPS sync target: $env:GPS_SYNC_API_URL"
+        }
         if ($gpsCsvJob.HasExited) {
             Warn "AP3 GPS CSV writer exited immediately; it will be restarted by the monitor loop."
         } else {
@@ -468,7 +487,11 @@ try {
                     -MissionId $GpsMissionId `
                     -IncomingDir $IncomingDir `
                     -Altitude $GpsAltitude `
-                    -MavlinkUrl $GpsMavlinkUrl
+                    -MavlinkUrl $GpsMavlinkUrl `
+                    -SyncApiUrl $env:GPS_SYNC_API_URL `
+                    -SyncDeviceId $(if ($env:GPS_SYNC_DEVICE_ID) { $env:GPS_SYNC_DEVICE_ID } else { "align-m4p-top-aircraft" }) `
+                    -SyncDeviceName $(if ($env:GPS_SYNC_DEVICE_NAME) { $env:GPS_SYNC_DEVICE_NAME } else { "M4P TOP Aircraft" }) `
+                    -SyncDeviceType $(if ($env:GPS_SYNC_DEVICE_TYPE) { $env:GPS_SYNC_DEVICE_TYPE } else { "uav" })
                 $jobs += $gpsCsvJob
                 Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
             }

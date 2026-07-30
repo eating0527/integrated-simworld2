@@ -1910,6 +1910,7 @@ class GpsSyncPointRequest(BaseModel):
     lon: float
     alt: float = 0.0
     alt_mode: str = "relative"
+    accuracy: float = 999.0
     device_id: str = "align-m4p-top-aircraft"
     device_name: str = "M4P TOP Aircraft"
     device_type: str = "uav"
@@ -2553,6 +2554,8 @@ async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
         "lat": point.lat,
         "lon": point.lon,
         "alt": point.alt,
+        "alt_mode": point.alt_mode,
+        "accuracy": point.accuracy,
         "timestamp": point.time_stamp,
         "missionId": bundle_id,
     }
