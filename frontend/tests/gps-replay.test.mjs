@@ -8,6 +8,17 @@ import {
 } from '../src/utils/gpsReplay.ts';
 
 describe('GPS replay utilities', () => {
+  it('parses noise-compatible timestamps with an explicit timezone offset', () => {
+    const points = parseGpsReplayCsv(`time_stamp,lat,lon,alt,alt_mode
+2026-07-31T15:54:33.458000+08:00,24.8503433,120.9281001,1.584,relative
+2026-07-31T15:54:32.481000+08:00,24.8503435,120.9280999,1.585,relative
+`);
+
+    assert.equal(points.length, 2);
+    assert.deepEqual(points.map((point) => point.lat), [24.8503435, 24.8503433]);
+    assert.deepEqual(points.map((point) => point.altMode), ['relative', 'relative']);
+  });
+
   it('sorts GPS CSV rows by earliest timestamp', () => {
     const points = parseGpsReplayCsv(`time_stamp,lat,lon,alt,alt_mode
 2026-05-11T16:52:17.302053,24.3,121.3,40,amsl

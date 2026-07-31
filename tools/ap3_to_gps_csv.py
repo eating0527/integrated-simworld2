@@ -80,6 +80,12 @@ def ensure_csv(csv_path: Path) -> None:
             writer.writerow(["time_stamp", "lat", "lon", "alt", "alt_mode"])
 
 
+def format_csv_timestamp(timestamp: datetime) -> str:
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("CSV timestamp must be timezone-aware")
+    return timestamp.isoformat(timespec="microseconds")
+
+
 class GpsSyncClient:
     def __init__(
         self,
@@ -188,7 +194,7 @@ def main() -> int:
                     amsl_alt = msg.alt / 1000.0
                     rel_alt = msg.relative_alt / 1000.0
                     alt = rel_alt if args.altitude == "relative" else amsl_alt
-                    timestamp = datetime.now(output_tz).replace(tzinfo=None).isoformat(timespec="milliseconds")
+                    timestamp = format_csv_timestamp(datetime.now(output_tz))
                     writer.writerow([timestamp, lat, lon, alt, args.altitude])
                     sync_client.send(
                         timestamp=timestamp,

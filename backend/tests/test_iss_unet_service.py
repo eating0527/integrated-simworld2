@@ -413,6 +413,20 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertTrue({"time_stamp", "lat", "lon", "alt"}.issubset(gps_points[0].raw_columns))
         self.assertTrue({"time_stamp", "noise_floor_db"}.issubset(noise_points[0].raw_columns))
 
+    def test_gps_and_noise_offset_timestamps_normalize_to_same_instant(self):
+        from app.iss_real import parse_gps_csv, parse_noise_csv
+
+        gps_points = parse_gps_csv(
+            "time_stamp,lat,lon,alt,alt_mode\n"
+            "2026-07-31T15:54:32.481000+08:00,24.85,120.92,1.5,relative\n"
+        )
+        noise_points = parse_noise_csv(
+            "time_stamp,noise_floor_db\n"
+            "2026-07-31T15:54:32.481000+08:00,-80.0\n"
+        )
+
+        self.assertEqual(gps_points[0].time_stamp, noise_points[0].time_stamp)
+
     def test_align_noise_to_most_recent_gps_within_one_second(self):
         from app.iss_real import align_noise_to_gps, parse_gps_csv, parse_noise_csv
 

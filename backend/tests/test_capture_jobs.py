@@ -8,6 +8,7 @@ import threading
 import types
 import unittest
 import uuid
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -292,6 +293,13 @@ class Ap3CliTests(unittest.TestCase):
         path = Path(__file__).resolve().parents[2] / ".test_tmp" / f"gps-{uuid.uuid4().hex}.csv"
         self.module.ensure_csv(path)
         self.assertEqual(path.read_text(encoding="utf-8").splitlines()[0], "time_stamp,lat,lon,alt,alt_mode")
+
+    def test_format_csv_timestamp_preserves_noise_timezone_format(self):
+        timestamp = datetime(2026, 7, 31, 15, 54, 32, 481000, tzinfo=timezone(timedelta(hours=8)))
+
+        formatted = self.module.format_csv_timestamp(timestamp)
+
+        self.assertEqual(formatted, "2026-07-31T15:54:32.481000+08:00")
 
     def test_gps_sync_client_posts_json_payload(self):
         response = Mock()

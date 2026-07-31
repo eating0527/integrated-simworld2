@@ -61,7 +61,8 @@ function parseTimeMs(value: string) {
   if (Number.isFinite(numeric)) {
     return numeric > 1e12 ? numeric : numeric * 1000;
   }
-  return Date.parse(value.endsWith('Z') ? value : `${value}Z`);
+  const hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  return Date.parse(hasExplicitTimezone ? value : `${value}Z`);
 }
 
 function splitCsvLine(line: string) {
