@@ -17,12 +17,16 @@ import { type SceneId, getSceneById, DEFAULT_SCENE_ID } from '@/config/scenes.co
 import { useDeviceStore } from '@/store/useDeviceStore';
 import { Jam } from './Jam';
 import { Tower } from './Tower';
+import { DeviceGroundMarker } from './DeviceGroundMarker';
 import UAVFlight, { UAVManualDirection } from './UAVFlight';
 import { CFARBeaconMarker } from './CFARBeaconMarker';
 import type { CFARBeacon } from '../../types/cfar';
 import type { HeatmapOverlayConfig, ISSRouteOverlayConfig } from '../../types/heatmap';
 import { ISSHeatmapOverlay, type ISSHeatmapOverlayStatus } from './ISSHeatmapOverlay';
 import { ISSRouteOverlay } from './ISSRouteOverlay';
+
+const TX_MODEL_SCALE = 0.025;
+const JAMMER_MODEL_SCALE = 0.0025;
 
 function Loader({ label }: { label: string }) {
   return (
@@ -266,13 +270,15 @@ export function MainScene({
 
         {modelVisible.jammer && jammerDevices.map((d) => (
           <Suspense key={d.id} fallback={null}>
-            <Jam position={[d.x, d.y, d.z]} scale={0.01} />
+            <Jam position={[d.x, d.y, d.z]} scale={JAMMER_MODEL_SCALE} />
+            <DeviceGroundMarker position={[d.x, d.y, d.z]} role="jammer" />
           </Suspense>
         ))}
 
         {modelVisible.tx && txDevices.map((d) => (
           <Suspense key={d.id} fallback={null}>
-            <Tower position={[d.x, d.y, d.z]} scale={0.1} />
+            <Tower position={[d.x, d.y, d.z]} scale={TX_MODEL_SCALE} />
+            <DeviceGroundMarker position={[d.x, d.y, d.z]} role="tx" />
           </Suspense>
         ))}
 

@@ -50,8 +50,30 @@ vi.mock('./DynamicScene', () => ({
 vi.mock('./UAVPath', () => ({ UAVPath: () => null }));
 vi.mock('./UAV', () => ({ UAV: () => null }));
 vi.mock('../ui/Starfield', () => ({ Starfield: () => null }));
-vi.mock('./Jam', () => ({ Jam: () => <div data-testid="jam-model" /> }));
-vi.mock('./Tower', () => ({ Tower: () => <div data-testid="tx-model" /> }));
+vi.mock('./Jam', () => ({
+  Jam: ({ scale }: { scale?: number }) => (
+    <div data-testid="jam-model" data-scale={String(scale)} />
+  ),
+}));
+vi.mock('./Tower', () => ({
+  Tower: ({ scale }: { scale?: number }) => (
+    <div data-testid="tx-model" data-scale={String(scale)} />
+  ),
+}));
+vi.mock('./DeviceGroundMarker', () => ({
+  DeviceGroundMarker: ({
+    role,
+    position,
+  }: {
+    role: 'tx' | 'jammer';
+    position: [number, number, number];
+  }) => (
+    <div
+      data-testid={`${role}-ground-marker`}
+      data-position={position.join(',')}
+    />
+  ),
+}));
 vi.mock('./UAVFlight', () => ({
   __esModule: true,
   default: ({ visible }: { visible?: boolean }) => (
@@ -86,6 +108,19 @@ describe('MainScene device visibility', () => {
     render(<MainScene />);
 
     expect(canvasMock.dpr).toEqual([1, 1.5]);
+  });
+
+  it('renders quarter-size TX/Jammer models with matching ground markers', () => {
+    render(<MainScene />);
+
+    expect(screen.getAllByTestId('tx-model')).toHaveLength(2);
+    expect(screen.getAllByTestId('tx-model').every((model) => model.getAttribute('data-scale') === '0.025')).toBe(true);
+    expect(screen.getAllByTestId('jam-model')).toHaveLength(1);
+    expect(screen.getByTestId('jam-model')).toHaveAttribute('data-scale', '0.0025');
+    expect(screen.getAllByTestId('tx-ground-marker')).toHaveLength(2);
+    expect(screen.getAllByTestId('jammer-ground-marker')).toHaveLength(1);
+    expect(screen.getAllByTestId('tx-ground-marker').some((marker) => marker.getAttribute('data-position') === '1,2,3')).toBe(true);
+    expect(screen.getByTestId('jammer-ground-marker')).toHaveAttribute('data-position', '7,8,9');
   });
 
   it.each([
