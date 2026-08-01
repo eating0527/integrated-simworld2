@@ -127,7 +127,11 @@ class GpsSyncClient:
         request = urllib.request.Request(
             self.api_url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "integrated-simworld-gps-sync/1.0",
+            },
             method="POST",
         )
         try:

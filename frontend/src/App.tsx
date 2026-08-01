@@ -500,7 +500,7 @@ export function App() {
             onToggleAnimation={() => setUavAnimation(prev => !prev)}
             onManualControl={handleManualControl}
           />
-          <USRPTelemetry />
+          <USRPTelemetry sceneId={simulationSceneId} />
         </>
       )}
       right={!isMobile && (

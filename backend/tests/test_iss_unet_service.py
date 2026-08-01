@@ -1635,7 +1635,7 @@ class ISSUNetServiceTests(unittest.TestCase):
             "power_dbm": 77.0,
         }])
         self.assertEqual(captured["cell_size"], 4.0)
-        self.assertEqual(captured["samples_per_tx"], 100000000)
+        self.assertEqual(captured["samples_per_tx"], 1000000)
         self.assertEqual(captured["target_shape"], (128, 128))
         self.assertEqual(captured["area_m"], 512.0)
         np.testing.assert_allclose(reconstructed, live_iss)
@@ -1763,25 +1763,30 @@ class ISSUNetServiceTests(unittest.TestCase):
 
                 return torch.full((1, 1, 128, 128), 0.5, dtype=torch.float32, device=tensor.device)
 
+        gpsn_model_path = self.artifact_dir / "unet_single" / "best_model.pt"
+        gpsn_model_path.parent.mkdir(parents=True, exist_ok=True)
+        gpsn_model_path.write_bytes(b"model")
+
         with patch("app.iss_unet_service.SCENE_DIR", self.scene_dir):
             with patch("app.iss_unet_service.OUTPUT_DIR", self.output_dir):
                 with patch("app.iss_real.create_route_sparse_sample", return_value=route_sample):
-                    with patch(
-                        "app.iss_unet_service._load_model",
-                        side_effect=AssertionError("legacy UNet should not load for gps_n"),
-                    ):
+                    with patch("app.iss_unet_service.GPSN_MODEL_ARTIFACT_PATH", gpsn_model_path):
                         with patch(
-                            "app.iss_unet_service._load_gpsn_model",
-                            return_value=(FakeModel(), "cpu"),
-                            create=True,
+                            "app.iss_unet_service._load_model",
+                            side_effect=AssertionError("legacy UNet should not load for gps_n"),
                         ):
-                            with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
-                                with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
-                                    result = reconstruct_iss_unet(
-                                        scene="NTPU",
-                                        mode="gps_n",
-                                        cfar=ISSUNetCFARParams(enabled=False),
-                                    )
+                            with patch(
+                                "app.iss_unet_service._load_gpsn_model",
+                                return_value=(FakeModel(), "cpu"),
+                                create=True,
+                            ):
+                                with patch("app.iss_unet_service._render_reconstructed_png", return_value=b"reconstructed"):
+                                    with patch("app.iss_unet_service._render_comparison_png", return_value=b"comparison"):
+                                        result = reconstruct_iss_unet(
+                                            scene="NTPU",
+                                            mode="gps_n",
+                                            cfar=ISSUNetCFARParams(enabled=False),
+                                        )
 
         self.assertEqual(result["mode"], "gps_n")
         self.assertTrue(result["metrics"]["model_inference"])

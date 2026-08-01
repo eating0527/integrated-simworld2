@@ -262,7 +262,11 @@ async function readCaptureResponse(response: Response, fallback: string): Promis
   return data as Partial<CaptureStatus>;
 }
 
-export function USRPTelemetry() {
+interface USRPTelemetryProps {
+  sceneId?: string | null;
+}
+
+export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [mode, setMode] = useState<SamplingMode>('test');
   const [bind, setBind] = useState(false);
   const [status, setStatus] = useState<CaptureStatus | null>(null);
@@ -282,7 +286,7 @@ export function USRPTelemetry() {
 
   const loadStatus = useCallback(async () => {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    const timeout = window.setTimeout(() => controller.abort(), 25000);
     try {
       const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`, { signal: controller.signal });
       const data = await readCaptureResponse(response, 'Status request failed');
@@ -339,8 +343,8 @@ export function USRPTelemetry() {
   }, [applyStatus]);
 
   const startBody = useMemo(
-    () => ({ usrp_mode: mode, scene: 'NTPU', map_type: 'iss' }),
-    [mode],
+    () => ({ usrp_mode: mode, scene: sceneId ?? 'NTPU', map_type: 'iss' }),
+    [mode, sceneId],
   );
   const uav = status?.uav ?? EMPTY_CHILD;
   const usrp = status?.usrp ?? EMPTY_CHILD;
@@ -349,6 +353,7 @@ export function USRPTelemetry() {
   const usrpMissionId = usrp.mission_id || missionId;
   const anyActive = isActive(uav.service) || isActive(usrp.service);
   const bothReady = uav.connection === 'ready' && usrp.connection === 'ready';
+  const canStartUav = !bind && !busy && !isActive(uav.service) && (uav.connection === 'ready' || uav.service === 'failed');
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
 
   const childSection = (
@@ -412,8 +417,8 @@ export function USRPTelemetry() {
           <div style={S.actions}>
             <button
               type="button"
-              style={{ ...S.button, ...disabledStyle(bind || busy || isActive(uav.service) || uav.connection !== 'ready') }}
-              disabled={bind || busy || isActive(uav.service) || uav.connection !== 'ready'}
+              style={{ ...S.button, ...disabledStyle(!canStartUav) }}
+              disabled={!canStartUav}
               onClick={() => void request('/api/capture/uav/start')}
             >
               Start UAV

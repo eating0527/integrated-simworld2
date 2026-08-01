@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,7 +50,7 @@ BUILDING_MAX_M = 60.0
 NOISE_CONFIDENCE_SIGMA_PX = 8.0
 DEFAULT_SCENE_AREA_M = 512.0
 LIVE_MAP_CELL_SIZE = 4.0
-LIVE_MAP_SAMPLES_PER_TX = 100000000
+LIVE_MAP_SAMPLES_PER_TX = int(os.environ.get("ISS_UNET_LIVE_MAP_SAMPLES_PER_TX", "1000000"))
 ISS_UNET_MODE_LABELS = {
     "sim": "Sim",
     "gps": "GPS",
@@ -664,6 +665,52 @@ def _run_gpsn_unet(
     return _denormalize_gpsn_rss(prediction).astype(np.float32)
 
 
+def _reconstruct_gpsn_without_model(
+    sparse_values_dbm: np.ndarray,
+    sparse_mask: np.ndarray,
+    building_map: np.ndarray,
+) -> np.ndarray:
+    """Deterministic IDW fallback for GPS_N when the trained checkpoint is absent."""
+    if sparse_values_dbm.shape != sparse_mask.shape or sparse_values_dbm.shape != building_map.shape:
+        raise ValueError("sparse_values_dbm, sparse_mask, and building_map must have the same shape")
+
+    sample_rows, sample_cols = np.where(sparse_mask > 0.5)
+    sample_values = sparse_values_dbm[sample_rows, sample_cols].astype(np.float32)
+    valid = np.isfinite(sample_values)
+    sample_rows = sample_rows[valid].astype(np.float32)
+    sample_cols = sample_cols[valid].astype(np.float32)
+    sample_values = sample_values[valid]
+
+    fallback = np.full_like(sparse_values_dbm, GPSN_RSS_MIN_DBM, dtype=np.float32)
+    outdoor = building_map <= 3.0
+    if len(sample_values) == 0:
+        fallback[outdoor] = ISS_MIN_DBM
+        return _clip_radio_map(fallback)
+
+    rows, cols = np.indices(sparse_values_dbm.shape, dtype=np.float32)
+    out = np.empty(sparse_values_dbm.size, dtype=np.float32)
+    flat_rows = rows.ravel()
+    flat_cols = cols.ravel()
+    chunk_size = 4096
+    for start in range(0, len(out), chunk_size):
+        end = min(start + chunk_size, len(out))
+        dr = flat_rows[start:end, None] - sample_rows[None, :]
+        dc = flat_cols[start:end, None] - sample_cols[None, :]
+        dist2 = dr * dr + dc * dc
+        exact = dist2 <= 1e-6
+        weights = 1.0 / np.maximum(dist2, 1.0)
+        values = (weights * sample_values[None, :]).sum(axis=1) / weights.sum(axis=1)
+        if exact.any():
+            exact_rows, exact_cols = np.where(exact)
+            values[exact_rows] = sample_values[exact_cols]
+        out[start:end] = values.astype(np.float32)
+
+    reconstructed = out.reshape(sparse_values_dbm.shape)
+    reconstructed[~outdoor] = GPSN_RSS_MIN_DBM
+    reconstructed[sparse_mask > 0.5] = sparse_values_dbm[sparse_mask > 0.5]
+    return _clip_radio_map(reconstructed)
+
+
 def _render_reconstructed_png(reconstructed_iss: np.ndarray, mode_label: str = "Sim") -> bytes:
     fig, ax = plt.subplots(figsize=(5, 5))
     im = ax.imshow(
@@ -925,9 +972,12 @@ def _build_iss_unet_artifacts(
     dataset = resolve_scene_dataset(scene, scene_dir=scene_dir, pixel_size_m=pixel_size_m)
     if not dataset.available:
         raise FileNotFoundError(json.dumps({"scene": dataset.scene, "missing_files": dataset.missing_files}))
-    if mode == "gps_n" and not GPSN_MODEL_ARTIFACT_PATH.exists():
-        logger.error(f"GPS_N model artifact not found at: {GPSN_MODEL_ARTIFACT_PATH}")
-        raise FileNotFoundError("GPS_N model artifact not found on the server. Please check the backend configuration.")
+    gpsn_model_available = GPSN_MODEL_ARTIFACT_PATH.exists()
+    if mode == "gps_n" and not gpsn_model_available:
+        logger.warning(
+            "GPS_N model artifact not found at %s; using deterministic sparse interpolation fallback",
+            GPSN_MODEL_ARTIFACT_PATH,
+        )
 
     arrays = load_scene_arrays(dataset)
     normalized_devices = _normalize_live_devices(devices)
@@ -989,13 +1039,22 @@ def _build_iss_unet_artifacts(
     else:
         if sparse_values_dbm is None:
             raise RuntimeError("gps_n sparse values are required for UNet inference")
-        reconstructed_iss = _run_gpsn_unet(
-            sparse_values_dbm=sparse_values_dbm,
-            sparse_mask=sparse_mask,
-            building_map=arrays["building"],
-            device=device,
-        )
-        model_inference = True
+        if gpsn_model_available:
+            reconstructed_iss = _run_gpsn_unet(
+                sparse_values_dbm=sparse_values_dbm,
+                sparse_mask=sparse_mask,
+                building_map=arrays["building"],
+                device=device,
+            )
+            model_inference = True
+        else:
+            reconstructed_iss = _reconstruct_gpsn_without_model(
+                sparse_values_dbm=sparse_values_dbm,
+                sparse_mask=sparse_mask,
+                building_map=arrays["building"],
+            )
+            real_metrics["gpsn_model_fallback"] = True
+            real_metrics["gpsn_model_missing"] = str(GPSN_MODEL_ARTIFACT_PATH)
 
     confidence_metrics = _empty_confidence_stats(applied=False)
 
