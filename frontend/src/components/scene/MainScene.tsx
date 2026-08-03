@@ -240,7 +240,7 @@ export function MainScene({
           {issRouteOverlay && <ISSRouteOverlay overlay={issRouteOverlay} />}
           <UAVFlight
             position={uavPosition}
-            scale={[10, 10, 10]}
+            scale={[5, 5, 5]}
             auto={auto}
             manualDirection={manualDirection}
             onManualMoveDone={onManualMoveDone}
@@ -262,7 +262,7 @@ export function MainScene({
           const color = COLORS[i % COLORS.length];
           return (
             <Suspense key={uav.id} fallback={null}>
-              <UAV position={uav.position} scale={10} />
+              <UAV position={uav.position} scale={5} />
               <UAVPath path={uav.path} color={color} lineWidth={2} />
             </Suspense>
           );
