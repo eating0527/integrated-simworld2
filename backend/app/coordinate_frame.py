@@ -136,7 +136,24 @@ def enu_to_sionna(east_m: float, north_m: float, up_m: float) -> tuple[float, fl
     return float(east_m), float(north_m), float(up_m)
 
 
-def enu_to_grid(east_m: float, north_m: float, up_m: float, frame: SceneFrame) -> GridPoint:
+def _grid_size(rows: int, cols: int) -> tuple[int, int, float, float]:
+    rows = int(rows)
+    cols = int(cols)
+    if rows <= 0 or cols <= 0:
+        raise ValueError("grid rows/cols must be positive")
+    return rows, cols, (MAX_E - MIN_E) / cols, (MAX_N - MIN_N) / rows
+
+
+def enu_to_grid(
+    east_m: float,
+    north_m: float,
+    up_m: float,
+    frame: SceneFrame,
+    *,
+    rows: int = GRID_ROWS,
+    cols: int = GRID_COLS,
+) -> GridPoint:
+    rows, cols, pixel_size_e_m, pixel_size_n_m = _grid_size(rows, cols)
     east = float(east_m)
     north = float(north_m)
     inside = MIN_E <= east < MAX_E and MIN_N <= north < MAX_N
@@ -146,18 +163,26 @@ def enu_to_grid(east_m: float, north_m: float, up_m: float, frame: SceneFrame) -
     )
     if not inside:
         return GridPoint(None, None, False, displayable)
-    row = min(GRID_ROWS - 1, math.floor((MAX_N - north) / PIXEL_SIZE_N_M))
-    col = min(GRID_COLS - 1, math.floor((east - MIN_E) / PIXEL_SIZE_E_M))
+    row = min(rows - 1, math.floor((MAX_N - north) / pixel_size_n_m))
+    col = min(cols - 1, math.floor((east - MIN_E) / pixel_size_e_m))
     return GridPoint(int(row), int(col), True, displayable)
 
 
-def grid_to_enu(row: int, col: int, frame: SceneFrame) -> tuple[float, float, float]:
+def grid_to_enu(
+    row: int,
+    col: int,
+    frame: SceneFrame,
+    *,
+    rows: int = GRID_ROWS,
+    cols: int = GRID_COLS,
+) -> tuple[float, float, float]:
+    rows, cols, pixel_size_e_m, pixel_size_n_m = _grid_size(rows, cols)
     row = int(row)
     col = int(col)
-    if not 0 <= row < GRID_ROWS or not 0 <= col < GRID_COLS:
+    if not 0 <= row < rows or not 0 <= col < cols:
         raise ValueError("grid row/col outside SceneFrame extent")
-    east = MIN_E + (col + 0.5) * PIXEL_SIZE_E_M
-    north = MAX_N - (row + 0.5) * PIXEL_SIZE_N_M
+    east = MIN_E + (col + 0.5) * pixel_size_e_m
+    north = MAX_N - (row + 0.5) * pixel_size_n_m
     return float(east), float(north), 0.0
 
 

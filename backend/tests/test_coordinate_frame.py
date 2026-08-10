@@ -35,6 +35,23 @@ class CoordinateFrameTests(unittest.TestCase):
         east, north, up = grid_to_enu(row, col, self.frame)
         self.assertEqual((east, north, up), (2.0, 254.0, 0.0))
 
+    def test_same_enu_uses_resolution_aware_grid(self):
+        east_m, north_m = 42.0, -18.0
+        expected = {
+            128: ((68, 74), (42.0, -18.0)),
+            256: ((137, 149), (43.0, -19.0)),
+            512: ((274, 298), (42.5, -18.5)),
+        }
+
+        for size, (grid, projected_enu) in expected.items():
+            with self.subTest(size=size):
+                point = enu_to_grid(east_m, north_m, 0.0, self.frame, rows=size, cols=size)
+                self.assertEqual((point.row, point.col), grid)
+                projected = grid_to_enu(point.row, point.col, self.frame, rows=size, cols=size)
+                self.assertEqual(projected[:2], projected_enu)
+                self.assertLessEqual(abs(projected[0] - east_m), 256.0 / size)
+                self.assertLessEqual(abs(projected[1] - north_m), 256.0 / size)
+
     def test_out_of_extent_is_not_clamped(self):
         result = enu_to_grid(300.0, 0.0, 0.0, self.frame)
         self.assertFalse(result.inside_extent)

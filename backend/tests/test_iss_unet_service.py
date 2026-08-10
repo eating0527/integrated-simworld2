@@ -808,6 +808,41 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertNotIn("world_x", result.route_points[0])
         self.assertNotIn("world_z", result.route_points[0])
 
+    def test_gps_noise_projection_tracks_dataset_resolution(self):
+        from app.iss_real import create_route_sparse_sample, parse_gps_csv, parse_noise_csv
+        from app.iss_unet_service import resolve_scene_dataset
+
+        self._write_ntpu_dataset()
+        east_m, north_m = 42.25, -18.25
+        lon = 121.0 + east_m / (111320.0 * np.cos(np.radians(24.0)))
+        lat = 24.0 + north_m / 111320.0
+        gps = parse_gps_csv("\n".join(["time_stamp,lat,lon,alt", f"2026-05-27T12:00:00Z,{lat},{lon},1"]))
+        noise = parse_noise_csv("time_stamp,noise_floor_db\n2026-05-27T12:00:00.100Z,-80.0")
+        expected_grids = {128: (68, 74), 256: (137, 149), 512: (274, 298)}
+        dataset = resolve_scene_dataset("NTPU", scene_dir=self.scene_dir)
+
+        for size, expected_grid in expected_grids.items():
+            with self.subTest(size=size):
+                arrays = {
+                    "building": np.zeros((size, size), dtype=np.float32),
+                    "dss": np.full((size, size), -110.0, dtype=np.float32),
+                    "iss": np.full((size, size), -100.0, dtype=np.float32),
+                    "tss": np.full((size, size), -90.0, dtype=np.float32),
+                }
+                result = create_route_sparse_sample(
+                    arrays,
+                    dataset,
+                    mode="gps_n",
+                    gps_points=gps,
+                    noise_points=noise,
+                )
+
+                point = result.sparse_points[0]
+                self.assertEqual((point["grid"]["row"], point["grid"]["col"]), expected_grid)
+                self.assertAlmostEqual(point["enu"]["east_m"], east_m)
+                self.assertAlmostEqual(point["enu"]["north_m"], north_m)
+                self.assertEqual(int(result.sparse_mask.sum()), 1)
+
     def test_gpsn_artifacts_include_reconstructed_sparse_and_cfar_inputs(self):
         from app.iss_unet_service import ISSUNetCFARParams, _build_iss_unet_artifacts, resolve_scene_dataset
 
@@ -908,6 +943,26 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(overlay["grid_bounds"]["max_x"], 256.0)
         self.assertEqual(overlay["vmin_dbm"], -90.0)
         self.assertEqual(overlay["vmax_dbm"], -15.0)
+
+    def test_cfar_pixel_to_enu_tracks_grid_resolution(self):
+        from app.iss_unet_service import _cfar_pixel_to_enu
+
+        frame = self._frame_meta()["frame"]
+        expected = {
+            128: ((68, 74), (42.0, -18.0)),
+            256: ((137, 149), (43.0, -19.0)),
+            512: ((274, 298), (42.5, -18.5)),
+        }
+
+        for size, (pixel, enu) in expected.items():
+            with self.subTest(size=size):
+                east_m, north_m, up_m = _cfar_pixel_to_enu(
+                    pixel[0],
+                    pixel[1],
+                    {"frame": frame, "rows": size, "cols": size},
+                )
+                self.assertEqual((east_m, north_m), enu)
+                self.assertEqual(up_m, 0.0)
 
     def test_reconstruct_result_uses_fixed_frame_for_cfar_and_overlay_coordinates(self):
         from app.iss_unet_service import ISSUNetCFARParams, reconstruct_iss_unet
@@ -1135,7 +1190,24 @@ class ISSUNetServiceTests(unittest.TestCase):
             model_inference=True,
             cfar_params=ISSUNetCFARParams(enabled=True),
             cfar_result={
-                "clusters": [{"peak_pixel_row": 2, "peak_pixel_col": 2, "peak_power_dbm": -50.0, "mean_power_dbm": -55.0, "size": 1}],
+                "clusters": [
+                    {
+                        "peak_pixel_row": 2,
+                        "peak_pixel_col": 2,
+                        "peak_power_dbm": -50.0,
+                        "mean_power_dbm": -55.0,
+                        "size": 1,
+                        "enu": {"east_m": 3.0, "north_m": 4.0, "up_m": 0.0},
+                    },
+                    {
+                        "peak_pixel_row": 3,
+                        "peak_pixel_col": 3,
+                        "peak_power_dbm": -51.0,
+                        "mean_power_dbm": -56.0,
+                        "size": 1,
+                        "enu": {"east_m": 106.0, "north_m": 108.0, "up_m": 0.0},
+                    },
+                ],
                 "detections": [],
                 "detection_map": np.zeros((4, 4), dtype=np.float32),
                 "threshold_map": np.zeros((4, 4), dtype=np.float32),
@@ -1143,6 +1215,10 @@ class ISSUNetServiceTests(unittest.TestCase):
             route_points=[],
             aligned_points=[],
             sparse_points=[],
+            devices=[
+                {"name": "jam-0", "role": "jammer", "east_m": 0.0, "north_m": 0.0, "up_m": 0.0},
+                {"name": "jam-1", "role": "jammer", "east_m": 100.0, "north_m": 100.0, "up_m": 0.0},
+            ],
         )
 
         rows = build_gpsn_statistics_rows(artifacts)
@@ -1154,7 +1230,8 @@ class ISSUNetServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["value"], "66.67%")
         self.assertEqual(rows[1]["value"], "50.00%")
         self.assertIn("室外地圖", rows[3]["meaning"])
-        self.assertEqual(rows[-1]["variable"], "CFAR 熱點定位誤差")
+        self.assertEqual(rows[-1]["variable"], "CFAR 干擾源定位誤差")
+        self.assertEqual(rows[-1]["value"], "7.50 m")
 
     def test_render_gpsn_statistics_table_png_returns_png_bytes(self):
         from app.iss_unet_stats_service import render_statistics_table_png

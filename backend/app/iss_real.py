@@ -253,16 +253,22 @@ def _scene_grid_bounds(dataset: SceneDataset, shape: tuple[int, int]) -> dict[st
     }
 
 
-def _latlon_to_grid(point: GPSPoint | AlignedNoisePoint, frame: SceneFrame):
+def _latlon_to_grid(
+    point: GPSPoint | AlignedNoisePoint,
+    frame: SceneFrame,
+    shape: tuple[int, int],
+):
     east_m, north_m, up_m = gps_to_enu(point.lat, point.lon, point.alt, frame, point.alt_mode)
-    return enu_to_grid(east_m, north_m, up_m, frame), (east_m, north_m, up_m)
+    rows, cols = shape
+    return enu_to_grid(east_m, north_m, up_m, frame, rows=rows, cols=cols), (east_m, north_m, up_m)
 
 
 def _route_point_payload(
     point: GPSPoint | AlignedNoisePoint,
     frame: SceneFrame,
+    shape: tuple[int, int],
 ) -> dict[str, Any]:
-    grid, enu = _latlon_to_grid(point, frame)
+    grid, enu = _latlon_to_grid(point, frame, shape)
     lat, lon, alt = enu_to_gps(*enu, frame, point.alt_mode)
     payload: dict[str, Any] = {
         "time_stamp": point.time_stamp.isoformat(),
@@ -341,12 +347,13 @@ def create_route_sparse_sample(
         if isinstance(point, AlignedNoisePoint) and point.noise_floor_db is not None
     )
 
+    grid_shape = building.shape
     for gps_point in gps_points:
-        projected_route_points.append(_route_point_payload(gps_point, frame))
+        projected_route_points.append(_route_point_payload(gps_point, frame, grid_shape))
 
     for point in route_points:
-        grid, _enu = _latlon_to_grid(point, frame)
-        payload = _route_point_payload(point, frame)
+        grid, _enu = _latlon_to_grid(point, frame, grid_shape)
+        payload = _route_point_payload(point, frame, grid_shape)
         is_empty_noise = isinstance(point, AlignedNoisePoint) and point.noise_floor_db is None
         if not grid.inside_extent or grid.row is None or grid.col is None:
             if not is_empty_noise:

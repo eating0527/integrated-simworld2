@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +126,7 @@ class ISSUNetArtifacts:
     route_points: list[dict[str, Any]]
     aligned_points: list[dict[str, Any]]
     sparse_points: list[dict[str, Any]]
+    devices: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _canonical_scene(scene: str) -> str:
@@ -418,7 +419,13 @@ def _overlay_metadata(dataset: SceneDataset, filename: str, shape: tuple[int, in
 
 
 def _cfar_pixel_to_enu(row: int, col: int, grid: dict[str, Any]) -> tuple[float, float, float]:
-    return grid_to_enu(row, col, scene_frame_from_metadata(grid["frame"]))
+    return grid_to_enu(
+        row,
+        col,
+        scene_frame_from_metadata(grid["frame"]),
+        rows=int(grid["rows"]),
+        cols=int(grid["cols"]),
+    )
 
 
 def _enrich_cfar_clusters(
@@ -432,7 +439,14 @@ def _enrich_cfar_clusters(
         col = int(cluster["peak_pixel_col"])
         east_m, north_m, up_m = _cfar_pixel_to_enu(row, col, grid)
         lat, lon, alt = enu_to_gps(east_m, north_m, up_m, frame, frame.alt_mode)
-        grid_point = enu_to_grid(east_m, north_m, up_m, frame)
+        grid_point = enu_to_grid(
+            east_m,
+            north_m,
+            up_m,
+            frame,
+            rows=int(grid["rows"]),
+            cols=int(grid["cols"]),
+        )
         item = {
             **cluster,
             "frame_id": frame.frame_id,
@@ -1061,6 +1075,13 @@ def _build_iss_unet_artifacts(
     if cfar is None:
         cfar = ISSUNetCFARParams(enabled=True)
     cfar_result = _cfar_detect(reconstructed_iss, outdoor_mask, cfar) if cfar.enabled else None
+    if cfar_result is not None:
+        cfar_grid = _cfar_grid_metadata(dataset, reconstructed_iss.shape)
+        cfar_result = {
+            **cfar_result,
+            "clusters": _enrich_cfar_clusters(cfar_result.get("clusters", []), cfar_grid),
+            "grid": cfar_grid,
+        }
 
     return ISSUNetArtifacts(
         dataset=dataset,
@@ -1081,6 +1102,7 @@ def _build_iss_unet_artifacts(
         route_points=route_points,
         aligned_points=aligned_points,
         sparse_points=sparse_points,
+        devices=normalized_devices,
     )
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import math
 from pathlib import Path
 from typing import Any
 
@@ -42,8 +41,8 @@ def _format_corr(value: float | None) -> str:
     return "N/A" if value is None else f"{value:.3f}"
 
 
-def _format_px(value: float | None) -> str:
-    return "N/A" if value is None else f"{value:.2f} px"
+def _format_m(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.2f} m"
 
 
 def _pearson_corr(a: np.ndarray, b: np.ndarray) -> float | None:
@@ -55,29 +54,26 @@ def _pearson_corr(a: np.ndarray, b: np.ndarray) -> float | None:
     return corr if np.isfinite(corr) else None
 
 
-def _cfar_hotspot_error_px(artifacts: ISSUNetArtifacts) -> float | None:
+def _cfar_jammer_error_m(artifacts: ISSUNetArtifacts) -> float | None:
     clusters = (artifacts.cfar_result or {}).get("clusters", [])
-    if not clusters or artifacts.sparse_values_dbm is None:
+    jammers = [device for device in artifacts.devices if str(device.get("role", "")).lower() == "jammer"]
+    if not clusters or not jammers:
         return None
 
-    sample_mask = artifacts.sparse_mask > 0.5
-    measured_values = artifacts.sparse_values_dbm[sample_mask]
-    if measured_values.size == 0:
+    peaks = [
+        (float(cluster["enu"]["east_m"]), float(cluster["enu"]["north_m"]))
+        for cluster in clusters
+        if isinstance(cluster.get("enu"), dict)
+    ]
+    if not peaks:
         return None
 
-    threshold = float(np.percentile(measured_values, 90))
-    hot_points = np.argwhere(sample_mask & (artifacts.sparse_values_dbm >= threshold))
-    if hot_points.size == 0:
-        hot_points = np.argwhere(sample_mask)
-    if hot_points.size == 0:
-        return None
-
-    best = math.inf
-    for cluster in clusters:
-        peak = np.array([float(cluster["peak_pixel_row"]), float(cluster["peak_pixel_col"])])
-        distances = np.sqrt(np.sum((hot_points.astype(np.float64) - peak) ** 2, axis=1))
-        best = min(best, float(distances.min()))
-    return best if math.isfinite(best) else None
+    nearest_errors = []
+    for jammer in jammers:
+        east_m = float(jammer["east_m"])
+        north_m = float(jammer["north_m"])
+        nearest_errors.append(min(float(np.hypot(peak_e - east_m, peak_n - north_m)) for peak_e, peak_n in peaks))
+    return float(np.mean(nearest_errors))
 
 
 def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, str]]:
@@ -115,7 +111,7 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
     sample_point_mae = float(np.mean(np.abs(reconstructed_values - measured_values))) if measured_values.size else None
     sample_point_bias = float(np.mean(reconstructed_values - measured_values)) if measured_values.size else None
     noise_p95 = float(np.percentile(valid_noise_values, 95)) if valid_noise_values.size else None
-    hotspot_error = _cfar_hotspot_error_px(artifacts)
+    jammer_error = _cfar_jammer_error_m(artifacts)
 
     return [
         {
@@ -164,9 +160,9 @@ def build_gpsn_statistics_rows(artifacts: ISSUNetArtifacts) -> list[dict[str, st
             "meaning": "重建結果是否系統性高估或低估量測值",
         },
         {
-            "variable": "CFAR 熱點定位誤差",
-            "value": _format_px(hotspot_error),
-            "meaning": "重建干擾源 vs 真實干擾源的定位誤差",
+            "variable": "CFAR 干擾源定位誤差",
+            "value": _format_m(jammer_error),
+            "meaning": "每個真實 Jammer 與最近 CFAR peak 的水平 ENU 距離平均值",
         },
     ]
 
