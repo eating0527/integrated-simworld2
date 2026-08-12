@@ -17,6 +17,7 @@ function captureStatus(options: {
   bind?: boolean;
   mode?: 'test' | 'usrp';
   overall?: string;
+  stopRequestedAt?: string | null;
   uav?: ChildOverrides;
   usrp?: ChildOverrides;
 } = {}) {
@@ -40,6 +41,7 @@ function captureStatus(options: {
     created_at: '2026-06-24T00:00:00Z',
     started_at: null,
     finished_at: null,
+    stop_requested_at: options.stopRequestedAt ?? null,
     uav: child(options.uav),
     usrp: child(options.usrp),
     device_health: {
@@ -470,6 +472,21 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByRole('button', { name: 'Stop UAV' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop USRP' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop All' })).toBeEnabled();
+  });
+
+  it('keeps Stop All consumed after restoring a mission', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_stopping',
+      bind: true,
+      overall: 'stopping',
+      stopRequestedAt: '2026-08-12T00:00:00Z',
+      uav: { service: 'presumed_running', file: 'finalizing', phase: 'stop_failed' },
+      usrp: { service: 'stopping', file: 'finalizing', phase: 'stopping' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByRole('button', { name: 'Stop All' })).toBeDisabled();
   });
 
   it('stops independent jobs with each child mission id', async () => {

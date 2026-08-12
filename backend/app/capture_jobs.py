@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -122,6 +123,10 @@ class CaptureState(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+    # Stop All is a consumed mission command.  Persisting the request time
+    # prevents a page/backend restart from presenting the original command as
+    # available again while either child is still being reconciled.
+    stop_requested_at: str | None = None
     uav: ChildState = Field(default_factory=ChildState)
     usrp: ChildState = Field(default_factory=ChildState)
 
@@ -1070,6 +1075,14 @@ class CaptureCoordinator:
             return self.store.load(state.mission_id)
 
     def stop_uav(self, mission_id: str) -> CaptureState:
+        """Stop and finalize AP3 without holding the coordinator lock.
+
+        Process termination and CSV validation are blocking operations.  The
+        mission is first persisted as stopping, then the work runs outside
+        ``self._lock`` so a bound USRP stop can begin at the same time.  All
+        result writes reload the latest snapshot under the lock, preserving
+        concurrent GPS/upload callbacks.
+        """
         with self._lock:
             state = self.store.load(mission_id)
             # Resume Timeout is a terminal AP3 outcome for this mission.  Do
@@ -1081,10 +1094,18 @@ class CaptureCoordinator:
                 return state
 
             process = self._uav_processes.get(mission_id)
+            csv_path = Path(state.uav.path) if state.uav.path else (
+                self.store.root / mission_id / "gps.csv"
+            )
             state.uav.phase = "stopping"
             state.uav.service = "stopping"
             state.uav.file = "finalizing"
             self.store.save(state)
+
+        # Keep all potentially blocking process/file work outside the lock so
+        # the sibling USRP stop can make progress independently.
+        process_error: Exception | None = None
+        try:
             if process is not None and process.poll() is None:
                 process.terminate()
                 try:
@@ -1092,23 +1113,60 @@ class CaptureCoordinator:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+        except Exception as exc:
+            process_error = exc
 
-            csv_path = Path(state.uav.path)
+        validation_error: Exception | None = None
+        if process_error is None:
             try:
                 validate_gps_csv(csv_path)
             except (OSError, GpsCsvSchemaError) as exc:
-                state.uav.service = "failed"
-                state.uav.file = "failed"
-                state.uav.phase = "failed"
-                state.uav.error = str(exc)
+                validation_error = exc
+
+        with self._lock:
+            state = self.store.load(mission_id)
+            child = state.uav
+            if process_error is not None:
+                # A local process that could not be proven stopped remains an
+                # unresolved stop.  Do not fabricate a terminal result.
+                return self._mark_uav_stop_failure_locked(
+                    state,
+                    str(process_error or "AP3 process stop timed out"),
+                )
+            if validation_error is not None:
+                # The process is known to have exited, but the artifact could
+                # not be validated.  Keep any valid rows on disk and expose a
+                # failed AP3 child rather than claiming a clean stop.
+                child.service = "failed"
+                child.file = "failed"
+                child.phase = "failed"
+                child.pid = None
+                child.error = str(validation_error)
+                self._uav_processes.pop(mission_id, None)
                 return self.store.save(state)
 
-            state.uav.service = "stopped"
-            state.uav.file = "ready"
-            state.uav.phase = "stopped"
-            state.uav.pid = None
+            child.service = "stopped"
+            child.file = "ready"
+            child.phase = "stopped"
+            child.pid = None
+            child.error = ""
             self._uav_processes.pop(mission_id, None)
             return self.store.save(state)
+
+    def _mark_uav_stop_failure_locked(
+        self,
+        state: CaptureState,
+        error: str,
+    ) -> CaptureState:
+        """Persist an unresolved AP3 stop without claiming completion."""
+
+        child = state.uav
+        child.connection = "unknown"
+        child.service = "presumed_running"
+        child.file = "finalizing"
+        child.phase = "stop_failed"
+        child.error = error or "AP3 stop failed"
+        return self.store.save(state)
 
     def _reconcile_usrp_remote(
         self,
@@ -1433,10 +1491,121 @@ class CaptureCoordinator:
                 return self.store.save(state)
             return state
 
+    def _mark_usrp_stop_failure_locked(
+        self,
+        state: CaptureState,
+        error: str,
+        *,
+        connection: ConnectionState = "unknown",
+    ) -> CaptureState:
+        """Persist an unresolved USRP stop without claiming completion."""
+
+        child = state.usrp
+        child.connection = connection
+        child.service = "presumed_running"
+        child.file = "finalizing"
+        child.phase = "stop_failed"
+        child.error = error or "USRP stop result is unknown"
+        return self.store.save(state)
+
+    def _apply_usrp_stop_result_locked(
+        self,
+        state: CaptureState,
+        remote: object,
+    ) -> CaptureState:
+        """Apply a stop response only when it positively identifies a stop.
+
+        A successful SSH call is not itself evidence that the remote process
+        stopped.  Require a matching (or legacy-omitted) mission state and a
+        terminal remote state before transitioning to ``stopped``.
+        """
+
+        if not isinstance(remote, dict):
+            return self._mark_usrp_stop_failure_locked(
+                state,
+                "USRP stop result is invalid",
+            )
+        mission_state = remote.get("mission_state")
+        if not isinstance(mission_state, dict) or not mission_state:
+            return self._mark_usrp_stop_failure_locked(
+                state,
+                "USRP stop result does not include mission state",
+            )
+        remote_mission_id = mission_state.get("mission_id")
+        if str(remote_mission_id or "") != state.mission_id:
+            return self._mark_usrp_stop_failure_locked(
+                state,
+                "USRP stop result does not identify the requested mission",
+            )
+        service_state = str(remote.get("service_state") or "unknown").lower()
+        remote_state = str(
+            mission_state.get("state")
+            or mission_state.get("phase")
+            or ""
+        ).lower()
+        upload_state = str(mission_state.get("upload_state") or "").lower()
+        child = state.usrp
+
+        if service_state != "stopped":
+            return self._mark_usrp_stop_failure_locked(
+                state,
+                "USRP remote service state is not confirmed stopped",
+            )
+        if child.file == "uploaded":
+            # A callback may have persisted newer upload evidence while the
+            # remote stop request was in flight.  Never downgrade it with the
+            # older response snapshot.
+            child.connection = "ready"
+            child.service = "stopped"
+            child.phase = "completed"
+            child.error = ""
+            return self.store.save(state)
+        if remote_state in _REMOTE_FAILED_STATES:
+            child.connection = "ready"
+            child.service = "failed"
+            child.file = "failed"
+            child.phase = "failed"
+            child.error = str(
+                mission_state.get("error")
+                or mission_state.get("message")
+                or "USRP finalization failed"
+            )
+            return self.store.save(state)
+        if upload_state == "failed":
+            child.connection = "ready"
+            child.service = "stopped"
+            child.file = "upload_pending"
+            child.phase = "upload_pending"
+            child.error = str(
+                mission_state.get("error")
+                or mission_state.get("message")
+                or "USRP upload failed"
+            )
+            return self.store.save(state)
+        if remote_state in _REMOTE_FINALIZING_STATES or upload_state in {"finalizing", "uploading"}:
+            child.connection = "ready"
+            child.service = "stopped"
+            child.file = "finalizing"
+            child.phase = "finalizing_file"
+            child.error = ""
+            return self.store.save(state)
+        if remote_state not in _REMOTE_STOPPED_STATES:
+            return self._mark_usrp_stop_failure_locked(
+                state,
+                "USRP remote mission state is unknown",
+            )
+
+        child.connection = "ready"
+        child.service = "stopped"
+        child.file = "uploaded" if upload_state == "uploaded" else "upload_pending"
+        child.phase = "stopped" if child.file == "uploaded" else "upload_pending"
+        child.error = ""
+        return self.store.save(state)
+
     def stop_usrp(self, mission_id: str) -> CaptureState:
         with self._lock:
             state = self.store.load(mission_id)
-            if state.usrp.service == "stopped" and state.usrp.file == "uploaded":
+            if state.usrp.service == "stopped":
                 return state
             state.usrp.phase = "stopping"
             state.usrp.service = "stopping"
@@ -1448,22 +1617,15 @@ class CaptureCoordinator:
         except Exception as exc:
             with self._lock:
                 state = self.store.load(mission_id)
-                state.usrp.connection = "offline"
-                state.usrp.service = "presumed_running"
-                state.usrp.phase = "stop_failed"
-                state.usrp.error = str(exc)
-                return self.store.save(state)
+                return self._mark_usrp_stop_failure_locked(
+                    state,
+                    str(exc),
+                    connection="offline",
+                )
 
         with self._lock:
             state = self.store.load(mission_id)
-            state.usrp.connection = "ready"
-            state.usrp.service = "stopped"
-            state.usrp.phase = "stopped"
-            mission_state = remote.get("mission_state") or {}
-            upload_state = mission_state.get("upload_state")
-            state.usrp.file = "uploaded" if upload_state == "uploaded" else "upload_pending"
-            state.usrp.error = ""
-            return self.store.save(state)
+            return self._apply_usrp_stop_result_locked(state, remote)
 
     def retry_usrp_upload(self, mission_id: str) -> CaptureState:
         with self._lock:
@@ -1486,19 +1648,61 @@ class CaptureCoordinator:
                 return self.store.save(state)
 
     def stop_bind(self, mission_id: str) -> CaptureState:
+        """Best-effort Stop All for the selected children.
+
+        The request is persisted before either child operation starts.  Each
+        stop runs in its own worker and its result/exception is isolated; a
+        slow or failed AP3 finalize therefore cannot prevent the USRP remote
+        stop from being attempted (or vice versa).
+        """
+
         with self._lock:
             state = self.store.load(mission_id)
+            # Stop All is intentionally one-shot.  Retry Stop is represented
+            # by the individual child controls and must not re-issue a stop to
+            # an already terminal sibling after a restart.
+            if state.stop_requested_at is not None:
+                return state
+            state.stop_requested_at = _iso(self._clock_now())
             needs_uav_stop = state.uav.service not in {"idle", "stopped", "failed"}
-        if needs_uav_stop:
-            self.stop_uav(mission_id)
-        with self._lock:
-            state = self.store.load(mission_id)
             needs_usrp_stop = state.usrp.service not in {"idle", "stopped", "failed"}
-            needs_usrp_retry = state.usrp.service == "stopped" and state.usrp.file == "upload_pending"
+            self.store.save(state)
+
+        operations: dict[str, Callable[[str], CaptureState]] = {}
+        if needs_uav_stop:
+            operations["uav"] = self.stop_uav
         if needs_usrp_stop:
-            self.stop_usrp(mission_id)
-        elif needs_usrp_retry:
-            self.retry_usrp_upload(mission_id)
+            operations["usrp"] = self.stop_usrp
+
+        def run_child_stop(name: str, operation: Callable[[str], CaptureState]) -> None:
+            try:
+                operation(mission_id)
+            except Exception as exc:
+                # A patched/legacy adapter may raise before persisting its
+                # result.  Record an explicit unresolved child so Stop All
+                # remains consumed without hiding a possibly-running service.
+                with self._lock:
+                    current = self.store.load(mission_id)
+                    if name == "usrp":
+                        self._mark_usrp_stop_failure_locked(
+                            current,
+                            str(exc),
+                            connection="unknown",
+                        )
+                    else:
+                        self._mark_uav_stop_failure_locked(current, str(exc))
+
+        # Submitting both before waiting is the important contract here.  The
+        # coordinator lock is only held by each child for short state writes;
+        # blocking hardware/process work occurs outside it.
+        with ThreadPoolExecutor(max_workers=max(1, len(operations))) as pool:
+            futures = [
+                pool.submit(run_child_stop, name, operation)
+                for name, operation in operations.items()
+            ]
+            for future in futures:
+                future.result()
+
         with self._lock:
             return self.store.load(mission_id)
 

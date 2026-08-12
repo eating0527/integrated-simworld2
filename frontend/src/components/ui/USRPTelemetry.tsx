@@ -50,6 +50,7 @@ interface CaptureStatus {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  stop_requested_at: string | null;
   uav: ChildState;
   usrp: ChildState;
   device_health?: Record<string, DeviceHealth>;
@@ -430,6 +431,7 @@ function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
     created_at: String(value.created_at ?? ''),
     started_at: value.started_at ?? null,
     finished_at: value.finished_at ?? null,
+    stop_requested_at: value.stop_requested_at ?? null,
     uav: normalizeChild(value.uav),
     usrp: normalizeChild(value.usrp),
     device_health: value.device_health && typeof value.device_health === 'object'
@@ -849,8 +851,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             </button>
             <button
               type="button"
-              style={{ ...S.button, ...S.stop, ...disabledStyle(busy || !missionId || !anyActive) }}
-              disabled={busy || !missionId || !anyActive}
+              style={{ ...S.button, ...S.stop, ...disabledStyle(busy || !missionId || !anyActive || Boolean(status?.stop_requested_at)) }}
+              disabled={busy || !missionId || !anyActive || Boolean(status?.stop_requested_at)}
               onClick={() => void request(`/api/capture/bind/stop?mission_id=${encodeURIComponent(missionId)}`)}
             >
               Stop All

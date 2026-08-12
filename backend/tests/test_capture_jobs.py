@@ -1595,12 +1595,135 @@ class BindCoordinatorTests(unittest.TestCase):
 
     def test_stop_all_waits_for_both_finalizers(self):
         state = self.coordinator.start_bind("test")
+        self.backend.stop_capture_job.return_value["mission_state"]["mission_id"] = state.mission_id
 
         stopped = self.coordinator.stop_bind(state.mission_id)
 
         self.assertEqual(stopped.uav.file, "ready")
         self.assertEqual(stopped.usrp.file, "uploaded")
         self.assertEqual(stopped.overall_state, "completed")
+
+    def test_stop_all_starts_children_concurrently_and_persists_request(self):
+        state = self.coordinator.start_bind("test")
+        started = {"uav": threading.Event(), "usrp": threading.Event()}
+        release = threading.Event()
+        errors = []
+
+        def attempt(name):
+            started[name].set()
+            other = "usrp" if name == "uav" else "uav"
+            if not started[other].wait(timeout=1):
+                errors.append(f"{name} started before {other}")
+            release.wait(timeout=1)
+            return self.coordinator.store.load(state.mission_id)
+
+        with (
+            patch.object(self.coordinator, "stop_uav", side_effect=lambda mission_id: attempt("uav")),
+            patch.object(self.coordinator, "stop_usrp", side_effect=lambda mission_id: attempt("usrp")),
+        ):
+            result = []
+            worker = threading.Thread(
+                target=lambda: result.append(self.coordinator.stop_bind(state.mission_id)),
+            )
+            worker.start()
+            self.assertTrue(started["uav"].wait(timeout=1))
+            self.assertTrue(started["usrp"].wait(timeout=1))
+            release.set()
+            worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(result), 1)
+        self.assertIsNotNone(self.coordinator.store.load(state.mission_id).stop_requested_at)
+
+    def test_stop_all_isolates_child_exception(self):
+        state = self.coordinator.start_bind("test")
+        self.backend.stop_capture_job.return_value["mission_state"]["mission_id"] = state.mission_id
+        usrp_attempted = threading.Event()
+        stop_usrp_original = self.coordinator.stop_usrp
+
+        def fail_uav(_mission_id):
+            raise RuntimeError("AP3 finalize timeout")
+
+        def stop_usrp(mission_id):
+            usrp_attempted.set()
+            return stop_usrp_original(mission_id)
+
+        with (
+            patch.object(self.coordinator, "stop_uav", side_effect=fail_uav),
+            patch.object(self.coordinator, "stop_usrp", side_effect=stop_usrp),
+        ):
+            stopped = self.coordinator.stop_bind(state.mission_id)
+
+        self.assertTrue(usrp_attempted.is_set())
+        self.assertEqual(stopped.uav.service, "presumed_running")
+        self.assertEqual(stopped.uav.phase, "stop_failed")
+        self.assertIn("AP3 finalize timeout", stopped.uav.error)
+        self.assertEqual(stopped.usrp.service, "stopped")
+        self.assertEqual(stopped.usrp.file, "uploaded")
+
+    def test_stop_all_intent_survives_restart_without_reissuing_stops(self):
+        from app.capture_jobs import CaptureCoordinator
+
+        state = self.coordinator.start_bind("test")
+        self.backend.stop_capture_job.return_value["mission_state"]["mission_id"] = state.mission_id
+        stopped = self.coordinator.stop_bind(state.mission_id)
+        restarted = CaptureCoordinator(
+            self.coordinator.store,
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=self.popen,
+            usrp_backend=self.backend,
+        )
+
+        with (
+            patch.object(restarted, "stop_uav") as stop_uav,
+            patch.object(restarted, "stop_usrp") as stop_usrp,
+        ):
+            restored = restarted.stop_bind(state.mission_id)
+
+        self.assertEqual(restored.stop_requested_at, stopped.stop_requested_at)
+        stop_uav.assert_not_called()
+        stop_usrp.assert_not_called()
+
+    def test_usrp_stop_rejects_mismatched_remote_mission(self):
+        state = self.coordinator.start_usrp("usrp")
+        self.backend.stop_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": "another-mission",
+                "state": "stopped",
+                "upload_state": "uploaded",
+            },
+        }
+
+        stopped = self.coordinator.stop_usrp(state.mission_id)
+
+        self.assertEqual(stopped.usrp.service, "presumed_running")
+        self.assertEqual(stopped.usrp.phase, "stop_failed")
+        self.assertNotEqual(stopped.overall_state, "completed")
+
+    def test_usrp_stop_keeps_failed_upload_pending(self):
+        state = self.coordinator.start_usrp("usrp")
+        self.backend.stop_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": state.mission_id,
+                "state": "stopped",
+                "upload_state": "failed",
+                "error": "upload timeout",
+            },
+        }
+
+        stopped = self.coordinator.stop_usrp(state.mission_id)
+
+        self.assertEqual(stopped.usrp.service, "stopped")
+        self.assertEqual(stopped.usrp.file, "upload_pending")
+        self.assertEqual(stopped.usrp.phase, "upload_pending")
+        self.assertIn("upload timeout", stopped.usrp.error)
+        self.assertEqual(stopped.overall_state, "finalizing")
 
     def test_usrp_stop_failure_records_stop_intent(self):
         state = self.coordinator.start_usrp("usrp")
@@ -1696,6 +1819,7 @@ class BindCoordinatorTests(unittest.TestCase):
             "success": True,
             "service_state": "stopped",
             "mission_state": {
+                "mission_id": state.mission_id,
                 "state": "stopped",
                 "upload_state": "upload_pending",
             },
@@ -1756,8 +1880,9 @@ class BindCoordinatorTests(unittest.TestCase):
                 "success": True,
                 "service_state": "stopped",
                 "mission_state": {
+                    "mission_id": mission_id,
                     "state": "stopped",
-                    "upload_state": "uploaded",
+                    "upload_state": "upload_pending",
                 },
             }
 
@@ -1777,6 +1902,7 @@ class BindCoordinatorTests(unittest.TestCase):
         store = OverlapDetectingStore(self.coordinator.store)
         self.coordinator.store = store
         state = self.coordinator.start_bind("test")
+        self.backend.stop_capture_job.return_value["mission_state"]["mission_id"] = state.mission_id
         self.backend.get_capture_job.return_value = {
             "success": True,
             "service_state": "running",
