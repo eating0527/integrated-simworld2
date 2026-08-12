@@ -17,6 +17,7 @@ from app.coordinate_frame import (
     grid_to_enu,
     scene_frame_from_metadata,
 )
+from app.gps_csv import GPS_CSV_COLUMNS, GPS_CSV_LEGACY_COLUMNS
 from app.iss_unet_service import BUILDING_MAX_M, ISS_MAX_DBM, ISS_MIN_DBM, SceneDataset
 
 
@@ -119,8 +120,8 @@ def _require_columns(columns: set[str], required: Iterable[str], source_name: st
 
 def parse_gps_csv(source: Path | str | bytes | TextIO) -> list[GPSPoint]:
     rows, columns = _read_rows(source)
-    _require_columns(columns, ("time_stamp", "lat", "lon", "alt"), "GPS CSV")
-    has_alt_mode = "alt_mode" in columns
+    _require_columns(columns, GPS_CSV_LEGACY_COLUMNS, "GPS CSV")
+    has_alt_mode = GPS_CSV_COLUMNS[-1] in columns
     points = [
         GPSPoint(
             time_stamp=_parse_time(row["time_stamp"]),

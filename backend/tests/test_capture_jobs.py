@@ -13,6 +13,60 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 
+class GpsCsvSchemaTests(unittest.TestCase):
+    def setUp(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        self.root = repo_root / ".test_tmp" / uuid.uuid4().hex
+        self.root.mkdir(parents=True)
+
+    def test_ensure_writes_canonical_header_once_for_empty_file(self):
+        from app.gps_csv import GPS_CSV_HEADER, ensure_gps_csv
+
+        path = self.root / "nested" / "gps.csv"
+        path.parent.mkdir(parents=True)
+        path.write_text("", encoding="utf-8")
+
+        ensure_gps_csv(path)
+        ensure_gps_csv(path)
+
+        self.assertEqual(path.read_text(encoding="utf-8").splitlines(), [GPS_CSV_HEADER])
+
+    def test_append_preserves_canonical_file_without_duplicate_header(self):
+        from app.gps_csv import GPS_CSV_HEADER, append_gps_row
+
+        path = self.root / "gps.csv"
+        path.write_text(
+            f"{GPS_CSV_HEADER}\n2026-08-12T08:00:00+00:00,24.0,121.0,10,relative",
+            encoding="utf-8",
+        )
+
+        append_gps_row(
+            path,
+            ["2026-08-12T08:00:01+00:00", 24.1, 121.1, 11, "relative"],
+        )
+
+        lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines.count(GPS_CSV_HEADER), 1)
+        self.assertEqual(len(lines), 3)
+        self.assertIn("2026-08-12T08:00:00+00:00,24.0,121.0,10,relative", lines)
+        self.assertIn("2026-08-12T08:00:01+00:00,24.1,121.1,11,relative", lines)
+
+    def test_append_rejects_wrong_schema_without_changing_file(self):
+        from app.gps_csv import GpsCsvSchemaError, append_gps_row
+
+        path = self.root / "gps.csv"
+        original = "time_stamp,lat,lon,alt\n2026-08-12T08:00:00+00:00,24.0,121.0,10\n"
+        path.write_text(original, encoding="utf-8")
+
+        with self.assertRaises(GpsCsvSchemaError):
+            append_gps_row(
+                path,
+                ["2026-08-12T08:00:01+00:00", 24.1, 121.1, 11, "relative"],
+            )
+
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+
 class CaptureStoreTests(unittest.TestCase):
     def setUp(self):
         repo_root = Path(__file__).resolve().parents[2]
@@ -210,6 +264,34 @@ class IndependentUavTests(unittest.TestCase):
         self.assertEqual(stopped.uav.service, "stopped")
         self.assertEqual(stopped.uav.file, "ready")
 
+    def test_uav_start_and_stop_use_canonical_gps_schema(self):
+        coordinator = self._coordinator()
+
+        state = coordinator.start_uav()
+        path = Path(state.uav.path)
+        stopped = coordinator.stop_uav(state.mission_id)
+
+        self.assertEqual(
+            path.read_text(encoding="utf-8").splitlines()[0],
+            "time_stamp,lat,lon,alt,alt_mode",
+        )
+        self.assertEqual(stopped.uav.service, "stopped")
+        self.assertEqual(stopped.uav.file, "ready")
+
+    def test_uav_stop_rejects_wrong_gps_schema(self):
+        coordinator = self._coordinator()
+        state = coordinator.start_uav()
+        path = Path(state.uav.path)
+        original = "time_stamp,lat,lon,alt\n2026-08-12T08:00:00+00:00,24.0,121.0,10\n"
+        path.write_text(original, encoding="utf-8")
+
+        stopped = coordinator.stop_uav(state.mission_id)
+
+        self.assertEqual(stopped.uav.service, "failed")
+        self.assertEqual(stopped.uav.file, "failed")
+        self.assertIn("gps.csv header must be", stopped.uav.error)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def test_second_uav_job_is_rejected(self):
         from app.capture_jobs import CaptureConflictError
 
@@ -345,6 +427,52 @@ class Ap3CliTests(unittest.TestCase):
         payload = module.gps_payload(msg, "amsl", "device", "Device")
         self.assertEqual(payload["alt"], 125.0)
         self.assertEqual(payload["alt_mode"], "amsl")
+
+
+class GpsGeneratorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        script = Path(__file__).resolve().parents[2] / "tools" / "generate_gps_from_noise.py"
+        spec = importlib.util.spec_from_file_location("generate_gps_from_noise_test", script)
+        cls.module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(cls.module)
+
+    def test_generator_writes_canonical_schema(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        root = repo_root / ".test_tmp" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        noise_path = root / "noise.csv"
+        gps_path = root / "gps.csv"
+        noise_path.write_text(
+            "time_stamp,noise_floor_db\n2026-08-12T08:00:00+00:00,-80\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "generate_gps_from_noise.py",
+                "--noise-csv",
+                str(noise_path),
+                "--gps-csv",
+                str(gps_path),
+                "--lat",
+                "24.0",
+                "--lon",
+                "121.0",
+            ],
+        ):
+            self.assertEqual(self.module.main(), 0)
+
+        self.assertEqual(
+            gps_path.read_text(encoding="utf-8").splitlines(),
+            [
+                "time_stamp,lat,lon,alt,alt_mode",
+                "2026-08-12T08:00:00+00:00,24.0,121.0,30.0,relative",
+            ],
+        )
 
 
 class StartupScriptTests(unittest.TestCase):
@@ -999,6 +1127,27 @@ class GpsSyncTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_sync_gps_point_rejects_wrong_schema_without_appending(self):
+        bundle = self.root / "flight_bad"
+        bundle.mkdir(parents=True)
+        gps_path = bundle / "gps.csv"
+        original = "time_stamp,lat,lon,alt\n2026-08-12T08:00:00+00:00,24.0,121.0,10\n"
+        gps_path.write_text(original, encoding="utf-8")
+        point = self.main.GpsSyncPointRequest(
+            mission_id="flight_bad",
+            time_stamp="2026-08-12T08:00:01+00:00",
+            lat=24.1,
+            lon=121.1,
+            alt=11,
+        )
+
+        with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
+            response = asyncio.run(self.main.usrp_sync_gps_point_post(point))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(gps_path.read_text(encoding="utf-8"), original)
+        self.assertFalse((bundle / "gps_sync.log").exists())
+
     def test_sync_missions_lists_recent_incoming_data(self):
         bundle = self.root / "flight_visible"
         bundle.mkdir(parents=True)
@@ -1020,6 +1169,37 @@ class GpsSyncTests(unittest.TestCase):
         self.assertTrue(response["missions"][0]["has_gps"])
         self.assertTrue(response["missions"][0]["has_noise"])
         self.assertIn("mission=flight_visible", response["missions"][0]["last_log"])
+
+
+class GpsUploadTests(unittest.TestCase):
+    def setUp(self):
+        from app import main
+
+        self.main = main
+        repo_root = Path(__file__).resolve().parents[2]
+        self.root = repo_root / ".test_tmp" / uuid.uuid4().hex
+        self.root.mkdir(parents=True)
+
+    def test_gps_upload_rejects_wrong_schema_without_replacing_existing_file(self):
+        from fastapi import UploadFile
+
+        bundle = self.root / "flight_upload"
+        bundle.mkdir(parents=True)
+        gps_path = bundle / "gps.csv"
+        original = b"time_stamp,lat,lon,alt,alt_mode\n2026-08-12T08:00:00+00:00,24.0,121.0,10,relative\n"
+        gps_path.write_bytes(original)
+        invalid = b"time_stamp,lat,lon,alt\n2026-08-12T08:00:01+00:00,24.1,121.1,11\n"
+
+        with patch.object(self.main, "INCOMING_CSV_DIR", self.root):
+            response = asyncio.run(
+                self.main.usrp_upload_gps_csv_post(
+                    mission_id="flight_upload",
+                    gps_file=UploadFile(BytesIO(invalid), filename="gps.csv"),
+                )
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(gps_path.read_bytes(), original)
 
 
 class NoiseUploaderTests(unittest.TestCase):

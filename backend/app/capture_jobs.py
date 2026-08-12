@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.gps_csv import GpsCsvSchemaError, ensure_gps_csv, validate_gps_csv
+
 
 ConnectionState = Literal["ready", "offline", "unknown"]
 ServiceState = Literal[
@@ -272,7 +274,7 @@ class CaptureCoordinator:
 
     def _launch_uav(self, state: CaptureState) -> CaptureState:
         csv_path = self.store.root / state.mission_id / "gps.csv"
-        csv_path.write_text("time_stamp,lat,lon,alt\n", encoding="utf-8")
+        ensure_gps_csv(csv_path)
         state.uav.connection = "ready"
         state.uav.service = "starting"
         state.uav.file = "recording"
@@ -477,17 +479,11 @@ class CaptureCoordinator:
 
             csv_path = Path(state.uav.path)
             try:
-                with csv_path.open("r", encoding="utf-8-sig") as handle:
-                    header = handle.readline().strip()
-            except OSError as exc:
+                validate_gps_csv(csv_path)
+            except (OSError, GpsCsvSchemaError) as exc:
                 state.uav.service = "failed"
                 state.uav.file = "failed"
                 state.uav.error = str(exc)
-                return self.store.save(state)
-            if header != "time_stamp,lat,lon,alt":
-                state.uav.service = "failed"
-                state.uav.file = "failed"
-                state.uav.error = "gps.csv header is invalid"
                 return self.store.save(state)
 
             state.uav.service = "stopped"

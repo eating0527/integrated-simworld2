@@ -1,6 +1,15 @@
 import argparse
 import csv
+import sys
 from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.gps_csv import GPS_CSV_COLUMNS
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,12 +43,12 @@ def main() -> int:
     gps_path.parent.mkdir(parents=True, exist_ok=True)
     with gps_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["time_stamp", "lat", "lon", "alt"])
+        writer.writerow(GPS_CSV_COLUMNS)
         for row in rows:
             timestamp = row.get("time_stamp")
             if not timestamp:
                 continue
-            writer.writerow([timestamp, args.lat, args.lon, args.alt])
+            writer.writerow([timestamp, args.lat, args.lon, args.alt, "relative"])
 
     print(f"generated {gps_path} with {len(rows)} rows")
     return 0

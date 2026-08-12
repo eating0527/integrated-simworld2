@@ -44,6 +44,7 @@ from app.capture_jobs import (
     CaptureUnavailableError,
 )
 from app.coordinate_frame import SceneFrame, enu_to_sionna, scene_frame_from_metadata
+from app.gps_csv import GpsCsvSchemaError, append_gps_row, validate_gps_csv_bytes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2496,10 +2497,16 @@ async def usrp_upload_gps_csv_post(
     if not gps_file.filename:
         return JSONResponse({"success": False, "error": "gps_file filename is required"}, status_code=422)
 
+    gps_data = await gps_file.read()
+    try:
+        validate_gps_csv_bytes(gps_data)
+    except GpsCsvSchemaError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+
     bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     bundle_dir = INCOMING_CSV_DIR / bundle_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    (bundle_dir / "gps.csv").write_bytes(await gps_file.read())
+    (bundle_dir / "gps.csv").write_bytes(gps_data)
 
     updates: dict[str, Any] = {
         "scene": scene,
@@ -2558,13 +2565,13 @@ async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
     }
 
     with GPS_SYNC_LOCK:
-        bundle_dir.mkdir(parents=True, exist_ok=True)
-        needs_header = not csv_path.exists() or csv_path.stat().st_size == 0
-        with csv_path.open("a", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            if needs_header:
-                writer.writerow(["time_stamp", "lat", "lon", "alt", "alt_mode"])
-            writer.writerow([point.time_stamp, point.lat, point.lon, point.alt, point.alt_mode])
+        try:
+            append_gps_row(
+                csv_path,
+                [point.time_stamp, point.lat, point.lon, point.alt, point.alt_mode],
+            )
+        except GpsCsvSchemaError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
         log_line = (
             f"{datetime.now().isoformat()} mission={bundle_id} "
             f"device={point.device_id} lat={point.lat:.7f} lon={point.lon:.7f} alt={point.alt:.2f}"

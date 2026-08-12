@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -10,6 +11,13 @@ from datetime import datetime, timedelta, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.gps_csv import ensure_gps_csv, open_gps_csv_for_append
+
+
 ADB = ROOT / "tools" / "platform-tools" / "adb.exe"
 if not ADB.exists():
     ADB = ROOT / "tools" / "scrcpy" / "scrcpy-win64-v3.3.4" / "adb.exe"
@@ -73,11 +81,7 @@ def resolve_mavlink_url(args: argparse.Namespace) -> str:
 
 
 def ensure_csv(csv_path: Path) -> None:
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    if not csv_path.exists():
-        with csv_path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(["time_stamp", "lat", "lon", "alt", "alt_mode"])
+    ensure_gps_csv(csv_path)
 
 
 def format_csv_timestamp(timestamp: datetime) -> str:
@@ -161,7 +165,6 @@ def main() -> int:
 
     bundle_dir = Path(args.incoming_dir) / args.mission_id
     csv_path = bundle_dir / "gps.csv"
-    ensure_csv(csv_path)
     mav_url = resolve_mavlink_url(args)
     output_tz = timezone(timedelta(hours=args.utc_offset_hours))
     sync_client = GpsSyncClient(
@@ -180,7 +183,7 @@ def main() -> int:
         print(f"syncing GPS points to {args.sync_api_url}")
 
     written = 0
-    with csv_path.open("a", newline="", encoding="utf-8") as handle:
+    with open_gps_csv_for_append(csv_path) as handle:
         writer = csv.writer(handle)
         while True:
             mav = mavutil.mavlink_connection(mav_url, source_system=255)

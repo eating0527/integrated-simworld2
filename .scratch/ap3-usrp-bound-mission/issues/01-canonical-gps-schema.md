@@ -4,11 +4,11 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] 新建立的 GPS 檔案固定使用 `time_stamp、lat、lon、alt、alt_mode` 的欄位與順序。
-- [ ] Recorder append、Coordinator 建檔、停止驗證、GPS 同步寫入及消費端不再各自維護互相矛盾的 header。
-- [ ] 對已存在且 schema 正確的 GPS 檔案執行 append 時，不清空既有資料，也不重複寫入 header。
-- [ ] Schema 不合法時回報明確錯誤，不繼續 append 或把任務誤標成成功完成。
-- [ ] 既有 GPS timestamp 與 altitude mode 行為維持相容。
-- [ ] 自動測試涵蓋建檔、append、停止驗證、錯誤 schema 與既有檔案不被覆寫。
+- [x] 新建立的 GPS 檔案固定使用 `time_stamp、lat、lon、alt、alt_mode` 的欄位與順序。
+- [x] Recorder append、Coordinator 建檔、停止驗證、GPS 同步寫入及消費端不再各自維護互相矛盾的 header。
+- [x] 對已存在且 schema 正確的 GPS 檔案執行 append 時，不清空既有資料，也不重複寫入 header。
+- [x] Schema 不合法時回報明確錯誤，不繼續 append 或把任務誤標成成功完成。
+- [x] 既有 GPS timestamp 與 altitude mode 行為維持相容。
+- [x] 自動測試涵蓋建檔、append、停止驗證、錯誤 schema 與既有檔案不被覆寫。
