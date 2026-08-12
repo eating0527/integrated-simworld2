@@ -875,6 +875,14 @@ class CaptureCoordinator:
             # keeps a malformed existing file byte-for-byte intact.
             validate_gps_csv(path)
         except (OSError, GpsCsvSchemaError) as exc:
+            # A direct metadata-only sample may arrive before the API's
+            # append callback has created the canonical file.  Preserve the
+            # recoverable reconciling state so ``record_gps_sample`` can record
+            # the timestamp (or create the file) without turning a transient
+            # missing artifact into a terminal resume failure.  Once the file
+            # exists, malformed schemas remain a hard rejection.
+            if incoming_sample and isinstance(exc, OSError) and not path.exists():
+                return state
             return self._resume_reject_locked(state, error=str(exc))
 
         persisted_sample = _parse_timestamp(child.last_sample_at)
@@ -1329,6 +1337,10 @@ class CaptureCoordinator:
                 (item for item in reversed(states) if item.target in {"usrp", "bind"}),
                 None,
             )
+            # A terminal AP3 recorder exit is local evidence about only the
+            # UAV child.  Do not let an unrelated USRP status probe downgrade
+            # the sibling in the same dashboard snapshot.
+            uav_resume_timeout = False
 
             if uav_state and uav_state.uav.service in {
                 "starting",
@@ -1357,6 +1369,7 @@ class CaptureCoordinator:
                     except Exception:
                         process_code = None
                 if process_code == 2 and uav_state.bind:
+                    uav_resume_timeout = True
                     path = (
                         Path(uav_state.uav.path)
                         if uav_state.uav.path
@@ -1422,7 +1435,7 @@ class CaptureCoordinator:
                 )
                 self.store.save(uav_state)
 
-            if usrp_state and usrp_state.usrp.service in {
+            if usrp_state and not uav_resume_timeout and usrp_state.usrp.service in {
                 "starting",
                 "running",
                 "presumed_running",
@@ -1438,14 +1451,17 @@ class CaptureCoordinator:
             if same_mission:
                 state = self.store.load(uav_state.mission_id)
             else:
+                single_state = uav_state or usrp_state
                 state = CaptureState(
-                    mission_id="",
-                    target="bind",
-                    bind=False,
+                    mission_id=(single_state.mission_id if single_state else ""),
+                    target=(single_state.target if single_state else "bind"),
+                    bind=(single_state.bind if single_state else False),
                     selected_usrp_mode=(
                         usrp_state.selected_usrp_mode if usrp_state else mode
                     ),
-                    created_at=_now_iso(),
+                    created_at=(single_state.created_at if single_state else _now_iso()),
+                    started_at=(single_state.started_at if single_state else None),
+                    finished_at=(single_state.finished_at if single_state else None),
                     uav=(
                         uav_state.uav.model_copy(deep=True)
                         if uav_state

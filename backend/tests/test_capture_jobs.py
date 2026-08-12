@@ -1400,7 +1400,7 @@ class UsrpRecoveryTests(unittest.TestCase):
 
         backend.get_capture_job.return_value = {
             "service_state": "stopped",
-            "mission_state": {},
+            "mission_state": {"state": "stopped", "upload_state": "uploaded"},
         }
         missing = coordinator.reconcile_usrp(state.mission_id)
         self.assertEqual(missing.usrp.connection, "offline")
@@ -1704,6 +1704,20 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(stopped.usrp.phase, "stop_failed")
         self.assertNotEqual(stopped.overall_state, "completed")
 
+    def test_usrp_stop_rejects_result_without_mission_id(self):
+        state = self.coordinator.start_usrp("usrp")
+        self.backend.stop_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {"state": "stopped", "upload_state": "uploaded"},
+        }
+
+        stopped = self.coordinator.stop_usrp(state.mission_id)
+
+        self.assertEqual(stopped.usrp.service, "presumed_running")
+        self.assertEqual(stopped.usrp.phase, "stop_failed")
+        self.assertNotEqual(stopped.overall_state, "completed")
+
     def test_usrp_stop_keeps_failed_upload_pending(self):
         state = self.coordinator.start_usrp("usrp")
         self.backend.stop_capture_job.return_value = {
@@ -1746,6 +1760,14 @@ class BindCoordinatorTests(unittest.TestCase):
     def test_status_merges_simultaneous_independent_jobs(self):
         uav_state = self.coordinator.start_uav()
         usrp_state = self.coordinator.start_usrp("usrp")
+        self.backend.get_capture_job.return_value = {
+            "service_state": "running",
+            "mission_state": {
+                "mission_id": usrp_state.mission_id,
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
 
         dashboard = self.coordinator.status("usrp")
 
@@ -1801,6 +1823,7 @@ class BindCoordinatorTests(unittest.TestCase):
             "success": True,
             "service_state": "stopped",
             "mission_state": {
+                "mission_id": state.mission_id,
                 "state": "stopped",
                 "upload_state": "upload_pending",
             },

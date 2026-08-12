@@ -118,7 +118,14 @@ const ISS_UNET_RESOLUTION_OPTIONS: Array<{ value: ISSUNetPixelSizeM; label: stri
 
 async function readHttpError(response: Response | undefined, fallback = 'HTTP Error') {
   if (!response) return fallback;
-  const raw = await response.text().catch(() => '');
+  // Test doubles and a few legacy adapters expose only ``json()``.  Keep the
+  // error path compatible with those response-like values while preferring
+  // ``text()`` for real Fetch responses (which lets us handle plain-text
+  // backend errors as well as JSON envelopes).
+  let raw = '';
+  if (typeof response.text === 'function') {
+    raw = await response.text().catch(() => '');
+  }
   let detail = raw.trim();
   if (detail) {
     try {
@@ -128,6 +135,15 @@ async function readHttpError(response: Response | undefined, fallback = 'HTTP Er
       detail = `${message ? String(message) : fallback}${missing}`;
     } catch (_) {
       detail = detail.slice(0, 300);
+    }
+  } else if (typeof response.json === 'function') {
+    try {
+      const json = await response.json() as { detail?: unknown; error?: unknown; missing_files?: unknown };
+      const message = json?.detail ?? json?.error;
+      const missing = Array.isArray(json?.missing_files) ? `: ${json.missing_files.join(', ')}` : '';
+      detail = `${message ? String(message) : fallback}${missing}`;
+    } catch (_) {
+      detail = '';
     }
   }
   return `${response.status} ${response.statusText || fallback}${detail ? ` - ${detail}` : ''}`;
