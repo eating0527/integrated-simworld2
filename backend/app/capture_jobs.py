@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.gps_csv import GpsCsvSchemaError, ensure_gps_csv, validate_gps_csv
 
@@ -38,24 +38,59 @@ OverallState = Literal[
     "ready",
     "starting",
     "running",
-    "partial_failed",
+    "degraded",
+    "stopping",
     "finalizing",
     "completed",
+    "completed_with_warning",
     "failed",
 ]
+CapturePhase = Literal[
+    "idle",
+    "preflight",
+    "connecting",
+    "configuring",
+    "starting_service",
+    "recording",
+    "stopping",
+    "stopping_service",
+    "finalizing_file",
+    "upload_pending",
+    "uploading",
+    "completed",
+    "stopped",
+    "reconciling",
+    "stop_failed",
+    "resume_timeout",
+    "failed",
+    "unknown",
+]
+CAPTURE_PHASES = frozenset({
+    "idle", "preflight", "connecting", "configuring", "starting_service",
+    "recording", "stopping", "stopping_service", "finalizing_file",
+    "upload_pending", "uploading", "completed", "stopped", "reconciling",
+    "stop_failed", "resume_timeout", "failed", "unknown",
+})
 CaptureTarget = Literal["uav", "usrp", "bind"]
 UsrpMode = Literal["test", "usrp"]
 
 
 class ChildState(BaseModel):
     mission_id: str = ""
-    phase: str = "idle"
+    phase: CapturePhase = "idle"
     connection: ConnectionState = "unknown"
     service: ServiceState = "idle"
     file: FileState = "none"
     error: str = ""
     path: str = ""
     pid: int | None = None
+
+    @field_validator("phase", mode="before")
+    @classmethod
+    def normalize_phase(cls, value: object) -> str:
+        if value is None:
+            return "idle"
+        return value if isinstance(value, str) and value in CAPTURE_PHASES else "unknown"
 
 
 class CaptureState(BaseModel):
@@ -69,6 +104,11 @@ class CaptureState(BaseModel):
     finished_at: str | None = None
     uav: ChildState = Field(default_factory=ChildState)
     usrp: ChildState = Field(default_factory=ChildState)
+
+    @field_validator("overall_state", mode="before")
+    @classmethod
+    def normalize_legacy_overall_state(cls, value: object) -> object:
+        return "degraded" if value == "partial_failed" else value
 
 
 class CaptureError(RuntimeError):
@@ -106,29 +146,53 @@ def _selected_children(state: CaptureState) -> list[ChildState]:
 
 def _aggregate_state(state: CaptureState) -> OverallState:
     children = _selected_children(state)
-    services = {child.service for child in children}
-    files = {child.file for child in children}
-
-    failed_count = sum(
-        child.service == "failed" or child.file == "failed"
-        for child in children
-    )
-    if failed_count:
-        return "failed" if failed_count == len(children) else "partial_failed"
-
-    completed = all(
+    terminal = all(child.service in {"stopped", "failed"} for child in children)
+    successful = [
         child.service == "stopped" and child.file in {"ready", "uploaded"}
         for child in children
+    ]
+    pending = any(child.file in {"finalizing", "upload_pending"} for child in children)
+    uncertain = any(child.service == "presumed_running" for child in children)
+    fault = any(
+        child.service == "failed"
+        or child.file == "failed"
+        or child.connection == "offline"
+        or child.phase in {"reconciling", "resume_timeout", "stop_failed"}
+        for child in children
     )
-    if completed:
-        return "completed"
-    if services & {"stopping"} or files & {"finalizing", "upload_pending"}:
+
+    stop_intent = any(
+        child.service == "stopping"
+        or child.phase
+        in {"stopping", "stopping_service", "stop_failed"}
+        for child in children
+    )
+
+    if stop_intent:
+        return "stopping"
+    if pending:
         return "finalizing"
-    if services & {"running", "presumed_running"}:
+    if terminal:
+        if all(successful):
+            return "completed"
+        if any(successful):
+            return "completed_with_warning"
+        return "failed"
+    if fault or uncertain:
+        return "degraded"
+    if all(
+        child.service == "running" and child.file == "recording"
+        for child in children
+    ):
         return "running"
-    if services & {"starting"}:
+    if any(child.service == "starting" for child in children):
         return "starting"
-    return "ready"
+    if state.started_at is None and all(
+        child.service == "idle" and child.file == "none"
+        for child in children
+    ):
+        return "ready"
+    return "degraded"
 
 
 class CaptureStore:
@@ -181,7 +245,11 @@ class CaptureStore:
 
     def save(self, state: CaptureState) -> CaptureState:
         state.overall_state = _aggregate_state(state)
-        if state.overall_state == "completed" and state.finished_at is None:
+        if (
+            state.overall_state
+            in {"completed", "completed_with_warning", "failed"}
+            and state.finished_at is None
+        ):
             state.finished_at = _now_iso()
 
         path = self.path(state.mission_id)
@@ -655,7 +723,7 @@ class CaptureCoordinator:
                 state = self.store.load(mission_id)
                 state.usrp.connection = "offline"
                 state.usrp.service = "presumed_running"
-                state.usrp.phase = "reconciling"
+                state.usrp.phase = "stop_failed"
                 state.usrp.error = str(exc)
                 return self.store.save(state)
 
