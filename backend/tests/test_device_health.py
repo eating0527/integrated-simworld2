@@ -78,6 +78,63 @@ class DeviceHealthTests(unittest.TestCase):
         self.assertEqual(result.state, "ready")
         probe.assert_called_once()
 
+    def test_raspi_probe_reports_fake_ssh_failure_as_offline(self):
+        from app.device_health import RaspiHealth
+
+        probe = Mock(side_effect=OSError("SSH connection refused"))
+        result = RaspiHealth(probe=probe, clock=lambda: 100.0).check()
+
+        self.assertEqual(result.state, "offline")
+        self.assertIn("connection refused", result.error)
+
+    def test_offline_to_ready_recovery_resets_backoff(self):
+        from app.device_health import DeviceHealthMonitor, HealthResult
+
+        now = [0.0]
+        ap3 = Mock(check=Mock(return_value=HealthResult("ap3", "ready", 0.0, "")))
+        raspi = Mock()
+        raspi.check.side_effect = [
+            HealthResult("raspi", "offline", 0.0, "SSH down"),
+            HealthResult("raspi", "ready", 5.0, ""),
+            HealthResult("raspi", "offline", 15.0, "SSH down"),
+        ]
+        monitor = DeviceHealthMonitor(ap3=ap3, raspi=raspi, clock=lambda: now[0])
+
+        first = monitor.poll(mode="test")["raspi"]
+        now[0] = 5.0
+        recovered = monitor.poll(mode="test")["raspi"]
+        now[0] = 15.0
+        after_recovery_failure = monitor.poll(mode="test")["raspi"]
+
+        self.assertEqual(first.retry_delay, 5.0)
+        self.assertEqual(recovered.state, "ready")
+        self.assertEqual(recovered.retry_delay, 10.0)
+        self.assertEqual(after_recovery_failure.retry_delay, 5.0)
+
+    def test_raspi_health_cache_is_separate_for_each_mode(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        class Backend:
+            def __init__(self):
+                self.modes = []
+
+            def get_drone_health(self, mode):
+                self.modes.append(mode)
+                return {"state": "ready", "service_state": "stopped"}
+
+        backend = Backend()
+        coordinator = CaptureCoordinator(
+            CaptureStore(Path(__file__).resolve().parents[2] / ".test_tmp" / f"mode-cache-{uuid.uuid4().hex}"),
+            repo_root=Path(__file__).resolve().parents[2],
+            run_command=Mock(return_value=Mock(returncode=0, stdout="", stderr="")),
+            usrp_backend=backend,
+        )
+
+        coordinator.health_status("test")
+        coordinator.health_status("usrp")
+
+        self.assertEqual(backend.modes, ["test", "usrp"])
+
     def test_monitor_uses_ready_ten_second_and_offline_capped_backoff(self):
         from app.device_health import DeviceHealthMonitor, HealthResult
 
@@ -152,7 +209,7 @@ class DeviceHealthTests(unittest.TestCase):
         from app.capture_jobs import CaptureCoordinator, CaptureStore
 
         class FakeHealth:
-            def poll(self):
+            def poll(self, **_kwargs):
                 return {
                     "ap3": HealthResult("ap3", "offline", 100.0, "USB disconnected"),
                     "raspi": HealthResult("raspi", "ready", 100.0, ""),

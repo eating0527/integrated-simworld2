@@ -22,4 +22,5 @@
 - `capture/status` 保留 flat mission contract 並附 `device_health`；terminal child 不再因後續 health 改變而重寫。
 - 前端 telemetry 顯示兩個獨立 health 卡並以 10 秒單飛 polling 更新；stale/timeout 顯示 Unknown，health request 具 AbortController timeout。
 - 缺少 lightweight RasPi probe 時回傳 Unknown，不 fallback 到重型 status/journal diagnostics；health API 亦有 endpoint timeout。
-- 驗證：Python312 `backend.tests.test_device_health` 9/9、完整 backend discover 216/216、USRPTelemetry Vitest 22/22、frontend build 通過。完整 frontend suite 149/150；既有 `SimulationPanel` error mock 缺少 `response.text`，與本 ticket 無關。
+- 本輪修正：RasPi health cache 依 `usrp_mode` 切換清除並重新探測；移除 `RaspiHealth` 內層 executor，由 monitor 統一 bounded timeout；新 UAV 只接受 fresh AP3 Ready，歷史 failed child 不得繞過健康檢查；health grid 使用 `minmax(0, 1fr)` 並允許長錯誤斷行。
+- 驗證：Python312 `backend.tests.test_device_health` 12/12、完整 backend discover 219/219、USRPTelemetry Vitest 24/24、frontend build 通過。完整 frontend suite 152/153（22 個檔案通過）；既有 `SimulationPanel` error mock 缺少 `response.text`，與本 ticket 無關。

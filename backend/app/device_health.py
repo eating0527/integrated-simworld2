@@ -155,14 +155,8 @@ class RaspiHealth:
                 from app import usrp_ctl
 
                 probe = lambda: usrp_ctl.get_drone_health(self.mode)
-            executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(probe)
-            try:
-                value = future.result(timeout=self.timeout)
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
-            return _coerce_result(value, "raspi", now)
-        except (subprocess.TimeoutExpired, TimeoutError, FutureTimeout) as exc:
+            return _coerce_result(probe(), "raspi", now)
+        except (subprocess.TimeoutExpired, TimeoutError) as exc:
             return HealthResult("raspi", "unknown", now, f"Raspberry Pi health timeout: {exc}", stale=True)
         except Exception as exc:
             if "timeout" in str(exc).lower():
@@ -188,6 +182,7 @@ class DeviceHealthMonitor:
         self._results: dict[str, HealthResult] = {}
         self._next: dict[str, float] = {}
         self._failures: dict[str, int] = {name: 0 for name in self.adapters}
+        self._mode: str | None = None
 
     def _check(self, name: str, adapter: Any, now: float) -> HealthResult:
         executor = ThreadPoolExecutor(max_workers=1)
@@ -204,7 +199,12 @@ class DeviceHealthMonitor:
             executor.shutdown(wait=False, cancel_futures=True)
         return result
 
-    def poll(self, *, force: bool = False) -> dict[str, HealthResult]:
+    def poll(self, *, force: bool = False, mode: str | None = None) -> dict[str, HealthResult]:
+        if mode is not None and mode != self._mode:
+            self._mode = mode
+            self._results.pop("raspi", None)
+            self._next.pop("raspi", None)
+            self._failures["raspi"] = 0
         now = self.clock()
         for name, adapter in self.adapters.items():
             if not force and name in self._next and now < self._next[name]:

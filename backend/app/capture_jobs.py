@@ -390,7 +390,7 @@ class CaptureCoordinator:
             self._health_mode = mode
             return {
                 name: result.as_dict()
-                for name, result in self.health_monitor.poll().items()
+                for name, result in self.health_monitor.poll(mode=mode).items()
             }
 
     def status_payload(self, mode: UsrpMode = "test") -> dict:
@@ -659,7 +659,7 @@ class CaptureCoordinator:
         states = self.store.list()
         with self._lock:
             self._health_mode = mode
-            health = self.health_monitor.poll()
+            health = self.health_monitor.poll(mode=mode)
             uav_state = next(
                 (item for item in reversed(states) if item.target in {"uav", "bind"}),
                 None,

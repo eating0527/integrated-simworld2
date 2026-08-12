@@ -213,16 +213,19 @@ const S: Record<string, React.CSSProperties> = {
   },
   health: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
     gap: 6,
     marginTop: 8,
   },
   healthCard: {
+    minWidth: 0,
     padding: '7px',
     borderRadius: 5,
     background: 'rgba(0, 0, 0, 0.2)',
     border: '1px solid rgba(120, 180, 255, 0.12)',
     fontSize: 11,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
 };
 
@@ -562,12 +565,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const usrpMissionId = usrp.mission_id || missionId;
   const ap3Health = health.ap3;
   const raspiHealth = health.raspi;
-  const ap3Ready = ap3Health
-    ? ap3Health.state === 'ready' && !ap3Health.stale
-    : Boolean(status && uav.connection === 'ready');
-  const raspiReady = raspiHealth
-    ? raspiHealth.state === 'ready' && !raspiHealth.stale
-    : Boolean(status && usrp.connection === 'ready');
+  const ap3Ready = ap3Health?.state === 'ready' && !ap3Health.stale;
+  const raspiReady = raspiHealth?.state === 'ready' && !raspiHealth.stale;
   const anyActive = isActive(uav.service) || isActive(usrp.service);
   const overallLabel = missionLabel(status);
   const overallTone = status?.overall_state === 'failed'
@@ -580,7 +579,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const usrpKnown = usrp.connection !== 'unknown' && usrp.service !== 'unknown'
     && usrp.file !== 'unknown' && usrp.phase !== 'unknown';
   const bothReady = uavKnown && usrpKnown && ap3Ready && raspiReady;
-  const canStartUav = uavKnown && !bind && !busy && !isActive(uav.service) && (ap3Ready || uav.service === 'failed');
+  const canStartUav = uavKnown && !bind && !busy && !isActive(uav.service) && ap3Ready;
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
 
   const childSection = (

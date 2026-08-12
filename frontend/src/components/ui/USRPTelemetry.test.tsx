@@ -42,6 +42,18 @@ function captureStatus(options: {
     finished_at: null,
     uav: child(options.uav),
     usrp: child(options.usrp),
+    device_health: {
+      ap3: {
+        device: 'ap3', state: 'ready', checked_at: '2026-06-24T00:00:00Z',
+        last_checked_at: '2026-06-24T00:00:00Z', next_check_at: null,
+        retry_delay: 10, stale: false, error: '',
+      },
+      raspi: {
+        device: 'raspi', state: 'ready', checked_at: '2026-06-24T00:00:00Z',
+        last_checked_at: '2026-06-24T00:00:00Z', next_check_at: null,
+        retry_delay: 10, stale: false, error: '',
+      },
+    },
   };
 }
 
@@ -120,6 +132,9 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByText('USB disconnected')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
+    const healthGrid = screen.getByLabelText('Device Health');
+    expect(healthGrid).toHaveStyle({ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' });
+    expect(screen.getByLabelText('AP3 Device Health')).toHaveStyle({ minWidth: '0', overflowWrap: 'anywhere' });
   });
 
   it('treats stale health as unknown and keeps it separate from a terminal child', async () => {
@@ -147,6 +162,18 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByText('ap3 health result is stale')).toBeInTheDocument();
   });
 
+  it('does not let an old failed child bypass a fresh AP3 health failure', async () => {
+    const status = captureStatus({ missionId: 'old_failed', overall: 'failed', uav: { service: 'failed', file: 'failed' } });
+    status.device_health.ap3.state = 'offline';
+    status.device_health.ap3.error = 'USB disconnected';
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+
+    await openTelemetry();
+
+    expect(await screen.findByRole('button', { name: 'Start UAV' })).toBeDisabled();
+    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Offline');
+  });
+
   it('marks a hanging health probe unknown after its timeout', async () => {
     vi.useFakeTimers();
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
@@ -167,6 +194,37 @@ describe('USRPTelemetry capture controls', () => {
 
     expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Unknown');
     expect(screen.getByLabelText('Raspberry Pi Device Health')).toHaveTextContent('Unknown');
+    vi.useRealTimers();
+  });
+
+  it('refreshes recovered Device Health without a page reload', async () => {
+    vi.useFakeTimers();
+    const offline = captureStatus();
+    offline.device_health.ap3.state = 'offline';
+    offline.device_health.ap3.error = 'USB disconnected';
+    const recovered = captureStatus();
+    let healthCalls = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/health')) {
+        healthCalls += 1;
+        return jsonResponse(healthCalls === 1 ? offline : recovered);
+      }
+      return jsonResponse(captureStatus());
+    });
+
+    render(<USRPTelemetry />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Offline');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Ready');
+    expect(healthCalls).toBeGreaterThanOrEqual(2);
     vi.useRealTimers();
   });
 
