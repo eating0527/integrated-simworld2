@@ -8,6 +8,7 @@
 ## 依賴環境與本機工具
 node_modules/
 .venv/
+.venv312/
 .venv-*/
 venv/
 ENV/
