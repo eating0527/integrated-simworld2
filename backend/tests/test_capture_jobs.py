@@ -30,7 +30,7 @@ class CaptureStoreTests(unittest.TestCase):
         self.assertEqual(loaded, state)
         self.assertTrue((self.root / state.mission_id / "capture.json").exists())
 
-    def test_partial_failure_does_not_stop_other_child(self):
+    def test_partial_failure_degrades_without_stopping_other_child(self):
         from app.capture_jobs import CaptureStore
 
         store = CaptureStore(self.root)
@@ -43,8 +43,227 @@ class CaptureStoreTests(unittest.TestCase):
         store.save(state)
         loaded = store.load(state.mission_id)
 
-        self.assertEqual(loaded.overall_state, "partial_failed")
+        self.assertEqual(loaded.overall_state, "degraded")
         self.assertEqual(loaded.uav.service, "running")
+
+    def test_lifecycle_states_follow_mission_intent(self):
+        from app.capture_jobs import CaptureStore
+
+        cases = [
+            ("starting", "starting", "recording", "idle", "none"),
+            ("running", "running", "recording", "running", "recording"),
+            ("stopping", "stopping", "finalizing", "running", "recording"),
+            ("finalizing", "stopped", "ready", "stopped", "upload_pending"),
+            ("completed", "stopped", "ready", "stopped", "uploaded"),
+            ("completed_with_warning", "stopped", "ready", "failed", "failed"),
+            ("failed", "failed", "failed", "failed", "failed"),
+        ]
+        for expected, uav_service, uav_file, usrp_service, usrp_file in cases:
+            with self.subTest(expected=expected):
+                store = CaptureStore(self.root / expected)
+                state = store.create(
+                    bind=True,
+                    selected_usrp_mode="usrp",
+                    target="bind",
+                )
+                state.started_at = "2026-06-24T00:01:00+00:00"
+                state.uav.service = uav_service
+                state.uav.file = uav_file
+                state.usrp.service = usrp_service
+                state.usrp.file = usrp_file
+
+                store.save(state)
+
+                self.assertEqual(state.overall_state, expected)
+
+    def test_partial_gps_result_needs_a_successful_sibling_for_warning(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=True, selected_usrp_mode="usrp", target="bind")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.uav.service = "failed"
+        state.uav.file = "ready"
+        state.usrp.service = "stopped"
+        state.usrp.file = "uploaded"
+
+        store.save(state)
+
+        self.assertEqual(state.overall_state, "completed_with_warning")
+
+        state.usrp.service = "failed"
+        state.usrp.file = "ready"
+        store.save(state)
+        self.assertEqual(state.overall_state, "failed")
+
+    def test_failed_noise_with_successful_gps_completes_with_warning(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=True, selected_usrp_mode="usrp", target="bind")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.uav.service = "stopped"
+        state.uav.file = "ready"
+        state.usrp.service = "failed"
+        state.usrp.file = "failed"
+
+        store.save(state)
+
+        self.assertEqual(state.overall_state, "completed_with_warning")
+
+    def test_stop_intent_with_uncertain_result_remains_stopping(self):
+        from app.capture_jobs import CaptureStore
+
+        for phase in ("stopping", "stopping_service", "stop_failed"):
+            with self.subTest(phase=phase):
+                store = CaptureStore(self.root / phase)
+                state = store.create(
+                    bind=False,
+                    selected_usrp_mode="usrp",
+                    target="usrp",
+                )
+                state.started_at = "2026-06-24T00:01:00+00:00"
+                state.usrp.phase = phase
+                state.usrp.connection = "offline"
+                state.usrp.service = "presumed_running"
+                state.usrp.file = "finalizing"
+
+                store.save(state)
+
+                self.assertEqual(state.overall_state, "stopping")
+
+    def test_runtime_reconciliation_is_degraded(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=True, selected_usrp_mode="usrp", target="bind")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.uav.service = "running"
+        state.uav.file = "recording"
+        state.usrp.phase = "reconciling"
+        state.usrp.connection = "offline"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+
+        store.save(state)
+
+        self.assertEqual(state.overall_state, "degraded")
+
+    def test_presumed_running_without_stop_intent_is_degraded(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=False, selected_usrp_mode="usrp", target="usrp")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.usrp.phase = "recording"
+        state.usrp.connection = "offline"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+
+        store.save(state)
+
+        self.assertEqual(state.overall_state, "degraded")
+
+    def test_uncertain_and_offline_active_missions_are_degraded(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=True, selected_usrp_mode="usrp", target="bind")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.uav.service = "running"
+        state.uav.file = "recording"
+        state.usrp.connection = "offline"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+
+        store.save(state)
+
+        self.assertEqual(state.overall_state, "degraded")
+
+    def test_single_child_uses_the_same_terminal_contract(self):
+        from app.capture_jobs import CaptureStore
+
+        cases = [
+            ("completed", "stopped", "ready", "ready"),
+            ("failed", "failed", "failed", "ready"),
+            ("degraded", "presumed_running", "recording", "offline"),
+            ("finalizing", "stopped", "upload_pending", "ready"),
+        ]
+        for expected, service, file_state, connection in cases:
+            with self.subTest(expected=expected):
+                store = CaptureStore(self.root / f"single-{expected}")
+                state = store.create(
+                    bind=False,
+                    selected_usrp_mode="test",
+                    target="uav",
+                )
+                state.started_at = "2026-06-24T00:01:00+00:00"
+                state.uav.connection = connection
+                state.uav.service = service
+                state.uav.file = file_state
+
+                store.save(state)
+
+                self.assertEqual(state.overall_state, expected)
+
+    def test_terminal_state_sets_finished_at_once(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=False, selected_usrp_mode="test", target="uav")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.uav.service = "failed"
+        state.uav.file = "failed"
+
+        store.save(state)
+        finished_at = state.finished_at
+        store.save(state)
+
+        self.assertIsNotNone(finished_at)
+        self.assertEqual(state.finished_at, finished_at)
+
+    def test_legacy_partial_failed_is_accepted_but_never_persisted(self):
+        from app.capture_jobs import CaptureStore
+
+        payload = {
+            "mission_id": "legacy",
+            "target": "bind",
+            "bind": True,
+            "overall_state": "partial_failed",
+            "created_at": "2026-06-24T00:00:00+00:00",
+            "started_at": "2026-06-24T00:01:00+00:00",
+            "uav": {"service": "running", "file": "recording"},
+            "usrp": {"service": "failed", "file": "failed"},
+        }
+        path = self.root / "legacy" / "capture.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        store = CaptureStore(self.root)
+
+        state = store.load("legacy")
+
+        self.assertEqual(state.overall_state, "degraded")
+        store.save(state)
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved["overall_state"], "degraded")
+
+    def test_persisted_unknown_phase_loads_as_canonical_unknown(self):
+        from app.capture_jobs import CaptureStore
+
+        payload = {
+            "mission_id": "legacy-phase",
+            "target": "uav",
+            "bind": False,
+            "created_at": "2026-06-24T00:00:00+00:00",
+            "uav": {"phase": "future_phase"},
+        }
+        path = self.root / "legacy-phase" / "capture.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        state = CaptureStore(self.root).load("legacy-phase")
+
+        self.assertEqual(state.uav.phase, "unknown")
 
     def test_completed_requires_terminal_children(self):
         from app.capture_jobs import CaptureStore
@@ -59,6 +278,20 @@ class CaptureStoreTests(unittest.TestCase):
         store.save(state)
 
         self.assertEqual(store.load(state.mission_id).overall_state, "completed")
+
+    def test_terminal_success_ignores_later_health_connection_change(self):
+        from app.capture_jobs import CaptureStore
+
+        store = CaptureStore(self.root)
+        state = store.create(bind=False, selected_usrp_mode="test", target="uav")
+        state.started_at = "2026-06-24T00:01:00+00:00"
+        state.uav.connection = "offline"
+        state.uav.service = "stopped"
+        state.uav.file = "ready"
+
+        store.save(state)
+
+        self.assertEqual(state.overall_state, "completed")
 
 
 class FakeProcess:
@@ -478,7 +711,7 @@ class BindCoordinatorTests(unittest.TestCase):
 
         state = self.coordinator.start_bind("usrp")
 
-        self.assertEqual(state.overall_state, "partial_failed")
+        self.assertEqual(state.overall_state, "degraded")
         self.assertEqual(state.uav.service, "running")
         self.assertEqual(state.usrp.service, "failed")
 
@@ -503,6 +736,17 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(stopped.uav.file, "ready")
         self.assertEqual(stopped.usrp.file, "uploaded")
         self.assertEqual(stopped.overall_state, "completed")
+
+    def test_usrp_stop_failure_records_stop_intent(self):
+        state = self.coordinator.start_usrp("usrp")
+        self.backend.stop_capture_job.side_effect = RuntimeError("SSH timeout")
+
+        stopped = self.coordinator.stop_usrp(state.mission_id)
+
+        self.assertEqual(stopped.usrp.phase, "stop_failed")
+        self.assertEqual(stopped.usrp.service, "presumed_running")
+        self.assertEqual(stopped.usrp.connection, "offline")
+        self.assertEqual(stopped.overall_state, "stopping")
 
     def test_idle_status_reports_independent_readiness(self):
         state = self.coordinator.status("test")

@@ -25,6 +25,7 @@ function captureStatus(options: {
     connection: 'ready',
     service: 'idle',
     file: 'none',
+    phase: 'idle',
     error: '',
     path: '',
     pid: null,
@@ -167,6 +168,114 @@ describe('USRPTelemetry capture controls', () => {
     expect(await screen.findByText('Presumed running')).toBeInTheDocument();
     expect(screen.getByText('Pending upload')).toBeInTheDocument();
     expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+  });
+
+  it('drives the mission badge from the canonical overall state', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_degraded',
+      bind: true,
+      overall: 'degraded',
+      uav: { service: 'failed', file: 'failed' },
+      usrp: { service: 'running', file: 'recording' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('DEGRADED · GPS FAILED · NOISE RECORDING')).toBeInTheDocument();
+  });
+
+  it('prioritizes offline over uncertain degraded reasons', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_offline',
+      bind: true,
+      overall: 'degraded',
+      uav: { connection: 'ready', service: 'presumed_running', file: 'recording' },
+      usrp: { connection: 'offline', service: 'presumed_running', file: 'recording' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText(/^DEGRADED · NOISE OFFLINE/)).toBeInTheDocument();
+  });
+
+  it('shows completed-with-warning child context', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_warning',
+      bind: true,
+      overall: 'completed_with_warning',
+      uav: { service: 'stopped', file: 'ready' },
+      usrp: { service: 'failed', file: 'failed' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('COMPLETED WITH WARNING · NOISE FAILED')).toBeInTheDocument();
+  });
+
+  it('shows a failed GPS reason for completed-with-warning missions', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_gps_warning',
+      bind: true,
+      overall: 'completed_with_warning',
+      uav: { service: 'failed', file: 'ready' },
+      usrp: { service: 'stopped', file: 'uploaded' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('COMPLETED WITH WARNING · GPS FAILED')).toBeInTheDocument();
+  });
+
+  it('normalizes unknown child contract values safely', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'unknown_child',
+      overall: 'future_state',
+      uav: { connection: 'future', service: 'future', file: 'future', phase: 'future' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
+    const gps = screen.getByText('無人機 GPS 採樣').closest('section');
+    expect(gps).not.toBeNull();
+    expect(within(gps as HTMLElement).getAllByText('Unknown')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
+  });
+
+  it('keeps legacy children without phase idle and operable', async () => {
+    const payload = captureStatus({ missionId: 'legacy_child' });
+    delete (payload.uav as Partial<typeof payload.uav>).phase;
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(payload));
+
+    await openTelemetry();
+
+    await screen.findByText('Mission: legacy_child');
+    const gps = screen.getByText('無人機 GPS 採樣').closest('section');
+    expect(gps).not.toBeNull();
+    expect(within(gps as HTMLElement).getByText('Phase').nextElementSibling).toHaveTextContent('Idle');
+    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeEnabled();
+  });
+
+  it('shows unknown for missing or unsupported overall states', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse({
+      ...captureStatus({ missionId: 'future_state' }),
+      overall_state: 'future_state',
+    }));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
+    expect(screen.queryByText(/Mission: future_state · ready/i)).not.toBeInTheDocument();
+  });
+
+  it('does not default a missing overall state to ready', async () => {
+    const payload = captureStatus({ missionId: 'missing_state' });
+    delete (payload as Partial<typeof payload>).overall_state;
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(payload));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
   });
 
   it('restores active Bind missions and offers individual stop plus Stop All', async () => {

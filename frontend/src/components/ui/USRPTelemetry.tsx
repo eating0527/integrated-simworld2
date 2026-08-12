@@ -9,17 +9,22 @@ type SamplingMode = 'test' | 'usrp';
 type ConnectionState = 'ready' | 'offline' | 'unknown';
 type ServiceState = 'idle' | 'starting' | 'running' | 'presumed_running' | 'stopping' | 'stopped' | 'failed';
 type FileState = 'none' | 'recording' | 'finalizing' | 'ready' | 'upload_pending' | 'uploaded' | 'failed';
-type CapturePhase = 'idle' | 'preflight' | 'connecting' | 'configuring' | 'starting_service' | 'recording' | 'stopping_service' | 'finalizing_file' | 'upload_pending' | 'uploading' | 'completed' | 'reconciling' | 'failed';
+type ServiceDisplay = ServiceState | 'unknown';
+type FileDisplay = FileState | 'unknown';
+type OverallState = 'ready' | 'starting' | 'running' | 'degraded' | 'stopping' | 'finalizing' | 'completed' | 'completed_with_warning' | 'failed';
+type DisplayState = OverallState | 'unknown';
+type CapturePhase = 'idle' | 'preflight' | 'connecting' | 'configuring' | 'starting_service' | 'recording' | 'stopping' | 'stopping_service' | 'finalizing_file' | 'upload_pending' | 'uploading' | 'completed' | 'stopped' | 'reconciling' | 'stop_failed' | 'resume_timeout' | 'failed';
+type PhaseDisplay = CapturePhase | 'unknown';
 
 interface ChildState {
   mission_id: string;
   connection: ConnectionState;
-  service: ServiceState;
-  file: FileState;
+  service: ServiceDisplay;
+  file: FileDisplay;
   error: string;
   path: string;
   pid: number | null;
-  phase?: CapturePhase;
+  phase?: PhaseDisplay;
 }
 
 interface CaptureStatus {
@@ -27,7 +32,7 @@ interface CaptureStatus {
   target: 'uav' | 'usrp' | 'bind';
   bind: boolean;
   selected_usrp_mode: SamplingMode;
-  overall_state: string;
+  overall_state: DisplayState;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -46,11 +51,13 @@ const EMPTY_CHILD: ChildState = {
   phase: 'idle',
 };
 
-const PHASE_LABELS: Record<CapturePhase, string> = {
+const PHASE_LABELS: Record<PhaseDisplay, string> = {
   idle: 'Idle', preflight: 'Preflight', connecting: 'Connecting', configuring: 'Configuring',
   starting_service: 'Starting service', recording: 'Recording', stopping_service: 'Stopping service',
   finalizing_file: 'Finalizing CSV', upload_pending: 'Upload pending', uploading: 'Uploading',
-  completed: 'Complete', reconciling: 'Reconciling presumed-running state', failed: 'Failed',
+  stopping: 'Stopping', completed: 'Complete', stopped: 'Stopped',
+  reconciling: 'Reconciling presumed-running state', stop_failed: 'Stop failed',
+  resume_timeout: 'Resume timeout', failed: 'Failed', unknown: 'Unknown',
 };
 
 const CONNECTION_LABELS: Record<ConnectionState, string> = {
@@ -59,7 +66,7 @@ const CONNECTION_LABELS: Record<ConnectionState, string> = {
   unknown: 'Unknown',
 };
 
-const SERVICE_LABELS: Record<ServiceState, string> = {
+const SERVICE_LABELS: Record<ServiceDisplay, string> = {
   idle: 'Idle',
   starting: 'Starting',
   running: 'Running',
@@ -67,9 +74,10 @@ const SERVICE_LABELS: Record<ServiceState, string> = {
   stopping: 'Stopping',
   stopped: 'Stopped',
   failed: 'Failed',
+  unknown: 'Unknown',
 };
 
-const FILE_LABELS: Record<FileState, string> = {
+const FILE_LABELS: Record<FileDisplay, string> = {
   none: 'None',
   recording: 'Recording',
   finalizing: 'Finalizing',
@@ -77,6 +85,18 @@ const FILE_LABELS: Record<FileState, string> = {
   upload_pending: 'Pending upload',
   uploaded: 'Uploaded',
   failed: 'Failed',
+  unknown: 'Unknown',
+};
+
+const OVERALL_STATES = new Set<OverallState>([
+  'ready', 'starting', 'running', 'degraded', 'stopping', 'finalizing',
+  'completed', 'completed_with_warning', 'failed',
+]);
+
+const OVERALL_LABELS: Record<DisplayState, string> = {
+  ready: 'READY', starting: 'STARTING', running: 'RUNNING', degraded: 'DEGRADED',
+  stopping: 'STOPPING', finalizing: 'FINALIZING', completed: 'COMPLETED',
+  completed_with_warning: 'COMPLETED WITH WARNING', failed: 'FAILED', unknown: 'UNKNOWN',
 };
 
 const S: Record<string, React.CSSProperties> = {
@@ -181,12 +201,16 @@ const S: Record<string, React.CSSProperties> = {
   },
 };
 
-function isActive(service: ServiceState): boolean {
+function isActive(service: ServiceDisplay): boolean {
   return ['starting', 'running', 'presumed_running', 'stopping'].includes(service);
 }
 
-function isPollingPhase(phase?: CapturePhase): boolean {
-  return Boolean(phase && !['idle', 'completed', 'failed'].includes(phase));
+function isPollingPhase(phase?: PhaseDisplay): boolean {
+  return Boolean(phase && [
+    'preflight', 'connecting', 'configuring', 'starting_service', 'recording',
+    'stopping', 'stopping_service', 'finalizing_file', 'upload_pending',
+    'uploading', 'reconciling', 'stop_failed',
+  ].includes(phase));
 }
 
 const STEP_PHASES: Record<string, CapturePhase[]> = {
@@ -206,6 +230,7 @@ function stepState(step: string, child: ChildState, index: number, steps: string
   if (child.error || child.phase === 'failed' || child.file === 'failed' || child.service === 'failed') return 'error';
   if (child.service === 'presumed_running' || child.phase === 'reconciling') return 'warning';
   const phase = child.phase ?? 'idle';
+  if (phase === 'unknown') return 'waiting';
   const currentIndex = steps.findIndex(item => (STEP_PHASES[item] ?? []).includes(phase));
   if (phase === 'completed' || (child.file === 'uploaded' && index === steps.length - 1)) return 'completed';
   if (phase === 'upload_pending' || phase === 'uploading') {
@@ -219,8 +244,97 @@ function stepState(step: string, child: ChildState, index: number, steps: string
 
 const STEP_MARKERS = { completed: '✓', current: '●', waiting: '○', warning: '!', error: '×' };
 
-function canStop(service: ServiceState): boolean {
+function canStop(service: ServiceDisplay): boolean {
   return ['starting', 'running', 'presumed_running'].includes(service);
+}
+
+function normalizeOverall(value: unknown): DisplayState {
+  return typeof value === 'string' && OVERALL_STATES.has(value as OverallState)
+    ? value as OverallState
+    : 'unknown';
+}
+
+const CONNECTION_STATES = new Set<ConnectionState>(['ready', 'offline', 'unknown']);
+const SERVICE_STATES = new Set<ServiceState>(['idle', 'starting', 'running', 'presumed_running', 'stopping', 'stopped', 'failed']);
+const FILE_STATES = new Set<FileState>(['none', 'recording', 'finalizing', 'ready', 'upload_pending', 'uploaded', 'failed']);
+const CAPTURE_PHASES = new Set<CapturePhase>([
+  'idle', 'preflight', 'connecting', 'configuring', 'starting_service', 'recording',
+  'stopping', 'stopping_service', 'finalizing_file', 'upload_pending', 'uploading',
+  'completed', 'stopped', 'reconciling', 'stop_failed', 'resume_timeout', 'failed',
+]);
+
+function normalizeChild(value: unknown): ChildState {
+  const child = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const connection = typeof child.connection === 'string' && CONNECTION_STATES.has(child.connection as ConnectionState)
+    ? child.connection as ConnectionState
+    : 'unknown';
+  const service = typeof child.service === 'string' && SERVICE_STATES.has(child.service as ServiceState)
+    ? child.service as ServiceState
+    : 'unknown';
+  const file = typeof child.file === 'string' && FILE_STATES.has(child.file as FileState)
+    ? child.file as FileState
+    : 'unknown';
+  const phase = child.phase === undefined
+    ? 'idle'
+    : typeof child.phase === 'string' && CAPTURE_PHASES.has(child.phase as CapturePhase)
+      ? child.phase as CapturePhase
+      : 'unknown';
+  return {
+    mission_id: String(child.mission_id ?? ''),
+    connection,
+    service,
+    file,
+    phase,
+    error: String(child.error ?? ''),
+    path: String(child.path ?? ''),
+    pid: typeof child.pid === 'number' ? child.pid : null,
+  };
+}
+
+function missionIssue(status: CaptureStatus, failuresOnly = false): string | null {
+  const children = [['GPS', status.uav], ['NOISE', status.usrp]] as const;
+  const failed = children
+    .find(([, child]) => child.service === 'failed' || child.file === 'failed');
+  if (failed) return `${failed[0]} FAILED`;
+  if (failuresOnly) return null;
+  const offline = children.find(([, child]) => child.connection === 'offline');
+  if (offline) return `${offline[0]} OFFLINE`;
+  const uncertain = children.find(([, child]) => (
+    child.service === 'presumed_running' || child.phase === 'reconciling'
+  ));
+  return uncertain ? `${uncertain[0]} UNCERTAIN` : null;
+}
+
+function childAction(name: 'GPS' | 'NOISE', child: ChildState): string | null {
+  if (
+    child.connection !== 'ready'
+    || child.service === 'failed'
+    || child.service === 'presumed_running'
+    || child.file === 'failed'
+  ) return null;
+  if (child.file === 'recording') return `${name} RECORDING`;
+  if (child.service === 'starting') return `${name} STARTING`;
+  if (child.service === 'stopping') return `${name} STOPPING`;
+  if (child.file === 'finalizing' || child.file === 'upload_pending') return `${name} FINALIZING`;
+  return null;
+}
+
+function missionLabel(status: CaptureStatus | null): string {
+  if (!status) return 'UNKNOWN';
+  const label = OVERALL_LABELS[status.overall_state];
+  if (status.overall_state === 'degraded') {
+    const issue = missionIssue(status);
+    const action = issue?.startsWith('GPS ')
+      ? childAction('NOISE', status.usrp)
+      : childAction('GPS', status.uav);
+    return [label, issue, action].filter(Boolean).join(' · ');
+  }
+  if (status.overall_state === 'completed_with_warning') {
+    return [label, missionIssue(status, true)]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  return label;
 }
 
 function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
@@ -229,12 +343,12 @@ function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
     target: value.target === 'usrp' || value.target === 'bind' ? value.target : 'uav',
     bind: Boolean(value.bind),
     selected_usrp_mode: value.selected_usrp_mode === 'usrp' ? 'usrp' : 'test',
-    overall_state: String(value.overall_state ?? 'ready'),
+    overall_state: normalizeOverall(value.overall_state),
     created_at: String(value.created_at ?? ''),
     started_at: value.started_at ?? null,
     finished_at: value.finished_at ?? null,
-    uav: { ...EMPTY_CHILD, ...(value.uav ?? {}) },
-    usrp: { ...EMPTY_CHILD, ...(value.usrp ?? {}) },
+    uav: normalizeChild(value.uav),
+    usrp: normalizeChild(value.usrp),
   };
 }
 
@@ -352,8 +466,18 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const uavMissionId = uav.mission_id || missionId;
   const usrpMissionId = usrp.mission_id || missionId;
   const anyActive = isActive(uav.service) || isActive(usrp.service);
-  const bothReady = uav.connection === 'ready' && usrp.connection === 'ready';
-  const canStartUav = !bind && !busy && !isActive(uav.service) && (uav.connection === 'ready' || uav.service === 'failed');
+  const overallLabel = missionLabel(status);
+  const overallTone = status?.overall_state === 'failed'
+    ? 'danger'
+    : status?.overall_state === 'degraded' || status?.overall_state === 'completed_with_warning'
+      ? 'warning'
+      : anyActive ? 'live' : 'waiting';
+  const uavKnown = uav.connection !== 'unknown' && uav.service !== 'unknown'
+    && uav.file !== 'unknown' && uav.phase !== 'unknown';
+  const usrpKnown = usrp.connection !== 'unknown' && usrp.service !== 'unknown'
+    && usrp.file !== 'unknown' && usrp.phase !== 'unknown';
+  const bothReady = uavKnown && usrpKnown && uav.connection === 'ready' && usrp.connection === 'ready';
+  const canStartUav = uavKnown && !bind && !busy && !isActive(uav.service) && (uav.connection === 'ready' || uav.service === 'failed');
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
 
   const childSection = (
@@ -368,7 +492,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         <span style={S.key}>Connection</span>
         <span style={S.value}>{CONNECTION_LABELS[child.connection]}</span>
         <span style={S.key}>Phase</span>
-        <span style={S.value} aria-live="polite">{PHASE_LABELS[child.phase ?? 'idle']}</span>
+        <span style={S.value} aria-live="polite">{PHASE_LABELS[child.phase ?? 'unknown']}</span>
         <span style={S.key}>Service</span>
         <span style={S.value}>{SERVICE_LABELS[child.service]}</span>
         <span style={S.key}>File</span>
@@ -392,7 +516,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     <MinPanel
       title="採樣控制面板"
       className="panel-ui"
-      actions={<PanelStatus tone={anyActive ? 'live' : 'waiting'} label={anyActive ? 'Active' : 'Ready'} />}
+      actions={<PanelStatus tone={overallTone} label={overallLabel} />}
     >
       <div style={S.control}>
         <div style={S.topRow}>
@@ -403,8 +527,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             role="switch"
             aria-label="Bind services"
             aria-checked={bind}
-            disabled={busy || anyActive}
-            style={{ ...S.button, ...(bind ? S.active : null), ...disabledStyle(busy || anyActive) }}
+            disabled={busy || anyActive || !uavKnown || !usrpKnown}
+            style={{ ...S.button, ...(bind ? S.active : null), ...disabledStyle(busy || anyActive || !uavKnown || !usrpKnown) }}
             onClick={() => setBind(value => !value)}
           >
             {bind ? '啟用' : '關閉'}
@@ -446,11 +570,11 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
                   type="button"
                   aria-label={value === 'test' ? 'Test mode' : 'USRP mode'}
                   aria-pressed={mode === value}
-                  disabled={busy || isActive(usrp.service)}
+                  disabled={busy || isActive(usrp.service) || !usrpKnown}
                   style={{
                     ...S.button,
                     ...(mode === value ? S.active : null),
-                    ...disabledStyle(busy || isActive(usrp.service)),
+                    ...disabledStyle(busy || isActive(usrp.service) || !usrpKnown),
                   }}
                   onClick={() => setMode(value)}
                 >
@@ -461,8 +585,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             <div style={S.actions}>
               <button
                 type="button"
-                style={{ ...S.button, ...disabledStyle(bind || busy || isActive(usrp.service) || usrp.connection !== 'ready') }}
-                disabled={bind || busy || isActive(usrp.service) || usrp.connection !== 'ready'}
+                style={{ ...S.button, ...disabledStyle(bind || busy || !usrpKnown || isActive(usrp.service) || usrp.connection !== 'ready') }}
+                disabled={bind || busy || !usrpKnown || isActive(usrp.service) || usrp.connection !== 'ready'}
                 onClick={() => void request('/api/capture/usrp/start', startBody)}
               >
                 Start USRP
@@ -501,7 +625,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           </div>
         ) : null}
 
-        {missionId ? <div style={S.mission}>Mission: {missionId} · {status?.overall_state}</div> : null}
+        {missionId ? <div style={S.mission}>Mission: {missionId}</div> : null}
         {error ? <div role="alert" style={S.error}>{error}</div> : null}
       </div>
 
