@@ -331,6 +331,28 @@ describe('USRPTelemetry capture controls', () => {
     expect(await screen.findByText(/^DEGRADED · NOISE OFFLINE/)).toBeInTheDocument();
   });
 
+  it('shows GPS offline while Noise keeps recording after freshness loss', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'gps_stale',
+      bind: true,
+      overall: 'degraded',
+      uav: {
+        connection: 'offline',
+        service: 'presumed_running',
+        file: 'recording',
+        phase: 'reconciling',
+        error: 'GPS sample is stale',
+      },
+      usrp: { service: 'running', file: 'recording' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('DEGRADED · GPS OFFLINE · NOISE RECORDING')).toBeInTheDocument();
+    expect(screen.getAllByText('GPS sample is stale').length).toBeGreaterThan(0);
+    expect(screen.getByText('Presumed running')).toBeInTheDocument();
+  });
+
   it('shows completed-with-warning child context', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'bound_warning',

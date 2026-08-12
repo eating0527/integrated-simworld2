@@ -25,6 +25,9 @@ interface ChildState {
   path: string;
   pid: number | null;
   phase?: PhaseDisplay;
+  last_sample_at?: string | null;
+  disconnected_at?: string | null;
+  resume_deadline_at?: string | null;
 }
 
 interface DeviceHealth {
@@ -345,6 +348,9 @@ function normalizeChild(value: unknown): ChildState {
     error: String(child.error ?? ''),
     path: String(child.path ?? ''),
     pid: typeof child.pid === 'number' ? child.pid : null,
+    last_sample_at: typeof child.last_sample_at === 'string' ? child.last_sample_at : null,
+    disconnected_at: typeof child.disconnected_at === 'string' ? child.disconnected_at : null,
+    resume_deadline_at: typeof child.resume_deadline_at === 'string' ? child.resume_deadline_at : null,
   };
 }
 
@@ -698,6 +704,10 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         <span style={S.value}>{SERVICE_LABELS[child.service]}</span>
         <span style={S.key}>File</span>
         <span style={S.value}>{FILE_LABELS[child.file]}</span>
+        {child.last_sample_at ? <>
+          <span style={S.key}>Last GPS</span>
+          <span style={S.value}>{child.last_sample_at}</span>
+        </> : null}
       </div>
       <div style={S.steps} aria-label={`${title} progress`}>
         {steps.map((step, index) => {

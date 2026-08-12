@@ -2618,6 +2618,18 @@ async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
         )
         _append_gps_sync_log(bundle_dir, log_line)
 
+    # Keep managed AP3 mission metadata in the coordinator's atomic state
+    # store.  GPS sync also supports standalone incoming bundles, so a missing
+    # capture mission is intentionally harmless.
+    try:
+        await asyncio.to_thread(
+            capture_coordinator.record_gps_sample,
+            bundle_id,
+            point.time_stamp,
+        )
+    except Exception as exc:
+        logger.warning("GPS sample persisted to CSV but mission freshness update failed: %s", exc)
+
     gps_manager.names[point.device_id] = point.device_name
     gps_manager.update_gps(point.device_id, payload)
     await gps_manager.broadcast(json.dumps(payload, ensure_ascii=False))

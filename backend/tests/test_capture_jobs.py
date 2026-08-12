@@ -563,6 +563,267 @@ class IndependentUavTests(unittest.TestCase):
         self.assertIn("backend", dashboard.uav.error.lower())
 
 
+class Ap3FreshnessTests(unittest.TestCase):
+    def setUp(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+        from app.device_health import HealthResult
+
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.root = self.repo_root / ".test_tmp" / uuid.uuid4().hex
+        self.root.mkdir(parents=True)
+        self.now = [datetime(2026, 8, 12, 0, 0, tzinfo=timezone.utc)]
+        self.process = FakeProcess()
+        self.run_command = Mock(return_value=Mock(returncode=0, stdout="", stderr=""))
+        self.health = Mock()
+        self.health.poll.return_value = {
+            "ap3": HealthResult("ap3", "ready", 0.0, ""),
+            "raspi": HealthResult("raspi", "ready", 0.0, ""),
+        }
+        self.coordinator = CaptureCoordinator(
+            CaptureStore(self.root),
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=Mock(return_value=self.process),
+            health_monitor=self.health,
+            clock=lambda: self.now[0],
+            gps_freshness_seconds=10,
+            resume_window_seconds=300,
+        )
+
+    def test_successful_sample_persists_last_sample_time(self):
+        state = self.coordinator.start_uav()
+
+        self.coordinator.record_gps_sample(state.mission_id, "2026-08-12T00:00:01Z")
+
+        saved = self.coordinator.store.load(state.mission_id)
+        self.assertEqual(saved.uav.last_sample_at, "2026-08-12T00:00:01+00:00")
+        self.assertIsNone(saved.uav.disconnected_at)
+        self.assertIsNone(saved.uav.resume_deadline_at)
+
+    def test_status_snapshot_cannot_overwrite_concurrent_gps_sample(self):
+        class BlockingListStore:
+            def __init__(self, inner):
+                self.inner = inner
+                self.entered = threading.Event()
+                self.release = threading.Event()
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def list(self):
+                # Capture the status snapshot before waiting; a pre-fix status
+                # implementation could then release the lock and save this
+                # stale object after record_gps_sample had persisted its row.
+                states = self.inner.list()
+                self.entered.set()
+                self.release.wait(timeout=1)
+                return states
+
+        state = self.coordinator.store.create(
+            bind=True,
+            selected_usrp_mode="test",
+            target="bind",
+            mission_id="status_sample_race",
+        )
+        state.started_at = "2026-08-11T23:59:00+00:00"
+        state.uav.connection = "ready"
+        state.uav.service = "running"
+        state.uav.file = "recording"
+        state.uav.phase = "recording"
+        state.uav.path = str(self.root / state.mission_id / "gps.csv")
+        state.uav.last_sample_at = "2026-08-11T23:59:00+00:00"
+        state.usrp.connection = "ready"
+        state.usrp.service = "stopped"
+        state.usrp.file = "uploaded"
+        state.usrp.phase = "completed"
+        self.coordinator.store.save(state)
+        self.coordinator._uav_processes[state.mission_id] = self.process
+        wrapped = BlockingListStore(self.coordinator.store)
+        self.coordinator.store = wrapped
+        status_result: list[object] = []
+        sample_result: list[object] = []
+
+        status_thread = threading.Thread(
+            target=lambda: status_result.append(self.coordinator.status("test")),
+        )
+        status_thread.start()
+        self.assertTrue(wrapped.entered.wait(timeout=1))
+
+        sample_thread = threading.Thread(
+            target=lambda: sample_result.append(
+                self.coordinator.record_gps_sample(
+                    state.mission_id,
+                    "2026-08-12T00:00:01Z",
+                )
+            ),
+        )
+        sample_thread.start()
+        # status() owns the coordinator lock while list() is blocked; the GPS
+        # write must wait instead of racing an old status snapshot.
+        sample_thread.join(timeout=0.05)
+        self.assertTrue(sample_thread.is_alive())
+
+        wrapped.release.set()
+        status_thread.join(timeout=1)
+        sample_thread.join(timeout=1)
+        self.assertFalse(status_thread.is_alive())
+        self.assertFalse(sample_thread.is_alive())
+        self.assertEqual(len(status_result), 1)
+        self.assertEqual(len(sample_result), 1)
+        saved = self.coordinator.store.load(state.mission_id)
+        self.assertEqual(saved.uav.last_sample_at, "2026-08-12T00:00:01+00:00")
+
+    def test_live_recorder_without_fresh_sample_enters_reconciling(self):
+        state = self.coordinator.start_uav()
+        self.now[0] += timedelta(seconds=11)
+
+        dashboard = self.coordinator.status("test")
+
+        self.assertEqual(dashboard.uav.connection, "offline")
+        self.assertEqual(dashboard.uav.service, "presumed_running")
+        self.assertEqual(dashboard.uav.phase, "reconciling")
+        self.assertEqual(dashboard.uav.file, "recording")
+        self.assertEqual(dashboard.overall_state, "degraded")
+        self.assertIsNotNone(dashboard.uav.disconnected_at)
+        self.assertIsNotNone(dashboard.uav.resume_deadline_at)
+        self.assertEqual(
+            dashboard.uav.resume_deadline_at,
+            "2026-08-12T00:05:00+00:00",
+        )
+        self.assertEqual(dashboard.usrp.service, "idle")
+
+    def test_bound_ap3_stale_keeps_usrp_child_unchanged(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+        from app.device_health import HealthResult
+
+        backend = Mock()
+        store = CaptureStore(self.root / "bound")
+        coordinator = CaptureCoordinator(
+            store,
+            repo_root=self.repo_root,
+            usrp_backend=backend,
+            health_monitor=self.health,
+            clock=lambda: self.now[0],
+            gps_freshness_seconds=10,
+            resume_window_seconds=300,
+        )
+        state = store.create(
+            bind=True,
+            selected_usrp_mode="usrp",
+            target="bind",
+            mission_id="bound_stale",
+        )
+        state.started_at = self.now[0].isoformat()
+        state.uav.connection = "ready"
+        state.uav.service = "running"
+        state.uav.file = "recording"
+        state.uav.phase = "recording"
+        state.uav.path = str(store.root / state.mission_id / "gps.csv")
+        state.usrp.connection = "ready"
+        state.usrp.service = "running"
+        state.usrp.file = "recording"
+        state.usrp.phase = "recording"
+        store.save(state)
+        coordinator._uav_processes[state.mission_id] = self.process
+        backend.get_capture_job.return_value = {
+            "service_state": "running",
+            "mission_state": {
+                "mission_id": state.mission_id,
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+        self.health.poll.return_value = {
+            "ap3": HealthResult("ap3", "offline", 0.0, "USB disconnected"),
+            "raspi": HealthResult("raspi", "ready", 0.0, ""),
+        }
+        before = (
+            state.usrp.mission_id,
+            state.usrp.service,
+            state.usrp.file,
+        )
+        dashboard = coordinator.status("usrp")
+        after = (
+            dashboard.usrp.mission_id,
+            dashboard.usrp.service,
+            dashboard.usrp.file,
+        )
+
+        self.assertEqual(dashboard.uav.connection, "offline")
+        self.assertEqual(dashboard.uav.phase, "reconciling")
+        self.assertEqual(after, before)
+        self.assertEqual(dashboard.usrp.mission_id, state.mission_id)
+        self.assertEqual(dashboard.overall_state, "degraded")
+
+    def test_fresh_sample_does_not_resume_reconciling_child(self):
+        state = self.coordinator.start_uav()
+        self.now[0] += timedelta(seconds=11)
+        degraded = self.coordinator.status("test")
+        self.assertEqual(degraded.uav.phase, "reconciling")
+        deadline = degraded.uav.resume_deadline_at
+
+        self.now[0] += timedelta(seconds=1)
+        observed = self.coordinator.record_gps_sample(
+            state.mission_id,
+            self.now[0].isoformat(),
+        )
+
+        self.assertEqual(observed.mission_id, state.mission_id)
+        self.assertEqual(observed.uav.service, "presumed_running")
+        self.assertEqual(observed.uav.phase, "reconciling")
+        self.assertEqual(observed.uav.connection, "offline")
+        self.assertEqual(observed.uav.last_sample_at, "2026-08-12T00:00:12+00:00")
+        self.assertEqual(observed.uav.resume_deadline_at, deadline)
+        self.assertEqual(len(self.coordinator.store.list()), 1)
+
+    def test_fresh_sample_and_live_process_remain_running(self):
+        state = self.coordinator.start_uav()
+        self.coordinator.record_gps_sample(state.mission_id, "2026-08-12T00:00:01Z")
+        self.now[0] += timedelta(seconds=5)
+
+        dashboard = self.coordinator.status("test")
+
+        self.assertEqual(dashboard.uav.service, "running")
+        self.assertEqual(dashboard.uav.phase, "recording")
+        self.assertEqual(dashboard.uav.connection, "ready")
+        self.assertEqual(dashboard.uav.last_sample_at, "2026-08-12T00:00:01+00:00")
+
+    def test_process_death_marks_failed_phase(self):
+        state = self.coordinator.start_uav()
+        self.process.terminated = True
+
+        dashboard = self.coordinator.status("test")
+
+        self.assertEqual(dashboard.mission_id, state.mission_id)
+        self.assertEqual(dashboard.uav.service, "failed")
+        self.assertEqual(dashboard.uav.file, "failed")
+        self.assertEqual(dashboard.uav.phase, "failed")
+
+    def test_resume_deadline_is_persisted_without_expiry_transition(self):
+        state = self.coordinator.start_uav()
+        gps_path = Path(state.uav.path)
+        gps_path.write_text(
+            "time_stamp,lat,lon,alt,alt_mode\n"
+            "2026-08-12T00:00:00+00:00,24.0,121.0,10,relative\n",
+            encoding="utf-8",
+        )
+        self.coordinator.record_gps_sample(state.mission_id, "2026-08-12T00:00:00Z")
+        self.now[0] += timedelta(seconds=11)
+        degraded = self.coordinator.status("test")
+        self.assertEqual(
+            degraded.uav.resume_deadline_at,
+            "2026-08-12T00:05:00+00:00",
+        )
+        self.now[0] += timedelta(seconds=301)
+
+        expired = self.coordinator.status("test")
+
+        self.assertEqual(expired.uav.service, "presumed_running")
+        self.assertEqual(expired.uav.phase, "reconciling")
+        self.assertEqual(expired.uav.file, "recording")
+        self.assertEqual(expired.uav.resume_deadline_at, "2026-08-12T00:05:00+00:00")
+
+
 class Ap3CliTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

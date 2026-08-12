@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.gps_csv import GpsCsvSchemaError, ensure_gps_csv, validate_gps_csv
+from app.gps_csv import GPS_CSV_COLUMNS, GpsCsvSchemaError, ensure_gps_csv, validate_gps_csv
 from app.device_health import Ap3Health, DeviceHealthMonitor, RaspiHealth
 
 
@@ -75,6 +76,13 @@ CAPTURE_PHASES = frozenset({
 CaptureTarget = Literal["uav", "usrp", "bind"]
 UsrpMode = Literal["test", "usrp"]
 
+# A recorder process is only considered healthy while a valid GPS row keeps
+# arriving.  The five-minute resume window is deliberately longer than the
+# freshness window so a short AP3/forwarding outage can be reconciled without
+# creating a second mission.
+GPS_FRESHNESS_THRESHOLD_SECONDS = 10.0
+AP3_RESUME_WINDOW_SECONDS = 300.0
+
 
 class ChildState(BaseModel):
     mission_id: str = ""
@@ -85,6 +93,11 @@ class ChildState(BaseModel):
     error: str = ""
     path: str = ""
     pid: int | None = None
+    # AP3 runtime telemetry.  These fields are persisted with capture.json so
+    # a status poll or backend restart cannot lose the resume decision boundary.
+    last_sample_at: str | None = None
+    disconnected_at: str | None = None
+    resume_deadline_at: str | None = None
 
     @field_validator("phase", mode="before")
     @classmethod
@@ -162,6 +175,27 @@ class CaptureNotFoundError(CaptureError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    """Parse recorder timestamps while accepting legacy naive CSV values."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _mission_id() -> str:
@@ -337,6 +371,9 @@ class CaptureCoordinator:
         popen_factory=subprocess.Popen,
         usrp_backend=None,
         health_monitor=None,
+        gps_freshness_seconds: float = GPS_FRESHNESS_THRESHOLD_SECONDS,
+        resume_window_seconds: float = AP3_RESUME_WINDOW_SECONDS,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.store = store
         self.repo_root = Path(repo_root)
@@ -350,6 +387,9 @@ class CaptureCoordinator:
         self._lock = threading.RLock()
         self._uav_processes: dict[str, subprocess.Popen] = {}
         self._health_mode: UsrpMode = "test"
+        self.gps_freshness_seconds = max(0.0, float(gps_freshness_seconds))
+        self.resume_window_seconds = max(0.0, float(resume_window_seconds))
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         if health_monitor is not None:
             self.health_monitor = health_monitor
         else:
@@ -499,7 +539,7 @@ class CaptureCoordinator:
         state.uav.service = "starting"
         state.uav.file = "recording"
         state.uav.path = str(csv_path)
-        state.started_at = state.started_at or _now_iso()
+        state.started_at = state.started_at or _iso(self._clock_now())
         self.store.save(state)
 
         sync_args: list[str] = []
@@ -572,6 +612,110 @@ class CaptureCoordinator:
             elif phase == "starting_service":
                 state.usrp.service = "starting"
             self.store.save(state)
+
+    def _clock_now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _gps_last_sample(self, path: Path) -> datetime | None:
+        """Read the last parseable GPS timestamp without changing the file."""
+
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                if tuple(reader.fieldnames or ()) != GPS_CSV_COLUMNS:
+                    return None
+                last: datetime | None = None
+                for row in reader:
+                    parsed = _parse_timestamp(row.get("time_stamp"))
+                    if parsed is not None:
+                        last = parsed
+                return last
+        except (OSError, UnicodeError, csv.Error):
+            return None
+
+    def _refresh_uav_sample_metadata(self, state: CaptureState) -> datetime | None:
+        """Synchronise persisted AP3 freshness metadata with the canonical CSV."""
+
+        path = Path(state.uav.path) if state.uav.path else self.store.root / state.mission_id / "gps.csv"
+        latest = self._gps_last_sample(path)
+        if latest is None:
+            return _parse_timestamp(state.uav.last_sample_at)
+        previous = _parse_timestamp(state.uav.last_sample_at)
+        if previous is None or latest > previous:
+            state.uav.last_sample_at = _iso(latest)
+            return latest
+        return previous
+
+    def record_gps_sample(self, mission_id: str, sample_at: str | datetime) -> CaptureState | None:
+        """Persist a successful GPS write for an existing mission.
+
+        The GPS sync endpoint also serves missions that are not managed by the
+        coordinator.  Those calls simply return ``None``; managed missions
+        update the same locked ``capture.json`` used by status polling.
+        """
+
+        parsed = sample_at if isinstance(sample_at, datetime) else _parse_timestamp(sample_at)
+        if parsed is None:
+            raise CaptureError("GPS sample timestamp is invalid")
+        with self._lock:
+            try:
+                state = self.store.load(mission_id)
+            except CaptureNotFoundError:
+                return None
+            if state.target not in {"uav", "bind"} or state.uav.service == "idle":
+                return state
+            previous = _parse_timestamp(state.uav.last_sample_at)
+            if previous is None or parsed > previous:
+                state.uav.last_sample_at = _iso(parsed)
+            return self.store.save(state)
+
+    def _mark_uav_freshness(self, state: CaptureState, health: Any | None = None) -> CaptureState:
+        """Reconcile a live recorder against AP3 health and GPS freshness."""
+
+        child = state.uav
+        if child.service not in {"starting", "running", "presumed_running"}:
+            return state
+        now = self._clock_now()
+        latest = self._refresh_uav_sample_metadata(state)
+        age: float | None = None
+        if latest is not None:
+            age = max(0.0, (now - latest).total_seconds())
+        elif state.started_at:
+            started = _parse_timestamp(state.started_at)
+            if started is not None:
+                age = max(0.0, (now - started).total_seconds())
+
+        health_state = getattr(health, "state", None)
+        health_stale = bool(getattr(health, "stale", False))
+        if isinstance(health, dict):
+            health_state = health.get("state")
+            health_stale = bool(health.get("stale", False))
+        health_bad = bool(health is not None and (health_state != "ready" or health_stale))
+        stale = health_bad or (age is not None and age > self.gps_freshness_seconds)
+        if not stale:
+            return state
+
+        if child.disconnected_at is None:
+            child.disconnected_at = _iso(now)
+        if _parse_timestamp(child.resume_deadline_at) is None:
+            # The resume boundary is anchored to the last valid row, not to
+            # the first stale poll.  If no row was ever written, started_at is
+            # the only persisted evidence available for the same decision.
+            base = latest or _parse_timestamp(state.started_at) or now
+            child.resume_deadline_at = _iso(
+                base + timedelta(seconds=self.resume_window_seconds)
+            )
+        child.connection = "offline"
+        child.service = "presumed_running"
+        child.file = "recording"
+        child.phase = "reconciling"
+        child.error = "GPS sample is stale" if not health_bad else "AP3 connection is offline"
+        return state
 
     def _launch_usrp(
         self,
@@ -863,8 +1007,12 @@ class CaptureCoordinator:
         return self.reconcile_usrp(mission_id)
 
     def status(self, mode: UsrpMode = "test") -> CaptureState:
-        states = self.store.list()
         with self._lock:
+            # Read the mission snapshot under the same coordinator lock used by
+            # GPS sample updates and persistence.  Reading first and locking
+            # later lets an old snapshot overwrite a freshly persisted
+            # ``last_sample_at`` during runtime status reconciliation.
+            states = self.store.list()
             self._health_mode = mode
             health = self.health_monitor.poll(mode=mode)
             uav_state = next(
@@ -886,8 +1034,17 @@ class CaptureCoordinator:
                     uav_state.uav.connection = "offline"
                     uav_state.uav.service = "failed"
                     uav_state.uav.file = "failed"
+                    uav_state.uav.phase = "failed"
                     uav_state.uav.error = "UAV capture process is no longer owned by the backend"
                     self.store.save(uav_state)
+                else:
+                    # A live subprocess alone is not proof of a healthy AP3
+                    # capture.  Require a recent valid GPS row and preserve a
+                    # recoverable reconciling state during the resume window.
+                    uav_health = health.get("ap3")
+                    refreshed = self._mark_uav_freshness(uav_state, uav_health)
+                    if refreshed.uav.phase in {"reconciling", "resume_timeout"} or refreshed.uav.last_sample_at:
+                        self.store.save(refreshed)
             elif (
                 uav_state
                 and uav_state.uav.service == "stopping"
@@ -896,6 +1053,7 @@ class CaptureCoordinator:
                 uav_state.uav.connection = "offline"
                 uav_state.uav.service = "failed"
                 uav_state.uav.file = "failed"
+                uav_state.uav.phase = "failed"
                 uav_state.uav.error = (
                     "UAV stop/finalization path is no longer safely owned by the backend"
                 )
