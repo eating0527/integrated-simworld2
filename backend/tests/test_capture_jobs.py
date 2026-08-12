@@ -783,6 +783,11 @@ class BindCoordinatorTests(unittest.TestCase):
         self.popen = Mock(return_value=self.process)
         self.backend = Mock()
         self.backend.RemoteMission = lambda **kwargs: kwargs
+        self.health_probe = Mock(return_value={
+            "state": "ready",
+            "service_state": "stopped",
+        })
+        self.backend.get_drone_health = lambda mode: self.health_probe(mode)
         self.backend.get_drone_status.return_value = {
             "success": True,
             "service_state": "stopped",
@@ -881,7 +886,7 @@ class BindCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(state.uav.connection, "ready")
         self.assertEqual(state.usrp.connection, "ready")
-        self.backend.get_drone_status.assert_called_with("test")
+        self.health_probe.assert_called_with("test")
 
     def test_status_merges_simultaneous_independent_jobs(self):
         uav_state = self.coordinator.start_uav()

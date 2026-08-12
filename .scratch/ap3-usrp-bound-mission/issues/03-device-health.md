@@ -20,5 +20,6 @@
 
 - 新增 `DeviceHealthMonitor`、AP3 ADB/forwarding probe、Raspberry Pi lightweight SSH service probe 與獨立 `/api/capture/health` response。
 - `capture/status` 保留 flat mission contract 並附 `device_health`；terminal child 不再因後續 health 改變而重寫。
-- 前端 telemetry 顯示兩個獨立 health 卡並以 10 秒單飛 polling 更新；stale/timeout 顯示 Unknown。
-- 驗證：Python312 `backend.tests.test_device_health` 8/8、完整 backend discover 215/215、USRPTelemetry Vitest 21/21、frontend build 通過。完整 frontend suite 149/150；既有 `SimulationPanel` error mock 缺少 `response.text`，與本 ticket 無關。
+- 前端 telemetry 顯示兩個獨立 health 卡並以 10 秒單飛 polling 更新；stale/timeout 顯示 Unknown，health request 具 AbortController timeout。
+- 缺少 lightweight RasPi probe 時回傳 Unknown，不 fallback 到重型 status/journal diagnostics；health API 亦有 endpoint timeout。
+- 驗證：Python312 `backend.tests.test_device_health` 9/9、完整 backend discover 216/216、USRPTelemetry Vitest 22/22、frontend build 通過。完整 frontend suite 149/150；既有 `SimulationPanel` error mock 缺少 `response.text`，與本 ticket 無關。

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { USRPTelemetry } from './USRPTelemetry';
@@ -145,6 +145,29 @@ describe('USRPTelemetry capture controls', () => {
     expect(await screen.findByLabelText('AP3 Device Health')).toHaveTextContent('Unknown');
     expect(screen.getByText('COMPLETED')).toBeInTheDocument();
     expect(screen.getByText('ap3 health result is stale')).toBeInTheDocument();
+  });
+
+  it('marks a hanging health probe unknown after its timeout', async () => {
+    vi.useFakeTimers();
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      if (String(input).includes('/api/capture/health')) return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+      return jsonResponse(captureStatus({ missionId: 'health_timeout' }));
+    });
+
+    render(<USRPTelemetry />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000);
+    });
+
+    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Unknown');
+    expect(screen.getByLabelText('Raspberry Pi Device Health')).toHaveTextContent('Unknown');
+    vi.useRealTimers();
   });
 
   it('starts USRP independently when UAV is offline', async () => {

@@ -449,8 +449,10 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   }, []);
 
   const loadHealth = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(`${API}/api/capture/health?usrp_mode=${mode}`);
+      const response = await fetch(`${API}/api/capture/health?usrp_mode=${mode}`, { signal: controller.signal });
       const data = await readCaptureResponse(response, 'Device Health request failed') as Partial<{ device_health: Record<string, unknown> }>;
       const values = data.device_health;
       if (values && typeof values === 'object') {
@@ -460,7 +462,19 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         });
       }
     } catch (requestError) {
-      if (requestError instanceof Error) setError(requestError.message);
+      setHealth((previous) => Object.fromEntries(
+        (['ap3', 'raspi'] as const).map((device) => [device, {
+          ...(previous[device] ?? normalizeHealth({}, device)),
+          state: 'unknown',
+          stale: true,
+          error: requestError instanceof Error && requestError.name === 'AbortError'
+            ? `${device} health probe timed out`
+            : requestError instanceof Error ? requestError.message : 'Device Health request failed',
+        }]),
+      ));
+      if (requestError instanceof Error && requestError.name !== 'AbortError') setError(requestError.message);
+    } finally {
+      window.clearTimeout(timeout);
     }
   }, [mode]);
 
@@ -548,8 +562,12 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const usrpMissionId = usrp.mission_id || missionId;
   const ap3Health = health.ap3;
   const raspiHealth = health.raspi;
-  const ap3Ready = (ap3Health?.state ?? uav.connection) === 'ready' && !ap3Health?.stale;
-  const raspiReady = (raspiHealth?.state ?? usrp.connection) === 'ready' && !raspiHealth?.stale;
+  const ap3Ready = ap3Health
+    ? ap3Health.state === 'ready' && !ap3Health.stale
+    : Boolean(status && uav.connection === 'ready');
+  const raspiReady = raspiHealth
+    ? raspiHealth.state === 'ready' && !raspiHealth.stale
+    : Boolean(status && usrp.connection === 'ready');
   const anyActive = isActive(uav.service) || isActive(usrp.service);
   const overallLabel = missionLabel(status);
   const overallTone = status?.overall_state === 'failed'

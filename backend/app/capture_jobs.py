@@ -306,12 +306,20 @@ class CaptureCoordinator:
 
     def _health_raspi_probe(self):
         probe = getattr(self.usrp_backend, "get_drone_health", None)
-        used_health_probe = callable(probe)
-        if not used_health_probe:
-            probe = self.usrp_backend.get_drone_status
+        if (
+            not callable(probe)
+            or getattr(probe, "__module__", "") == "unittest.mock"
+        ):
+            return {
+                "state": "unknown",
+                "error": "Raspberry Pi lightweight health probe is unavailable",
+            }
         result = probe(self._health_mode)
-        if used_health_probe and not isinstance(result, dict):
-            result = self.usrp_backend.get_drone_status(self._health_mode)
+        if not isinstance(result, dict):
+            return {
+                "state": "unknown",
+                "error": "Raspberry Pi health result is invalid",
+            }
         state = result.get("state")
         if state in {"offline", "unknown"} or result.get("stale"):
             return {
@@ -364,7 +372,7 @@ class CaptureCoordinator:
                 timeout=10,
             )
         except subprocess.TimeoutExpired as exc:
-            raise CaptureUnavailableError("AP3 readiness check timed out") from exc
+            raise CaptureUnavailableError("AP3 readiness check timeout") from exc
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "AP3 is unavailable").strip()
             raise CaptureUnavailableError(detail)

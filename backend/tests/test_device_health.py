@@ -23,6 +23,26 @@ class DeviceHealthTests(unittest.TestCase):
         self.assertEqual(response["device_health"]["ap3"]["state"], "offline")
         coordinator.health_status.assert_called_once_with("usrp")
 
+    def test_missing_lightweight_raspi_probe_is_unknown_without_diagnostics_fallback(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        backend = Mock()
+        backend.get_drone_status.return_value = {
+            "success": True,
+            "service_state": "stopped",
+        }
+        coordinator = CaptureCoordinator(
+            CaptureStore(Path(__file__).resolve().parents[2] / ".test_tmp" / f"no-health-{uuid.uuid4().hex}"),
+            repo_root=Path(__file__).resolve().parents[2],
+            run_command=Mock(return_value=Mock(returncode=0, stdout="", stderr="")),
+            usrp_backend=backend,
+        )
+
+        health = coordinator.health_status("usrp")
+
+        self.assertEqual(health["raspi"]["state"], "unknown")
+        backend.get_drone_status.assert_not_called()
+
     def test_ap3_probe_requires_authorized_adb_and_forwarding(self):
         from app.device_health import Ap3Health
 

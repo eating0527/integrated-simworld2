@@ -2317,11 +2317,13 @@ async def capture_health_get(usrp_mode: Literal["test", "usrp"] = Query("test"))
     """Return mission-independent AP3/Raspberry Pi readiness."""
     try:
         return {
-            "device_health": await asyncio.to_thread(
-                capture_coordinator.health_status,
-                usrp_mode,
+            "device_health": await asyncio.wait_for(
+                asyncio.to_thread(capture_coordinator.health_status, usrp_mode),
+                timeout=15,
             ),
         }
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="device health probe timed out") from exc
     except Exception as exc:
         _capture_error(exc)
 
