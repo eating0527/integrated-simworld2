@@ -2307,7 +2307,21 @@ async def _capture_call(fn, *args, **kwargs):
 @app.get("/api/capture/status")
 async def capture_status_get(usrp_mode: Literal["test", "usrp"] = Query("test")):
     try:
-        return await asyncio.to_thread(capture_coordinator.status, usrp_mode)
+        return await asyncio.to_thread(capture_coordinator.status_payload, usrp_mode)
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.get("/api/capture/health")
+async def capture_health_get(usrp_mode: Literal["test", "usrp"] = Query("test")):
+    """Return mission-independent AP3/Raspberry Pi readiness."""
+    try:
+        return {
+            "device_health": await asyncio.to_thread(
+                capture_coordinator.health_status,
+                usrp_mode,
+            ),
+        }
     except Exception as exc:
         _capture_error(exc)
 

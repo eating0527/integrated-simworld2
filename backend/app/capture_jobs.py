@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from app.gps_csv import GpsCsvSchemaError, ensure_gps_csv, validate_gps_csv
+from app.device_health import Ap3Health, DeviceHealthMonitor, RaspiHealth
 
 
 ConnectionState = Literal["ready", "offline", "unknown"]
@@ -277,6 +278,7 @@ class CaptureCoordinator:
         run_command=subprocess.run,
         popen_factory=subprocess.Popen,
         usrp_backend=None,
+        health_monitor=None,
     ):
         self.store = store
         self.repo_root = Path(repo_root)
@@ -289,6 +291,37 @@ class CaptureCoordinator:
         self.usrp_backend = usrp_backend
         self._lock = threading.RLock()
         self._uav_processes: dict[str, subprocess.Popen] = {}
+        self._health_mode: UsrpMode = "test"
+        if health_monitor is not None:
+            self.health_monitor = health_monitor
+        else:
+            self.health_monitor = DeviceHealthMonitor(
+                ap3=Ap3Health(probe=self._health_ap3_probe),
+                raspi=RaspiHealth(probe=self._health_raspi_probe),
+            )
+
+    def _health_ap3_probe(self):
+        self.preflight_uav()
+        return True
+
+    def _health_raspi_probe(self):
+        probe = getattr(self.usrp_backend, "get_drone_health", None)
+        used_health_probe = callable(probe)
+        if not used_health_probe:
+            probe = self.usrp_backend.get_drone_status
+        result = probe(self._health_mode)
+        if used_health_probe and not isinstance(result, dict):
+            result = self.usrp_backend.get_drone_status(self._health_mode)
+        state = result.get("state")
+        if state in {"offline", "unknown"} or result.get("stale"):
+            return {
+                "state": "unknown" if result.get("stale") else state,
+                "error": result.get("error") or result.get("message") or "Raspberry Pi health is unavailable",
+                "stale": bool(result.get("stale")),
+            }
+        if state == "ready" or result.get("service_state") in {"running", "stopped"}:
+            return {"state": "ready", "message": "Raspberry Pi reachable"}
+        return {"state": "unknown", "error": "Raspberry Pi health result is unknown"}
 
     def _active_uav(self) -> CaptureState | None:
         for state in reversed(self.store.list()):
@@ -321,13 +354,17 @@ class CaptureCoordinator:
         return [sys.executable, str(script), *extra]
 
     def preflight_uav(self) -> None:
-        result = self.run_command(
-            self._ap3_command("--check"),
-            cwd=self.repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            result = self.run_command(
+                self._ap3_command("--check"),
+                cwd=self.repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CaptureUnavailableError("AP3 readiness check timed out") from exc
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "AP3 is unavailable").strip()
             raise CaptureUnavailableError(detail)
@@ -339,6 +376,21 @@ class CaptureCoordinator:
             raise CaptureUnavailableError(str(exc)) from exc
         if status.get("service_state") == "running":
             raise CaptureConflictError(f"{mode} capture service is already running")
+
+    def health_status(self, mode: UsrpMode = "test") -> dict[str, dict]:
+        with self._lock:
+            self._health_mode = mode
+            return {
+                name: result.as_dict()
+                for name, result in self.health_monitor.poll().items()
+            }
+
+    def status_payload(self, mode: UsrpMode = "test") -> dict:
+        state = self.status(mode)
+        return {
+            **state.model_dump(),
+            "device_health": self.health_monitor.as_dict(),
+        }
 
     def _launch_uav(self, state: CaptureState) -> CaptureState:
         csv_path = self.store.root / state.mission_id / "gps.csv"
@@ -598,6 +650,8 @@ class CaptureCoordinator:
     def status(self, mode: UsrpMode = "test") -> CaptureState:
         states = self.store.list()
         with self._lock:
+            self._health_mode = mode
+            health = self.health_monitor.poll()
             uav_state = next(
                 (item for item in reversed(states) if item.target in {"uav", "bind"}),
                 None,
@@ -681,28 +735,23 @@ class CaptureCoordinator:
                 "presumed_running",
                 "stopping",
             }
-            if not uav_active:
-                try:
-                    self.preflight_uav()
-                    state.uav.connection = "ready"
-                    if state.uav.service != "failed":
-                        state.uav.error = ""
-                except CaptureError as exc:
-                    state.uav.connection = "offline"
-                    state.uav.error = str(exc)
-            if not usrp_active:
-                state.selected_usrp_mode = mode
-                try:
-                    self.preflight_usrp(mode)
-                    state.usrp.connection = "ready"
-                    if state.usrp.service != "failed":
-                        state.usrp.error = ""
-                except CaptureConflictError:
-                    state.usrp.connection = "ready"
-                except CaptureError as exc:
-                    state.usrp.connection = "offline"
-                    state.usrp.error = str(exc)
+            # Device Health is a current projection. Only an idle, never-started
+            # child may borrow its connection/error for legacy dashboard fields;
+            # terminal mission child results remain immutable historical truth.
+            if not uav_active and state.uav.service == "idle" and state.started_at is None:
+                result = health.get("ap3")
+                if result is not None:
+                    state.uav.connection = result.state
+                    state.uav.error = result.error
+            if not usrp_active and state.usrp.service == "idle" and state.started_at is None:
+                result = health.get("raspi")
+                if result is not None:
+                    state.selected_usrp_mode = mode
+                    state.usrp.connection = result.state
+                    state.usrp.error = result.error
             if same_mission and state.mission_id:
+                if state.overall_state in {"completed", "completed_with_warning", "failed"}:
+                    return state
                 return self.store.save(state)
             return state
 

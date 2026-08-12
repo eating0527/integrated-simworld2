@@ -27,6 +27,17 @@ interface ChildState {
   phase?: PhaseDisplay;
 }
 
+interface DeviceHealth {
+  device: 'ap3' | 'raspi';
+  state: ConnectionState;
+  checked_at: string;
+  last_checked_at: string;
+  next_check_at: string | null;
+  retry_delay: number | null;
+  stale: boolean;
+  error: string;
+}
+
 interface CaptureStatus {
   mission_id: string;
   target: 'uav' | 'usrp' | 'bind';
@@ -38,6 +49,7 @@ interface CaptureStatus {
   finished_at: string | null;
   uav: ChildState;
   usrp: ChildState;
+  device_health?: Record<string, DeviceHealth>;
 }
 
 const EMPTY_CHILD: ChildState = {
@@ -199,6 +211,19 @@ const S: Record<string, React.CSSProperties> = {
     marginTop: 8,
     fontSize: 10,
   },
+  health: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 6,
+    marginTop: 8,
+  },
+  healthCard: {
+    padding: '7px',
+    borderRadius: 5,
+    background: 'rgba(0, 0, 0, 0.2)',
+    border: '1px solid rgba(120, 180, 255, 0.12)',
+    fontSize: 11,
+  },
 };
 
 function isActive(service: ServiceDisplay): boolean {
@@ -291,6 +316,23 @@ function normalizeChild(value: unknown): ChildState {
   };
 }
 
+function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth {
+  const health = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const state = typeof health.state === 'string' && CONNECTION_STATES.has(health.state as ConnectionState)
+    ? health.state as ConnectionState
+    : 'unknown';
+  return {
+    device,
+    state,
+    checked_at: String(health.checked_at ?? ''),
+    last_checked_at: String(health.last_checked_at ?? health.checked_at ?? ''),
+    next_check_at: typeof health.next_check_at === 'string' ? health.next_check_at : null,
+    retry_delay: typeof health.retry_delay === 'number' ? health.retry_delay : null,
+    stale: Boolean(health.stale),
+    error: String(health.error ?? ''),
+  };
+}
+
 function missionIssue(status: CaptureStatus, failuresOnly = false): string | null {
   const children = [['GPS', status.uav], ['NOISE', status.usrp]] as const;
   const failed = children
@@ -349,6 +391,12 @@ function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
     finished_at: value.finished_at ?? null,
     uav: normalizeChild(value.uav),
     usrp: normalizeChild(value.usrp),
+    device_health: value.device_health && typeof value.device_health === 'object'
+      ? {
+        ap3: normalizeHealth(value.device_health.ap3, 'ap3'),
+        raspi: normalizeHealth(value.device_health.raspi, 'raspi'),
+      }
+      : undefined,
   };
 }
 
@@ -384,12 +432,14 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [mode, setMode] = useState<SamplingMode>('test');
   const [bind, setBind] = useState(false);
   const [status, setStatus] = useState<CaptureStatus | null>(null);
+  const [health, setHealth] = useState<Record<string, DeviceHealth>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const applyStatus = useCallback((data: Partial<CaptureStatus>) => {
     const next = normalizeStatus(data);
     setStatus(next);
+    if (next.device_health) setHealth(next.device_health);
     if (next.bind && (isActive(next.uav.service) || isActive(next.usrp.service))) {
       setBind(true);
     }
@@ -397,6 +447,22 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       setMode(next.selected_usrp_mode);
     }
   }, []);
+
+  const loadHealth = useCallback(async () => {
+    try {
+      const response = await fetch(`${API}/api/capture/health?usrp_mode=${mode}`);
+      const data = await readCaptureResponse(response, 'Device Health request failed') as Partial<{ device_health: Record<string, unknown> }>;
+      const values = data.device_health;
+      if (values && typeof values === 'object') {
+        setHealth({
+          ap3: normalizeHealth(values.ap3, 'ap3'),
+          raspi: normalizeHealth(values.raspi, 'raspi'),
+        });
+      }
+    } catch (requestError) {
+      if (requestError instanceof Error) setError(requestError.message);
+    }
+  }, [mode]);
 
   const loadStatus = useCallback(async () => {
     const controller = new AbortController();
@@ -416,6 +482,21 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      if (!active) return;
+      await loadHealth();
+      if (active) timer = window.setTimeout(poll, 10000);
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [loadHealth]);
 
   const shouldPoll = Boolean(
     status && (
@@ -465,6 +546,10 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const missionId = status?.mission_id ?? '';
   const uavMissionId = uav.mission_id || missionId;
   const usrpMissionId = usrp.mission_id || missionId;
+  const ap3Health = health.ap3;
+  const raspiHealth = health.raspi;
+  const ap3Ready = (ap3Health?.state ?? uav.connection) === 'ready' && !ap3Health?.stale;
+  const raspiReady = (raspiHealth?.state ?? usrp.connection) === 'ready' && !raspiHealth?.stale;
   const anyActive = isActive(uav.service) || isActive(usrp.service);
   const overallLabel = missionLabel(status);
   const overallTone = status?.overall_state === 'failed'
@@ -476,8 +561,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     && uav.file !== 'unknown' && uav.phase !== 'unknown';
   const usrpKnown = usrp.connection !== 'unknown' && usrp.service !== 'unknown'
     && usrp.file !== 'unknown' && usrp.phase !== 'unknown';
-  const bothReady = uavKnown && usrpKnown && uav.connection === 'ready' && usrp.connection === 'ready';
-  const canStartUav = uavKnown && !bind && !busy && !isActive(uav.service) && (uav.connection === 'ready' || uav.service === 'failed');
+  const bothReady = uavKnown && usrpKnown && ap3Ready && raspiReady;
+  const canStartUav = uavKnown && !bind && !busy && !isActive(uav.service) && (ap3Ready || uav.service === 'failed');
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
 
   const childSection = (
@@ -535,6 +620,22 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           </button>
         </div>
 
+        <div style={S.health} aria-label="Device Health">
+          {(['ap3', 'raspi'] as const).map((device) => {
+            const item = health[device];
+            const label = device === 'ap3' ? 'AP3' : 'Raspberry Pi';
+            const state = item?.stale ? 'unknown' : item?.state ?? 'unknown';
+            return (
+              <div key={device} style={S.healthCard} aria-label={`${label} Device Health`}>
+                <strong>{label}</strong>
+                <div style={S.value}>{CONNECTION_LABELS[state]}</div>
+                {item?.last_checked_at ? <div>Last check: {item.last_checked_at}</div> : null}
+                {item?.error ? <div style={S.error}>{item.error}</div> : null}
+              </div>
+            );
+          })}
+        </div>
+
         {childSection(
           '無人機 GPS 採樣',
           uav,
@@ -570,11 +671,11 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
                   type="button"
                   aria-label={value === 'test' ? 'Test mode' : 'USRP mode'}
                   aria-pressed={mode === value}
-                  disabled={busy || isActive(usrp.service) || !usrpKnown}
+                  disabled={busy || isActive(usrp.service) || !usrpKnown || !raspiReady}
                   style={{
                     ...S.button,
                     ...(mode === value ? S.active : null),
-                    ...disabledStyle(busy || isActive(usrp.service) || !usrpKnown),
+                    ...disabledStyle(busy || isActive(usrp.service) || !usrpKnown || !raspiReady),
                   }}
                   onClick={() => setMode(value)}
                 >
@@ -585,8 +686,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             <div style={S.actions}>
               <button
                 type="button"
-                style={{ ...S.button, ...disabledStyle(bind || busy || !usrpKnown || isActive(usrp.service) || usrp.connection !== 'ready') }}
-                disabled={bind || busy || !usrpKnown || isActive(usrp.service) || usrp.connection !== 'ready'}
+                style={{ ...S.button, ...disabledStyle(bind || busy || !usrpKnown || isActive(usrp.service) || !raspiReady) }}
+                disabled={bind || busy || !usrpKnown || isActive(usrp.service) || !raspiReady}
                 onClick={() => void request('/api/capture/usrp/start', startBody)}
               >
                 Start USRP

@@ -208,16 +208,47 @@ def _service_messages(target: ServiceTarget) -> list[str]:
     return messages[-40:]
 
 
+def _probe_service_state(
+    target: ServiceTarget,
+    *,
+    timeout: float | None = None,
+) -> tuple[ServiceState, str, str]:
+    command = f"systemctl is-active {target.unit}"
+    if timeout is None:
+        exit_code, out, err = _run_remote(command)
+    else:
+        exit_code, out, err = _run_remote(command, timeout=timeout)
+    return _state_from_active_output(out, exit_code), out, err
+
+
 def get_drone_status(mode: str = "test") -> dict:
     target = _service_target(mode)
-    exit_code, out, err = _run_remote(f"systemctl is-active {target.unit}")
-    state = _state_from_active_output(out, exit_code)
+    state, out, err = _probe_service_state(target)
     if state == "running":
         return _response(target, "running", f"{target.service_name} running", _service_messages(target))
     if state == "stopped":
         return _response(target, "stopped", f"{target.service_name} stopped", _service_messages(target))
     detail = err or out or f"{target.service_name} status unknown"
     return _response(target, "unknown", detail, _service_messages(target))
+
+
+def get_drone_health(mode: str = "test") -> dict:
+    """Return the bounded heartbeat probe used by Device Health.
+
+    Unlike ``get_drone_status`` this deliberately does not load journal or
+    service diagnostics; those are reserved for an explicit diagnostics view.
+    """
+    target = _service_target(mode)
+    state, out, err = _probe_service_state(target, timeout=REMOTE_COMMAND_TIMEOUT_SECONDS)
+    if state == "unknown":
+        detail = err or out or f"{target.service_name} status unknown"
+        raise UsrpControlError(detail)
+    return {
+        "success": True,
+        "state": "ready",
+        "service_state": state,
+        "message": f"{target.service_name} reachable",
+    }
 
 
 def _needs_interactive_auth(out: str, err: str) -> bool:

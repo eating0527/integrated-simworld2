@@ -95,6 +95,58 @@ describe('USRPTelemetry capture controls', () => {
     );
   });
 
+  it('renders AP3 and Raspberry Pi Device Health independently from mission children', async () => {
+    const status = captureStatus({ missionId: 'history_1' });
+    status.uav.connection = 'ready';
+    status.usrp.connection = 'ready';
+    (status as typeof status & { device_health: object }).device_health = {
+      ap3: {
+        device: 'ap3', state: 'offline', checked_at: '2026-08-12T00:00:00Z',
+        last_checked_at: '2026-08-12T00:00:00Z', next_check_at: null,
+        retry_delay: 5, stale: false, error: 'USB disconnected',
+      },
+      raspi: {
+        device: 'raspi', state: 'ready', checked_at: '2026-08-12T00:00:00Z',
+        last_checked_at: '2026-08-12T00:00:00Z', next_check_at: null,
+        retry_delay: 10, stale: false, error: '',
+      },
+    };
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+
+    await openTelemetry();
+
+    expect(await screen.findByLabelText('AP3 Device Health')).toHaveTextContent('Offline');
+    expect(screen.getByLabelText('Raspberry Pi Device Health')).toHaveTextContent('Ready');
+    expect(screen.getByText('USB disconnected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
+  });
+
+  it('treats stale health as unknown and keeps it separate from a terminal child', async () => {
+    const status = captureStatus({ missionId: 'history_2', overall: 'completed' });
+    status.uav.service = 'stopped';
+    status.uav.file = 'ready';
+    (status as typeof status & { device_health: object }).device_health = {
+      ap3: {
+        device: 'ap3', state: 'ready', checked_at: '2026-08-11T23:00:00Z',
+        last_checked_at: '2026-08-11T23:00:00Z', next_check_at: null,
+        retry_delay: 10, stale: true, error: 'ap3 health result is stale',
+      },
+      raspi: {
+        device: 'raspi', state: 'ready', checked_at: '2026-08-12T00:00:00Z',
+        last_checked_at: '2026-08-12T00:00:00Z', next_check_at: null,
+        retry_delay: 10, stale: false, error: '',
+      },
+    };
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+
+    await openTelemetry();
+
+    expect(await screen.findByLabelText('AP3 Device Health')).toHaveTextContent('Unknown');
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+    expect(screen.getByText('ap3 health result is stale')).toBeInTheDocument();
+  });
+
   it('starts USRP independently when UAV is offline', async () => {
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       if (String(input).includes('/api/capture/usrp/start')) {
