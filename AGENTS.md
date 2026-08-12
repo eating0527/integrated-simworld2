@@ -82,7 +82,7 @@ Keep secrets in `.env` or `frontend/.env.local`. Existing rules already ignore d
 
 ### Issue tracker
 
-Issues and PRDs live in GitHub Issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues and specs live as local Markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
