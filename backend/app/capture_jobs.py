@@ -394,11 +394,12 @@ class CaptureCoordinator:
             }
 
     def status_payload(self, mode: UsrpMode = "test") -> dict:
-        state = self.status(mode)
-        return {
-            **state.model_dump(),
-            "device_health": self.health_monitor.as_dict(),
-        }
+        with self._lock:
+            state = self.status(mode)
+            return {
+                **state.model_dump(),
+                "device_health": self.health_monitor.as_dict(),
+            }
 
     def _launch_uav(self, state: CaptureState) -> CaptureState:
         csv_path = self.store.root / state.mission_id / "gps.csv"

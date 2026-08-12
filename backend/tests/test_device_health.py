@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 import unittest
 import uuid
@@ -134,6 +135,62 @@ class DeviceHealthTests(unittest.TestCase):
         coordinator.health_status("usrp")
 
         self.assertEqual(backend.modes, ["test", "usrp"])
+
+    def test_status_payload_keeps_health_snapshot_in_requested_mode(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+        from app.device_health import HealthResult
+
+        class ModeHealth:
+            def __init__(self):
+                self.mode = None
+                self.snapshot_started = threading.Event()
+                self.release_snapshot = threading.Event()
+                self.usrp_poll_started = threading.Event()
+
+            def poll(self, *, mode=None, **_kwargs):
+                self.mode = mode
+                if mode == "usrp":
+                    self.usrp_poll_started.set()
+                result = HealthResult("raspi", "ready", 100.0, f"mode={mode}")
+                return {"ap3": result, "raspi": result}
+
+            def as_dict(self):
+                self.snapshot_started.set()
+                self.release_snapshot.wait(timeout=1.0)
+                return {
+                    "ap3": HealthResult("ap3", "ready", 100.0, f"mode={self.mode}").as_dict(),
+                    "raspi": HealthResult("raspi", "ready", 100.0, f"mode={self.mode}").as_dict(),
+                }
+
+        root = Path(__file__).resolve().parents[2] / ".test_tmp" / f"health-mode-race-{uuid.uuid4().hex}"
+        health = ModeHealth()
+        coordinator = CaptureCoordinator(
+            CaptureStore(root),
+            repo_root=Path(__file__).resolve().parents[2],
+            health_monitor=health,
+        )
+        payload = {}
+        second_started = threading.Event()
+
+        first = threading.Thread(target=lambda: payload.update(coordinator.status_payload("test")))
+        first.start()
+        self.assertTrue(health.snapshot_started.wait(timeout=1.0))
+
+        def request_other_mode():
+            second_started.set()
+            coordinator.health_status("usrp")
+
+        second = threading.Thread(target=request_other_mode)
+        second.start()
+        self.assertTrue(second_started.wait(timeout=1.0))
+        self.assertFalse(health.usrp_poll_started.wait(timeout=1.0))
+        health.release_snapshot.set()
+
+        first.join(timeout=1.0)
+        second.join(timeout=1.0)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(payload["device_health"]["raspi"]["error"], "mode=test")
 
     def test_monitor_uses_ready_ten_second_and_offline_capped_backoff(self):
         from app.device_health import DeviceHealthMonitor, HealthResult

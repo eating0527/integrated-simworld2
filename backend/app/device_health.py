@@ -139,12 +139,10 @@ class RaspiHealth:
         *,
         mode: str = "test",
         probe: Callable[[], Any] | None = None,
-        timeout: float = 5.0,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.mode = mode
         self.probe = probe
-        self.timeout = timeout
         self.clock = clock
 
     def check(self) -> HealthResult:
