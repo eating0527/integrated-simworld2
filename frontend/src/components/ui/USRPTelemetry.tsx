@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { MinPanel } from './MinPanel';
 import { PanelStatus } from './PanelUi';
@@ -501,6 +501,17 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [health, setHealth] = useState<Record<string, DeviceHealth>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const statusFlight = useRef<Promise<void> | null>(null);
+  const statusController = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      statusController.current?.abort();
+    };
+  }, []);
 
   const applyStatus = useCallback((data: Partial<CaptureStatus>) => {
     const next = normalizeStatus(data);
@@ -544,19 +555,30 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     }
   }, [mode]);
 
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(() => {
+    if (statusFlight.current) return statusFlight.current;
     const controller = new AbortController();
+    statusController.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 25000);
-    try {
-      const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`, { signal: controller.signal });
-      const data = await readCaptureResponse(response, 'Status request failed');
-      applyStatus(data);
-      setError('');
-    } catch (requestError) {
-      setError(requestError instanceof Error && requestError.name === 'AbortError' ? 'Status request timed out' : requestError instanceof Error ? requestError.message : 'Status request failed');
-    } finally {
-      window.clearTimeout(timeout);
-    }
+    let flight!: Promise<void>;
+    flight = (async () => {
+      try {
+        const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`, { signal: controller.signal });
+        const data = await readCaptureResponse(response, 'Status request failed');
+        if (!mounted.current) return;
+        applyStatus(data);
+        setError('');
+      } catch (requestError) {
+        if (!mounted.current) return;
+        setError(requestError instanceof Error && requestError.name === 'AbortError' ? 'Status request timed out' : requestError instanceof Error ? requestError.message : 'Status request failed');
+      } finally {
+        window.clearTimeout(timeout);
+        if (statusController.current === controller) statusController.current = null;
+        if (statusFlight.current === flight) statusFlight.current = null;
+      }
+    })();
+    statusFlight.current = flight;
+    return flight;
   }, [applyStatus, mode]);
 
   useEffect(() => {
@@ -591,8 +613,21 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
 
   useEffect(() => {
     if (!shouldPoll) return;
-    const timer = window.setInterval(() => void loadStatus(), 2000);
-    return () => window.clearInterval(timer);
+    let active = true;
+    let timer: number | undefined;
+    const schedule = () => {
+      if (!active) return;
+      timer = window.setTimeout(async () => {
+        if (!active) return;
+        await loadStatus();
+        schedule();
+      }, 2000);
+    };
+    schedule();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [loadStatus, shouldPoll]);
 
   const request = useCallback(async (path: string, body?: object) => {

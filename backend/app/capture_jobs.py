@@ -187,6 +187,11 @@ _UNRESOLVED_PHASES = frozenset({
     "stop_failed",
 })
 
+_REMOTE_RUNNING_STATES = frozenset({"running", "recording"})
+_REMOTE_FINALIZING_STATES = frozenset({"finalizing", "finalizing_file", "uploading"})
+_REMOTE_STOPPED_STATES = frozenset({"stopped", "completed", "complete"})
+_REMOTE_FAILED_STATES = frozenset({"failed", "error"})
+
 
 def _child_unresolved(child: ChildState) -> bool:
     """Return whether a child still owns active or unfinished work."""
@@ -713,40 +718,149 @@ class CaptureCoordinator:
             self._uav_processes.pop(mission_id, None)
             return self.store.save(state)
 
-    def refresh_usrp(self, mission_id: str) -> CaptureState:
+    def _reconcile_usrp_remote(
+        self,
+        state: CaptureState,
+        remote: dict,
+    ) -> CaptureState:
+        """Apply one adapter snapshot without creating or controlling a mission.
+
+        The adapter reads the mission identified by ``state.mission_id``.  A
+        mismatched identity is not safe evidence for this child and is treated
+        like a lost control-plane connection by the caller.
+        """
+
+        mission_state = remote.get("mission_state")
+        if not isinstance(mission_state, dict) or not mission_state:
+            raise CaptureError("remote mission state is unavailable")
+        remote_mission_id = mission_state.get("mission_id")
+        if str(remote_mission_id or "") != state.mission_id:
+            raise CaptureError("remote mission state belongs to another mission")
+
+        service_state = str(remote.get("service_state") or "unknown").lower()
+        remote_state = str(
+            mission_state.get("state")
+            or mission_state.get("phase")
+            or ""
+        ).lower()
+        upload_state = str(mission_state.get("upload_state") or "").lower()
+
+        state.usrp.connection = "ready"
+        state.usrp.error = ""
+
+        if remote_state in _REMOTE_FAILED_STATES or upload_state == "failed":
+            if service_state != "stopped":
+                state.usrp.service = "presumed_running"
+                state.usrp.file = "failed"
+                state.usrp.phase = "reconciling"
+                state.usrp.error = "remote failure reported while service may still be running"
+                return state
+            state.usrp.service = "failed"
+            state.usrp.file = "failed"
+            state.usrp.phase = "failed"
+            return state
+
+        if upload_state == "upload_pending" or remote_state == "upload_pending":
+            state.usrp.service = "stopped" if service_state == "stopped" else "presumed_running"
+            state.usrp.file = "upload_pending"
+            state.usrp.phase = "upload_pending"
+            return state
+
+        if upload_state == "uploaded":
+            if service_state != "stopped":
+                state.usrp.service = "presumed_running"
+                state.usrp.file = "uploaded"
+                state.usrp.phase = "reconciling"
+                return state
+            state.usrp.service = "stopped"
+            state.usrp.file = "uploaded"
+            state.usrp.phase = "completed"
+            return state
+
+        if remote_state in _REMOTE_FINALIZING_STATES or upload_state in {
+            "finalizing",
+            "uploading",
+        }:
+            state.usrp.service = "stopped" if service_state == "stopped" else "presumed_running"
+            state.usrp.file = "finalizing"
+            state.usrp.phase = "finalizing_file"
+            return state
+
+        if remote_state in _REMOTE_STOPPED_STATES:
+            if service_state != "stopped":
+                state.usrp.service = "presumed_running"
+                state.usrp.phase = "reconciling"
+                state.usrp.file = (
+                    "uploaded" if upload_state == "uploaded" else "upload_pending"
+                )
+                return state
+            state.usrp.service = "stopped"
+            state.usrp.file = "upload_pending"
+            state.usrp.phase = "upload_pending"
+            return state
+
+        if remote_state in _REMOTE_RUNNING_STATES or upload_state == "recording":
+            if service_state == "running":
+                state.usrp.service = "running"
+                state.usrp.file = "recording"
+                state.usrp.phase = "recording"
+            elif service_state == "stopped":
+                # The mission metadata claims activity while systemd says it
+                # is stopped.  Keep the child uncertain instead of fabricating
+                # a clean stop or restarting the service.
+                state.usrp.service = "presumed_running"
+                state.usrp.file = "recording"
+                state.usrp.phase = "reconciling"
+            else:
+                state.usrp.service = "presumed_running"
+                state.usrp.file = "recording"
+                state.usrp.phase = "reconciling"
+            return state
+
+        if service_state == "stopped":
+            state.usrp.service = "stopped"
+            state.usrp.file = "upload_pending"
+            state.usrp.phase = "upload_pending"
+            return state
+
+        raise CaptureError("remote mission state is unknown")
+
+    def reconcile_usrp(self, mission_id: str) -> CaptureState:
+        """Read and reconcile one existing USRP mission by its original ID."""
+
         with self._lock:
             state = self.store.load(mission_id)
-            try:
-                remote = self.usrp_backend.get_capture_job(
-                    state.selected_usrp_mode,
-                    mission_id,
-                )
-            except Exception as exc:
+            mode = state.selected_usrp_mode
+
+        try:
+            remote = self.usrp_backend.get_capture_job(mode, mission_id)
+            if not isinstance(remote, dict):
+                raise CaptureError("remote USRP status is invalid")
+            with self._lock:
+                state = self.store.load(mission_id)
+                return self.store.save(self._reconcile_usrp_remote(state, remote))
+        except Exception as exc:
+            with self._lock:
+                state = self.store.load(mission_id)
+                current_service = state.usrp.service
                 state.usrp.connection = "offline"
-                if state.usrp.service in {"starting", "running", "presumed_running"}:
+                if current_service in {"starting", "running", "presumed_running", "stopping"}:
                     state.usrp.service = "presumed_running"
-                state.usrp.error = str(exc)
+                    if state.usrp.file == "none":
+                        state.usrp.file = "recording"
+                    if state.usrp.phase not in {
+                        "stopping",
+                        "stopping_service",
+                        "stop_failed",
+                    }:
+                        state.usrp.phase = "reconciling"
+                state.usrp.error = str(exc) or "Raspberry Pi status unavailable"
                 return self.store.save(state)
 
-            state.usrp.connection = "ready"
-            state.usrp.error = ""
-            service_state = remote.get("service_state", "unknown")
-            if service_state in {"running", "stopped"}:
-                state.usrp.service = service_state
-            mission_state = remote.get("mission_state") or {}
-            remote_state = mission_state.get("state")
-            if remote_state == "failed":
-                state.usrp.service = "failed"
-            upload_state = mission_state.get("upload_state")
-            if upload_state in {
-                "recording",
-                "finalizing",
-                "upload_pending",
-                "uploaded",
-                "failed",
-            }:
-                state.usrp.file = upload_state
-            return self.store.save(state)
+    def refresh_usrp(self, mission_id: str) -> CaptureState:
+        """Backward-compatible public alias for runtime reconciliation."""
+
+        return self.reconcile_usrp(mission_id)
 
     def status(self, mode: UsrpMode = "test") -> CaptureState:
         states = self.store.list()
@@ -793,7 +907,7 @@ class CaptureCoordinator:
                 "presumed_running",
                 "stopping",
             }:
-                usrp_state = self.refresh_usrp(usrp_state.mission_id)
+                usrp_state = self.reconcile_usrp(usrp_state.mission_id)
 
             same_mission = bool(
                 uav_state

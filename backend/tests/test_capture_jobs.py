@@ -770,6 +770,165 @@ class UsrpRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered.usrp.service, "presumed_running")
         self.assertEqual(recovered.usrp.file, "recording")
 
+    def test_reconcile_remote_upload_pending_preserves_mission_and_phase(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        repo_root = Path(__file__).resolve().parents[2]
+        root = repo_root / ".test_tmp" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        store = CaptureStore(root)
+        state = store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="mission_reconcile_pending",
+        )
+        state.started_at = "2026-08-12T00:00:00+00:00"
+        state.usrp.connection = "offline"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+        state.usrp.phase = "reconciling"
+        store.save(state)
+        backend = Mock()
+        backend.get_capture_job.return_value = {
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": state.mission_id,
+                "state": "stopped",
+                "upload_state": "upload_pending",
+            },
+        }
+        coordinator = CaptureCoordinator(
+            store,
+            repo_root=repo_root,
+            usrp_backend=backend,
+        )
+
+        reconciled = coordinator.refresh_usrp(state.mission_id)
+
+        self.assertEqual(reconciled.mission_id, state.mission_id)
+        self.assertEqual(reconciled.usrp.mission_id, state.mission_id)
+        self.assertEqual(reconciled.usrp.connection, "ready")
+        self.assertEqual(reconciled.usrp.service, "stopped")
+        self.assertEqual(reconciled.usrp.file, "upload_pending")
+        self.assertEqual(reconciled.usrp.phase, "upload_pending")
+        self.assertEqual(reconciled.overall_state, "finalizing")
+        self.assertEqual(len(store.list()), 1)
+
+    def test_reconcile_remote_states_keeps_child_outcomes_distinct(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        repo_root = Path(__file__).resolve().parents[2]
+        cases = [
+            (
+                "stopped",
+                {"state": "stopped", "upload_state": "uploaded"},
+                "stopped",
+                "uploaded",
+                "completed",
+            ),
+            (
+                "stopped_pending",
+                {"state": "stopped", "upload_state": "recording"},
+                "stopped",
+                "upload_pending",
+                "upload_pending",
+            ),
+            (
+                "failed",
+                {"state": "failed", "upload_state": "failed"},
+                "failed",
+                "failed",
+                "failed",
+            ),
+            (
+                "stopped_unknown_upload",
+                {"state": "stopped"},
+                "stopped",
+                "upload_pending",
+                "upload_pending",
+            ),
+            (
+                "finalizing",
+                {"state": "finalizing", "upload_state": "finalizing"},
+                "presumed_running",
+                "finalizing",
+                "finalizing_file",
+            ),
+        ]
+        for name, mission_state, service, file_state, phase in cases:
+            with self.subTest(name=name):
+                root = repo_root / ".test_tmp" / uuid.uuid4().hex
+                root.mkdir(parents=True)
+                store = CaptureStore(root)
+                state = store.create(
+                    bind=False,
+                    selected_usrp_mode="usrp",
+                    target="usrp",
+                    mission_id=f"mission_reconcile_{name}",
+                )
+                state.started_at = "2026-08-12T00:00:00+00:00"
+                state.usrp.service = "presumed_running"
+                state.usrp.file = "recording"
+                state.usrp.phase = "reconciling"
+                store.save(state)
+                backend = Mock()
+                backend.get_capture_job.return_value = {
+                    "service_state": "stopped" if name != "finalizing" else "unknown",
+                    "mission_state": {"mission_id": state.mission_id, **mission_state},
+                }
+                coordinator = CaptureCoordinator(store, repo_root=repo_root, usrp_backend=backend)
+
+                reconciled = coordinator.reconcile_usrp(state.mission_id)
+
+                self.assertEqual(reconciled.usrp.service, service)
+                self.assertEqual(reconciled.usrp.file, file_state)
+                self.assertEqual(reconciled.usrp.phase, phase)
+
+    def test_reconcile_requires_matching_mission_state_and_keeps_running_failure_uncertain(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        repo_root = Path(__file__).resolve().parents[2]
+        root = repo_root / ".test_tmp" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        store = CaptureStore(root)
+        state = store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="mission_reconcile_evidence",
+        )
+        state.started_at = "2026-08-12T00:00:00+00:00"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+        state.usrp.phase = "reconciling"
+        store.save(state)
+        backend = Mock()
+        backend.get_capture_job.return_value = {
+            "service_state": "running",
+            "mission_state": {
+                "mission_id": state.mission_id,
+                "state": "failed",
+                "upload_state": "failed",
+            },
+        }
+        coordinator = CaptureCoordinator(store, repo_root=repo_root, usrp_backend=backend)
+
+        uncertain = coordinator.reconcile_usrp(state.mission_id)
+
+        self.assertEqual(uncertain.usrp.service, "presumed_running")
+        self.assertEqual(uncertain.usrp.phase, "reconciling")
+        self.assertEqual(uncertain.overall_state, "degraded")
+
+        backend.get_capture_job.return_value = {
+            "service_state": "stopped",
+            "mission_state": {},
+        }
+        missing = coordinator.reconcile_usrp(state.mission_id)
+        self.assertEqual(missing.usrp.connection, "offline")
+        self.assertEqual(missing.usrp.service, "presumed_running")
+        self.assertEqual(missing.usrp.phase, "reconciling")
+
 
 class BindCoordinatorTests(unittest.TestCase):
     def setUp(self):
@@ -1270,6 +1429,47 @@ class CaptureApiTests(unittest.TestCase):
             scene="NTPU",
             map_type="iss",
         )
+
+    def test_capture_status_endpoint_bounds_coordinator_probe(self):
+        from fastapi import HTTPException
+
+        coordinator = Mock()
+        timeout_calls: list[float | None] = []
+
+        async def fail_wait(awaitable, timeout):
+            timeout_calls.append(timeout)
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
+            raise asyncio.TimeoutError
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            with patch.object(self.main.asyncio, "wait_for", side_effect=fail_wait):
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(self.main.capture_status_get("usrp"))
+
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertIn("capture status timed out", raised.exception.detail)
+        self.assertEqual(timeout_calls, [30])
+
+    def test_capture_status_endpoint_returns_coordinator_snapshot(self):
+        coordinator = Mock()
+        payload = {
+            "mission_id": "mission_status_api",
+            "target": "usrp",
+            "bind": False,
+            "overall_state": "degraded",
+            "device_health": {
+                "raspi": {"state": "offline", "stale": False},
+            },
+        }
+        coordinator.status_payload.return_value = payload
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            result = asyncio.run(self.main.capture_status_get("usrp"))
+
+        self.assertEqual(result, payload)
+        coordinator.status_payload.assert_called_once_with("usrp")
 
     def test_bind_start_maps_unavailable_dependency_to_503(self):
         from app.capture_jobs import CaptureUnavailableError

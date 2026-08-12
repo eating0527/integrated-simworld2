@@ -12,6 +12,7 @@ ServiceState = Literal["running", "stopped", "unknown"]
 
 CONNECT_TIMEOUT_SECONDS = 8
 REMOTE_COMMAND_TIMEOUT_SECONDS = 10
+REMOTE_MISSION_STATE_TIMEOUT_SECONDS = 10
 REMOTE_STOP_TIMEOUT_SECONDS = 25
 REMOTE_START_TIMEOUT_SECONDS = 25
 
@@ -168,6 +169,31 @@ def _run_remote(command: str, use_sudo_password: bool = False, timeout: float = 
         client.close()
 
 
+def _run_remote_bounded(
+    command: str,
+    *,
+    timeout: float,
+    use_sudo_password: bool = False,
+) -> tuple[int, str, str]:
+    """Run one SSH operation with a bounded timeout.
+
+    A small compatibility fallback keeps older injected test adapters that do
+    not yet accept the timeout keyword usable; production ``_run_remote``
+    always receives the bound.
+    """
+
+    try:
+        return _run_remote(
+            command,
+            use_sudo_password=use_sudo_password,
+            timeout=timeout,
+        )
+    except TypeError as exc:
+        if "timeout" not in str(exc):
+            raise
+        return _run_remote(command, use_sudo_password=use_sudo_password)
+
+
 def _state_from_active_output(output: str, exit_code: int) -> ServiceState:
     value = output.strip().lower()
     if exit_code == 0 and value == "active":
@@ -217,7 +243,7 @@ def _probe_service_state(
     if timeout is None:
         exit_code, out, err = _run_remote(command)
     else:
-        exit_code, out, err = _run_remote(command, timeout=timeout)
+        exit_code, out, err = _run_remote_bounded(command, timeout=timeout)
     return _state_from_active_output(out, exit_code), out, err
 
 
@@ -264,16 +290,14 @@ def _needs_interactive_auth(out: str, err: str) -> bool:
 
 
 def _run_service_control(command: str, *, timeout: float = REMOTE_COMMAND_TIMEOUT_SECONDS) -> tuple[int, str, str]:
-    try:
-        result = _run_remote(command, timeout=timeout)
-    except TypeError:
-        result = _run_remote(command)
+    result = _run_remote_bounded(command, timeout=timeout)
     exit_code, out, err = result
     if exit_code != 0 and _needs_interactive_auth(out, err):
-        try:
-            result = _run_remote(command, use_sudo_password=True, timeout=timeout)
-        except TypeError:
-            result = _run_remote(command, use_sudo_password=True)
+        result = _run_remote_bounded(
+            command,
+            use_sudo_password=True,
+            timeout=timeout,
+        )
         exit_code, out, err = result
     return exit_code, out, err
 
@@ -333,9 +357,17 @@ def _mission_state_path(mission: RemoteMission | str, state_dir: str | None = No
     return f"{root}/{mission}/mission.json"
 
 
-def _read_mission_state(mission_id: str, state_dir: str | None = None) -> dict:
+def _read_mission_state(
+    mission_id: str,
+    state_dir: str | None = None,
+    *,
+    timeout: float = REMOTE_MISSION_STATE_TIMEOUT_SECONDS,
+) -> dict:
     path = _mission_state_path(mission_id, state_dir)
-    exit_code, out, _ = _run_remote(f"cat {shlex.quote(path)}")
+    exit_code, out, _ = _run_remote_bounded(
+        f"cat {shlex.quote(path)}",
+        timeout=timeout,
+    )
     if exit_code != 0 or not out:
         return {}
     try:
@@ -455,9 +487,35 @@ def _remote_upload_command(mission_state: dict) -> str:
 
 
 def get_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
-    status = get_drone_status(mode)
+    """Return lightweight service and mission state for runtime reconcile.
+
+    Runtime polling must not fetch journal/status diagnostics.  It probes the
+    service unit and reads only the mission JSON for the requested identifier;
+    both operations are independently bounded by the SSH command timeout.
+    """
+
+    target = _service_target(mode)
+    service_state, out, err = _probe_service_state(
+        target,
+        timeout=REMOTE_COMMAND_TIMEOUT_SECONDS,
+    )
+    if service_state == "running":
+        message = f"{target.service_name} running"
+    elif service_state == "stopped":
+        message = f"{target.service_name} stopped"
+    else:
+        message = err or out or f"{target.service_name} status unknown"
+    status = _response(target, service_state, message, [])
     status["mission_id"] = mission_id
-    status["mission_state"] = _read_mission_state(mission_id, state_dir)
+    mission_state = _read_mission_state(
+        mission_id,
+        state_dir,
+        timeout=REMOTE_MISSION_STATE_TIMEOUT_SECONDS,
+    )
+    remote_mission_id = mission_state.get("mission_id")
+    if remote_mission_id and str(remote_mission_id) != mission_id:
+        raise UsrpControlError("remote mission state belongs to another mission")
+    status["mission_state"] = mission_state
     return status
 
 

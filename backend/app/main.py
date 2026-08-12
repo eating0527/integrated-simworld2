@@ -2323,7 +2323,15 @@ async def _capture_call(fn, *args, **kwargs):
 @app.get("/api/capture/status")
 async def capture_status_get(usrp_mode: Literal["test", "usrp"] = Query("test")):
     try:
-        return await asyncio.to_thread(capture_coordinator.status_payload, usrp_mode)
+        return await asyncio.wait_for(
+            asyncio.to_thread(capture_coordinator.status_payload, usrp_mode),
+            timeout=30,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="capture status timed out; state is being reconciled",
+        ) from exc
     except Exception as exc:
         _capture_error(exc)
 

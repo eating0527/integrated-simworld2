@@ -372,6 +372,41 @@ class UsrpSamplingControlUnitTests(unittest.TestCase):
         self.assertEqual(result["mission_state"]["mission_id"], "flight_002")
         self.assertEqual(result["mission_state"]["upload_state"], "recording")
 
+    def test_runtime_capture_status_is_lightweight_and_bounded(self):
+        from app import usrp_ctl
+
+        calls: list[tuple[str, float | None]] = []
+
+        def fake_run(command: str, use_sudo_password: bool = False, timeout: float | None = None):
+            calls.append((command, timeout))
+            if command == "systemctl is-active drone_test":
+                return 0, "active", ""
+            if command.startswith("cat "):
+                return 0, '{"mission_id":"flight_runtime","state":"running","upload_state":"recording"}', ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            result = usrp_ctl.get_capture_job("test", "flight_runtime")
+
+        self.assertEqual(result["service_state"], "running")
+        self.assertEqual(result["mission_state"]["mission_id"], "flight_runtime")
+        self.assertTrue(all(timeout == usrp_ctl.REMOTE_COMMAND_TIMEOUT_SECONDS for _, timeout in calls))
+        self.assertFalse(any("journalctl" in command or "systemctl status" in command for command, _ in calls))
+
+    def test_runtime_capture_status_rejects_mismatched_remote_mission(self):
+        from app import usrp_ctl
+
+        def fake_run(command: str, use_sudo_password: bool = False, timeout: float | None = None):
+            if command == "systemctl is-active drone_test":
+                return 0, "active", ""
+            if command.startswith("cat "):
+                return 0, '{"mission_id":"another_mission","state":"running","upload_state":"recording"}', ""
+            return 0, "", ""
+
+        with patch.object(usrp_ctl, "_run_remote", side_effect=fake_run):
+            with self.assertRaisesRegex(usrp_ctl.UsrpControlError, "another mission"):
+                usrp_ctl.get_capture_job("test", "requested_mission")
+
     def test_remote_stop_leaves_pending_upload_for_explicit_retry(self):
         from app import usrp_ctl
 

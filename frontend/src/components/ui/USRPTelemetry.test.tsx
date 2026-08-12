@@ -577,4 +577,125 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Start Bound Capture' })).toBeDisabled();
   });
+
+  it('polls active status single-flight after settle and stops on unmount', async () => {
+    vi.useFakeTimers();
+    const active = captureStatus({
+      missionId: 'polling_mission',
+      bind: true,
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    let statusCalls = 0;
+    let resolvePending: ((response: Response) => void) | null = null;
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (!String(input).includes('/api/capture/status')) return jsonResponse(active);
+      statusCalls += 1;
+      if (statusCalls === 1) return jsonResponse(active);
+      return new Promise<Response>((resolve) => { resolvePending = resolve; });
+    });
+
+    const view = render(<USRPTelemetry />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(statusCalls).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(statusCalls).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(statusCalls).toBe(2);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(statusCalls).toBe(2);
+
+    resolvePending?.(await jsonResponse(active));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(statusCalls).toBe(2);
+
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(statusCalls).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it('continues the next polling round after an aborted request', async () => {
+    vi.useFakeTimers();
+    const active = captureStatus({
+      missionId: 'polling_timeout',
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    let statusCalls = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      if (!String(input).includes('/api/capture/status')) return jsonResponse(active);
+      statusCalls += 1;
+      if (statusCalls !== 2) return jsonResponse(active);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    });
+
+    const view = render(<USRPTelemetry />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(statusCalls).toBe(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(24999); });
+    expect(statusCalls).toBe(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(statusCalls).toBe(3);
+
+    view.unmount();
+    vi.useRealTimers();
+  });
+
+  it('shares an in-flight status request and aborts it on unmount', async () => {
+    const active = captureStatus({
+      missionId: 'polling_unmount',
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    let statusCalls = 0;
+    let pendingSignal: AbortSignal | null = null;
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      if (!String(input).includes('/api/capture/status')) return jsonResponse(active);
+      statusCalls += 1;
+      pendingSignal = init?.signal ?? null;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    });
+
+    const view = render(<USRPTelemetry />);
+    await act(async () => { await Promise.resolve(); });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(statusCalls).toBe(1);
+
+    view.unmount();
+    expect(pendingSignal?.aborted).toBe(true);
+  });
 });
