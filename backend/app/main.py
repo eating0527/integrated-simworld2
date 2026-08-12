@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from app.capture_jobs import (
     CaptureConflictError,
     CaptureCoordinator,
+    CapturePreflightError,
     CaptureNotFoundError,
     CaptureStore,
     CaptureUnavailableError,
@@ -2292,6 +2293,21 @@ def _capture_error(exc: Exception):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, CaptureConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, CapturePreflightError):
+        raise HTTPException(
+            status_code=409 if exc.conflicts and len(exc.conflicts) == len(exc.errors) else 503,
+            detail={
+                "error_type": "capture_preflight_failed",
+                "message": str(exc),
+                "errors": dict(exc.errors),
+                "preflight_errors": dict(exc.errors),
+                "conflicts": dict(exc.conflicts),
+                "devices": [
+                    {"device": device, "error": message}
+                    for device, message in exc.errors.items()
+                ],
+            },
+        ) from exc
     if isinstance(exc, CaptureUnavailableError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     raise exc

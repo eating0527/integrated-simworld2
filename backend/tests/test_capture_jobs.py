@@ -819,13 +819,106 @@ class BindCoordinatorTests(unittest.TestCase):
     def test_bind_start_preflights_both_before_launching(self):
         from app.capture_jobs import CaptureUnavailableError
 
-        self.backend.get_drone_status.side_effect = RuntimeError("SSH timeout")
+        self.health_probe.side_effect = RuntimeError("SSH timeout")
 
         with self.assertRaises(CaptureUnavailableError):
             self.coordinator.start_bind("test")
 
         self.popen.assert_not_called()
         self.backend.start_capture_job.assert_not_called()
+
+    def test_bind_preflight_reports_each_device_without_creating_mission(self):
+        from app.capture_jobs import CapturePreflightError
+
+        self.run_command.return_value = Mock(
+            returncode=1,
+            stdout="",
+            stderr="AP3 USB disconnected",
+        )
+        self.health_probe.side_effect = RuntimeError("SSH timeout")
+
+        with self.assertRaises(CapturePreflightError) as raised:
+            self.coordinator.start_bind("test")
+
+        self.assertEqual(
+            raised.exception.errors,
+            {
+                "ap3": "AP3 USB disconnected",
+                "raspi": "SSH timeout",
+            },
+        )
+        self.assertEqual(self.coordinator.store.list(), [])
+        self.popen.assert_not_called()
+        self.backend.start_capture_job.assert_not_called()
+
+    def test_bind_ap3_preflight_failure_reports_only_ap3_without_mission(self):
+        from app.capture_jobs import CapturePreflightError
+
+        self.run_command.return_value = Mock(
+            returncode=1,
+            stdout="",
+            stderr="AP3 forwarding unavailable",
+        )
+
+        with self.assertRaises(CapturePreflightError) as raised:
+            self.coordinator.start_bind("test")
+
+        self.assertEqual(raised.exception.errors, {"ap3": "AP3 forwarding unavailable"})
+        self.assertEqual(self.coordinator.store.list(), [])
+        self.popen.assert_not_called()
+        self.backend.start_capture_job.assert_not_called()
+
+    def test_bind_persists_shared_mission_before_either_launch(self):
+        observed = []
+
+        def launch_uav(*args, **kwargs):
+            mission_id = args[0][args[0].index("--mission-id") + 1]
+            observed.append(self.coordinator.store.path(mission_id).exists())
+            return FakeProcess()
+
+        self.popen.side_effect = launch_uav
+
+        def launch_usrp(mode, mission, **kwargs):
+            observed.append(self.coordinator.store.path(mission["mission_id"]).exists())
+            return {
+                "success": True,
+                "service_state": "running",
+                "mission_state": {"state": "running", "upload_state": "recording"},
+            }
+
+        self.backend.start_capture_job.side_effect = launch_usrp
+        state = self.coordinator.start_bind("test")
+
+        self.assertEqual(observed, [True, True])
+        self.assertEqual(state.uav.mission_id, state.usrp.mission_id)
+
+    def test_bind_ap3_launch_failure_keeps_usrp_recording(self):
+        self.popen.side_effect = RuntimeError("adb recorder failed")
+
+        state = self.coordinator.start_bind("usrp")
+
+        self.assertEqual(state.overall_state, "degraded")
+        self.assertEqual(state.uav.service, "failed")
+        self.assertEqual(state.usrp.service, "running")
+        self.assertEqual(len(self.coordinator.store.list()), 1)
+        self.backend.start_capture_job.assert_called_once()
+
+    def test_bind_rejects_unresolved_upload_before_creating_new_mission(self):
+        from app.capture_jobs import CaptureConflictError
+
+        old = self.coordinator.store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="pending-upload",
+        )
+        old.started_at = "2026-08-12T00:00:00+00:00"
+        old.usrp.service = "stopped"
+        old.usrp.file = "upload_pending"
+        self.coordinator.store.save(old)
+
+        with self.assertRaises(CaptureConflictError):
+            self.coordinator.start_bind("usrp")
 
     def test_bind_start_shares_mission_id(self):
         state = self.coordinator.start_bind("usrp")
@@ -838,6 +931,8 @@ class BindCoordinatorTests(unittest.TestCase):
         remote = self.backend.start_capture_job.call_args.args[1]
         self.assertEqual(remote["work_dir"], "/home/user/rx_sampling")
         self.assertEqual(remote["noise_csv"], "/home/user/rx_sampling/noise.csv")
+        self.health_probe.assert_called_with("usrp")
+        self.backend.get_drone_status.assert_not_called()
 
     def test_bind_child_failure_preserves_other_child(self):
         self.backend.start_capture_job.side_effect = RuntimeError("systemctl failed")
@@ -1193,6 +1288,49 @@ class CaptureApiTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 503)
         self.assertEqual(raised.exception.detail, "SSH timeout")
+
+    def test_bind_start_maps_structured_preflight_errors(self):
+        from app.capture_jobs import CapturePreflightError
+        from fastapi import HTTPException
+
+        coordinator = Mock()
+        coordinator.start_bind.side_effect = CapturePreflightError(
+            {"ap3": "USB disconnected", "raspi": "SSH timeout"}
+        )
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(
+                    self.main.capture_bind_start_post(
+                        self.main.CaptureStartRequest(usrp_mode="test")
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["errors"],
+            {"ap3": "USB disconnected", "raspi": "SSH timeout"},
+        )
+
+    def test_bind_start_maps_ap3_only_preflight_error(self):
+        from app.capture_jobs import CapturePreflightError
+        from fastapi import HTTPException
+
+        coordinator = Mock()
+        coordinator.start_bind.side_effect = CapturePreflightError(
+            {"ap3": "Forwarding unavailable"}
+        )
+
+        with patch.object(self.main, "capture_coordinator", coordinator):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(
+                    self.main.capture_bind_start_post(
+                        self.main.CaptureStartRequest(usrp_mode="test")
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["errors"], {"ap3": "Forwarding unavailable"})
 
     def test_usrp_start_maps_launch_failure_to_503(self):
         from app.capture_jobs import CaptureUnavailableError

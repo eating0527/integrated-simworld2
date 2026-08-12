@@ -524,4 +524,57 @@ describe('USRPTelemetry capture controls', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Internal Server Error');
     expect(screen.queryByText(/Unexpected token/)).not.toBeInTheDocument();
   });
+
+  it('announces structured per-device Bound Start preflight errors', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/bind/start')) {
+        return jsonResponse({
+          detail: {
+            errors: { ap3: 'USB disconnected', raspi: 'SSH timeout' },
+          },
+        }, false);
+      }
+      return jsonResponse(captureStatus());
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
+    await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('AP3: USB disconnected');
+    expect(screen.getByRole('alert')).toHaveTextContent('Raspberry Pi: SSH timeout');
+  });
+
+  it('names AP3 when only AP3 Bound Start preflight fails', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/bind/start')) {
+        return jsonResponse({ detail: { errors: { ap3: 'Forwarding unavailable' } } }, false);
+      }
+      return jsonResponse(captureStatus());
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
+    await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('AP3: Forwarding unavailable');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Raspberry Pi');
+  });
+
+  it('locks Bind and mode while either child is finalizing or upload is pending', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'pending-bound',
+      bind: true,
+      overall: 'finalizing',
+      uav: { service: 'stopped', file: 'ready', phase: 'completed' },
+      usrp: { service: 'stopped', file: 'upload_pending', phase: 'upload_pending' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start Bound Capture' })).toBeDisabled();
+  });
 });

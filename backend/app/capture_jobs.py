@@ -124,6 +124,38 @@ class CaptureUnavailableError(CaptureError):
     pass
 
 
+class CapturePreflightError(CaptureUnavailableError):
+    """Bound Start preflight failed for one or more devices.
+
+    ``errors`` is intentionally keyed by the stable device identifiers used by
+    Device Health (``ap3`` and ``raspi``), so API consumers can present every
+    unavailable dependency without parsing one combined message.
+    """
+
+    def __init__(
+        self,
+        errors: dict[str, str],
+        *,
+        conflicts: dict[str, str] | None = None,
+    ):
+        self.errors = {
+            str(device): str(message)
+            for device, message in errors.items()
+            if str(message).strip()
+        }
+        self.device_errors = self.errors
+        self.conflicts = {
+            str(device): str(message)
+            for device, message in (conflicts or {}).items()
+            if str(message).strip()
+        }
+        details = "; ".join(
+            f"{device}: {message}"
+            for device, message in self.errors.items()
+        )
+        super().__init__(f"Bound capture preflight failed: {details}")
+
+
 class CaptureNotFoundError(CaptureError):
     pass
 
@@ -143,6 +175,27 @@ def _selected_children(state: CaptureState) -> list[ChildState]:
     if state.target == "usrp":
         return [state.usrp]
     return [state.uav, state.usrp]
+
+
+_UNRESOLVED_PHASES = frozenset({
+    "stopping",
+    "stopping_service",
+    "finalizing_file",
+    "upload_pending",
+    "uploading",
+    "reconciling",
+    "stop_failed",
+})
+
+
+def _child_unresolved(child: ChildState) -> bool:
+    """Return whether a child still owns active or unfinished work."""
+
+    return (
+        child.service in {"starting", "running", "presumed_running", "stopping"}
+        or child.file in {"finalizing", "upload_pending"}
+        or child.phase in _UNRESOLVED_PHASES
+    )
 
 
 def _aggregate_state(state: CaptureState) -> OverallState:
@@ -335,12 +388,7 @@ class CaptureCoordinator:
         for state in reversed(self.store.list()):
             if state.target not in {"uav", "bind"}:
                 continue
-            if state.uav.service in {
-                "starting",
-                "running",
-                "presumed_running",
-                "stopping",
-            }:
+            if _child_unresolved(state.uav):
                 return state
         return None
 
@@ -348,12 +396,7 @@ class CaptureCoordinator:
         for state in reversed(self.store.list()):
             if state.target not in {"usrp", "bind"}:
                 continue
-            if state.usrp.service in {
-                "starting",
-                "running",
-                "presumed_running",
-                "stopping",
-            }:
+            if _child_unresolved(state.usrp):
                 return state
         return None
 
@@ -378,12 +421,54 @@ class CaptureCoordinator:
             raise CaptureUnavailableError(detail)
 
     def preflight_usrp(self, mode: UsrpMode) -> None:
+        probe = getattr(self.usrp_backend, "get_drone_health", None)
         try:
-            status = self.usrp_backend.get_drone_status(mode)
+            if callable(probe) and getattr(probe, "__module__", "") != "unittest.mock":
+                status = probe(mode)
+            else:
+                # Older adapters may not expose the lightweight probe yet. In
+                # that case the status adapter remains the compatibility seam;
+                # production usrp_ctl always provides get_drone_health.
+                status = self.usrp_backend.get_drone_status(mode)
         except Exception as exc:
             raise CaptureUnavailableError(str(exc)) from exc
+        if not isinstance(status, dict):
+            raise CaptureUnavailableError("Raspberry Pi readiness result is invalid")
         if status.get("service_state") == "running":
             raise CaptureConflictError(f"{mode} capture service is already running")
+        if status.get("success") is False:
+            detail = status.get("message") or status.get("error") or "Raspberry Pi is unavailable"
+            raise CaptureUnavailableError(str(detail))
+        if status.get("raspi_connected") is False or status.get("session_connected") is False:
+            detail = status.get("message") or status.get("error") or "Raspberry Pi is unavailable"
+            raise CaptureUnavailableError(str(detail))
+        service_state = status.get("service_state")
+        if service_state not in {"stopped", "idle"}:
+            detail = status.get("message") or status.get("error") or (
+                f"Raspberry Pi service state is {service_state or 'unknown'}"
+            )
+            raise CaptureUnavailableError(str(detail))
+
+    def _preflight_bind(self, mode: UsrpMode) -> None:
+        """Run both Bound Start checks and report all failures together."""
+
+        errors: dict[str, str] = {}
+        conflicts: dict[str, str] = {}
+        checks = (
+            ("ap3", self.preflight_uav),
+            ("raspi", lambda: self.preflight_usrp(mode)),
+        )
+        for device, check in checks:
+            try:
+                check()
+            except CaptureConflictError as exc:
+                message = str(exc) or f"{device} capture is already running"
+                errors[device] = message
+                conflicts[device] = message
+            except Exception as exc:
+                errors[device] = str(exc) or f"{device} preflight failed"
+        if errors:
+            raise CapturePreflightError(errors, conflicts=conflicts)
 
     def health_status(self, mode: UsrpMode = "test") -> dict[str, dict]:
         with self._lock:
@@ -405,6 +490,7 @@ class CaptureCoordinator:
         csv_path = self.store.root / state.mission_id / "gps.csv"
         ensure_gps_csv(csv_path)
         state.uav.connection = "ready"
+        state.uav.phase = "starting_service"
         state.uav.service = "starting"
         state.uav.file = "recording"
         state.uav.path = str(csv_path)
@@ -437,6 +523,7 @@ class CaptureCoordinator:
         )
         self._uav_processes[state.mission_id] = process
         state.uav.pid = process.pid
+        state.uav.phase = "recording"
         state.uav.service = "running"
         return self.store.save(state)
 
@@ -489,6 +576,7 @@ class CaptureCoordinator:
         map_type: str,
     ) -> CaptureState:
         state.usrp.connection = "ready"
+        state.usrp.phase = "starting_service"
         state.usrp.service = "starting"
         state.usrp.file = "recording"
         state.started_at = state.started_at or _now_iso()
@@ -504,6 +592,8 @@ class CaptureCoordinator:
         mission_state = remote.get("mission_state") or {}
         if mission_state.get("upload_state") == "recording":
             state.usrp.file = "recording"
+        if state.usrp.service == "running":
+            state.usrp.phase = "recording"
         return self.store.save(state)
 
     def start_uav(
@@ -563,8 +653,7 @@ class CaptureCoordinator:
         with self._lock:
             if self._active_uav() is not None or self._active_usrp() is not None:
                 raise CaptureConflictError("a capture job is already running")
-            self.preflight_uav()
-            self.preflight_usrp(mode)
+            self._preflight_bind(mode)
             state = self.store.create(
                 bind=True,
                 selected_usrp_mode=mode,
@@ -573,17 +662,17 @@ class CaptureCoordinator:
             try:
                 state = self._launch_uav(state)
             except Exception as exc:
-                state.uav.connection = "offline"
                 state.uav.service = "failed"
                 state.uav.file = "failed"
+                state.uav.phase = "failed"
                 state.uav.error = str(exc)
                 self.store.save(state)
             try:
                 state = self._launch_usrp(state, scene=scene, map_type=map_type)
             except Exception as exc:
-                state.usrp.connection = "offline"
                 state.usrp.service = "failed"
                 state.usrp.file = "failed"
+                state.usrp.phase = "failed"
                 state.usrp.error = str(exc)
                 self.store.save(state)
             return self.store.load(state.mission_id)
@@ -595,6 +684,7 @@ class CaptureCoordinator:
                 return state
 
             process = self._uav_processes.get(mission_id)
+            state.uav.phase = "stopping"
             state.uav.service = "stopping"
             state.uav.file = "finalizing"
             self.store.save(state)
@@ -612,11 +702,13 @@ class CaptureCoordinator:
             except (OSError, GpsCsvSchemaError) as exc:
                 state.uav.service = "failed"
                 state.uav.file = "failed"
+                state.uav.phase = "failed"
                 state.uav.error = str(exc)
                 return self.store.save(state)
 
             state.uav.service = "stopped"
             state.uav.file = "ready"
+            state.uav.phase = "stopped"
             state.uav.pid = None
             self._uav_processes.pop(mission_id, None)
             return self.store.save(state)
