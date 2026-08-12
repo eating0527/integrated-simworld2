@@ -353,6 +353,27 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByText('Presumed running')).toBeInTheDocument();
   });
 
+  it('shows AP3 Resume Timeout and the available Partial GPS Result while Noise continues', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'resume_timeout',
+      bind: true,
+      overall: 'degraded',
+      uav: {
+        service: 'failed',
+        file: 'ready',
+        phase: 'resume_timeout',
+        error: 'AP3 Resume Timeout; partial GPS file available',
+      },
+      usrp: { service: 'running', file: 'recording' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText('DEGRADED · GPS RESUME TIMEOUT · NOISE RECORDING')).toBeInTheDocument();
+    expect(screen.getByText('Partial GPS file available.')).toBeInTheDocument();
+    expect(screen.getByText('AP3 Resume Timeout; partial GPS file available')).toBeInTheDocument();
+  });
+
   it('shows completed-with-warning child context', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'bound_warning',

@@ -15,7 +15,7 @@ BACKEND_DIR = ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.gps_csv import ensure_gps_csv, open_gps_csv_for_append
+from app.gps_csv import ensure_gps_csv, open_gps_csv_for_append, resume_window_expired
 
 
 ADB = ROOT / "tools" / "platform-tools" / "adb.exe"
@@ -62,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--altitude", choices=["relative", "amsl"], default="relative")
     parser.add_argument("--flush-every", type=int, default=1)
     parser.add_argument("--max-messages", type=int, default=0)
+    parser.add_argument("--resume-window-seconds", type=float, default=300.0)
     parser.add_argument("--utc-offset-hours", type=float, default=8.0)
     parser.add_argument("--sync-api-url", default="", help="Optional B laptop endpoint, e.g. http://192.168.1.20:8888/api/usrp/sync-gps-point.")
     parser.add_argument("--sync-device-id", default="align-m4p-top-aircraft")
@@ -183,6 +184,7 @@ def main() -> int:
         print(f"syncing GPS points to {args.sync_api_url}")
 
     written = 0
+    last_sample_at: datetime | None = None
     with open_gps_csv_for_append(csv_path) as handle:
         writer = csv.writer(handle)
         while True:
@@ -201,7 +203,11 @@ def main() -> int:
                     amsl_alt = msg.alt / 1000.0
                     rel_alt = msg.relative_alt / 1000.0
                     alt = rel_alt if args.altitude == "relative" else amsl_alt
-                    timestamp = format_csv_timestamp(datetime.now(output_tz))
+                    sample_at = datetime.now(output_tz)
+                    if resume_window_expired(last_sample_at, sample_at, args.resume_window_seconds):
+                        print("AP3 Resume Timeout; recovery row was not written", flush=True)
+                        return 2
+                    timestamp = format_csv_timestamp(sample_at)
                     writer.writerow([timestamp, lat, lon, alt, args.altitude])
                     sync_client.send(
                         timestamp=timestamp,
@@ -211,6 +217,7 @@ def main() -> int:
                         alt_mode=args.altitude,
                     )
                     written += 1
+                    last_sample_at = sample_at
                     if written % max(1, args.flush_every) == 0:
                         handle.flush()
                     print(f"wrote #{written}: lat={lat:.7f} lon={lon:.7f} alt={alt:.2f}m")

@@ -373,6 +373,9 @@ function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth 
 
 function missionIssue(status: CaptureStatus, failuresOnly = false): string | null {
   const children = [['GPS', status.uav], ['NOISE', status.usrp]] as const;
+  const resumeTimeout = children
+    .find(([, child]) => child.phase === 'resume_timeout');
+  if (resumeTimeout) return `${resumeTimeout[0]} RESUME TIMEOUT`;
   const failed = children
     .find(([, child]) => child.service === 'failed' || child.file === 'failed');
   if (failed) return `${failed[0]} FAILED`;
@@ -716,6 +719,9 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         })}
       </div>
       {child.error ? <div role="alert" style={S.error}>{child.error}</div> : null}
+      {child.phase === 'resume_timeout' && child.file === 'ready' ? (
+        <div style={S.error}>Partial GPS file available.</div>
+      ) : null}
       {child.service === 'presumed_running' ? <div style={S.error}>Presumed running; reconcile status before stopping.</div> : null}
       {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>Stopped; upload pending.</div> : null}
       {child.file === 'upload_pending' && title.includes('USRP') ? <button type="button" style={S.button} disabled={busy} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}

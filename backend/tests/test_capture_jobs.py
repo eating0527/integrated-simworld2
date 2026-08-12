@@ -10,7 +10,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 class GpsCsvSchemaTests(unittest.TestCase):
@@ -824,6 +824,213 @@ class Ap3FreshnessTests(unittest.TestCase):
         self.assertEqual(expired.uav.resume_deadline_at, "2026-08-12T00:05:00+00:00")
 
 
+class Ap3CaptureResumeTests(unittest.TestCase):
+    def setUp(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+        from app.device_health import HealthResult
+
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.root = self.repo_root / ".test_tmp" / uuid.uuid4().hex
+        self.root.mkdir(parents=True)
+        self.now = [datetime(2026, 8, 12, 0, 5, tzinfo=timezone.utc)]
+        self.process = FakeProcess()
+        self.popen = Mock(return_value=self.process)
+        self.run_command = Mock(return_value=Mock(returncode=0, stdout="", stderr=""))
+        self.health = Mock()
+        self.health.poll.return_value = {
+            "ap3": HealthResult("ap3", "ready", 0.0, ""),
+            "raspi": HealthResult("raspi", "ready", 0.0, ""),
+        }
+        self.store = CaptureStore(self.root)
+        self.coordinator = CaptureCoordinator(
+            self.store,
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=self.popen,
+            health_monitor=self.health,
+            clock=lambda: self.now[0],
+        )
+
+    def _bound_reconciling(self, *, mission_id="resume_mission"):
+        from app.gps_csv import GPS_CSV_HEADER
+
+        state = self.store.create(
+            bind=True,
+            selected_usrp_mode="usrp",
+            target="bind",
+            mission_id=mission_id,
+        )
+        path = self.store.root / mission_id / "gps.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"{GPS_CSV_HEADER}\n"
+            "2026-08-12T00:00:00+00:00,24.0,121.0,10,relative\n",
+            encoding="utf-8",
+        )
+        state.started_at = "2026-08-12T00:00:00+00:00"
+        state.uav.path = str(path)
+        state.uav.connection = "offline"
+        state.uav.service = "presumed_running"
+        state.uav.file = "recording"
+        state.uav.phase = "reconciling"
+        state.uav.last_sample_at = "2026-08-12T00:00:00+00:00"
+        state.uav.disconnected_at = "2026-08-12T00:00:11+00:00"
+        state.uav.resume_deadline_at = "2026-08-12T00:05:00+00:00"
+        state.usrp.connection = "ready"
+        state.usrp.service = "running"
+        state.usrp.file = "recording"
+        state.usrp.phase = "recording"
+        self.store.save(state)
+        self.coordinator._uav_processes[state.mission_id] = self.process
+        return state, path
+
+    def test_resume_accepts_299_and_exactly_300_seconds(self):
+        for seconds in (299, 300):
+            with self.subTest(seconds=seconds):
+                state, _ = self._bound_reconciling(mission_id=f"resume_{seconds}")
+                resumed = self.coordinator.resume_uav(
+                    state.mission_id,
+                    recovered_at=datetime(2026, 8, 12, tzinfo=timezone.utc) + timedelta(seconds=seconds),
+                )
+
+                self.assertEqual(resumed.uav.mission_id, state.mission_id)
+                self.assertEqual(resumed.uav.service, "running")
+                self.assertEqual(resumed.uav.phase, "recording")
+                self.assertEqual(resumed.uav.file, "recording")
+                self.assertEqual(resumed.uav.connection, "ready")
+
+    def test_resume_timeout_at_301_keeps_partial_file_and_usrp_running(self):
+        state, path = self._bound_reconciling()
+        write_sample = Mock()
+
+        timed_out = self.coordinator.record_gps_sample(
+            state.mission_id,
+            "2026-08-12T00:05:01Z",
+            write_sample,
+        )
+
+        self.assertEqual(timed_out.uav.service, "failed")
+        self.assertEqual(timed_out.uav.phase, "resume_timeout")
+        self.assertEqual(timed_out.uav.file, "ready")
+        self.assertIn("partial", timed_out.uav.error.lower())
+        self.assertEqual(timed_out.usrp.service, "running")
+        self.assertEqual(timed_out.usrp.file, "recording")
+        self.assertEqual(path.read_text(encoding="utf-8").count("GPS"), 0)
+        self.assertTrue(self.process.terminated)
+        write_sample.assert_not_called()
+
+    def test_resume_appends_same_mission_without_second_header(self):
+        state, path = self._bound_reconciling()
+        original = path.read_text(encoding="utf-8")
+        path.write_text(
+            original + "2026-08-12T00:04:59+00:00,24.1,121.1,11,relative\n",
+            encoding="utf-8",
+        )
+
+        resumed = self.coordinator.resume_uav(
+            state.mission_id,
+            recovered_at="2026-08-12T00:04:59Z",
+        )
+
+        lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(resumed.mission_id, state.mission_id)
+        self.assertEqual(lines.count("time_stamp,lat,lon,alt,alt_mode"), 1)
+        self.assertEqual(len(lines), 3)
+        self.assertIn("2026-08-12T00:00:00+00:00", lines[1])
+        self.assertIn("2026-08-12T00:04:59+00:00", lines[2])
+
+    def test_resume_rejects_invalid_schema_without_launching_or_changing_file(self):
+        state, path = self._bound_reconciling()
+        original = "time_stamp,lat,lon,alt\n2026-08-12T00:00:00+00:00,24.0,121.0,10\n"
+        path.write_text(original, encoding="utf-8")
+        self.popen.reset_mock()
+
+        rejected = self.coordinator.resume_uav(
+            state.mission_id,
+            recovered_at="2026-08-12T00:01:00Z",
+        )
+
+        self.assertEqual(rejected.uav.service, "failed")
+        self.assertEqual(rejected.uav.phase, "failed")
+        self.assertEqual(rejected.uav.file, "failed")
+        self.assertIn("gps.csv header must be", rejected.uav.error)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+        self.popen.assert_not_called()
+
+    def test_dead_recorder_resume_relaunches_same_mission_after_restart(self):
+        state, _ = self._bound_reconciling(mission_id="restart_resume")
+        restarted_process = FakeProcess(pid=9876)
+        restarted_popen = Mock(return_value=restarted_process)
+        from app.capture_jobs import CaptureCoordinator
+
+        restarted = CaptureCoordinator(
+            self.store,
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=restarted_popen,
+            health_monitor=self.health,
+            clock=lambda: self.now[0],
+        )
+
+        resumed = restarted.resume_uav(state.mission_id, recovered_at="2026-08-12T00:04:59Z")
+
+        self.assertEqual(resumed.mission_id, state.mission_id)
+        self.assertEqual(resumed.uav.service, "running")
+        self.assertEqual(resumed.uav.pid, 9876)
+        command = restarted_popen.call_args.args[0]
+        self.assertIn("--mission-id", command)
+        self.assertIn(state.mission_id, command)
+
+    def test_recorder_timeout_exit_finalizes_partial_without_prior_status_poll(self):
+        state, path = self._bound_reconciling(mission_id="process_timeout")
+        state.uav.phase = "recording"
+        state.uav.connection = "ready"
+        state.uav.service = "running"
+        state.uav.disconnected_at = None
+        self.store.save(state)
+        self.process.poll = Mock(return_value=2)
+
+        timed_out = self.coordinator.status("test")
+
+        self.assertEqual(timed_out.uav.phase, "resume_timeout")
+        self.assertEqual(timed_out.uav.service, "failed")
+        self.assertEqual(timed_out.uav.file, "ready")
+        self.assertEqual(timed_out.usrp.service, "running")
+        self.assertTrue(path.exists())
+
+    def test_bound_recovery_sample_triggers_resume_but_stop_wins_race(self):
+        state, path = self._bound_reconciling(mission_id="sample_resume")
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "2026-08-12T00:04:59+00:00,24.1,121.1,11,relative\n",
+            encoding="utf-8",
+        )
+
+        resumed = self.coordinator.record_gps_sample(
+            state.mission_id,
+            "2026-08-12T00:04:59Z",
+        )
+        self.assertEqual(resumed.uav.service, "running")
+        self.assertEqual(resumed.uav.mission_id, state.mission_id)
+
+        stopped = self.coordinator.stop_uav(state.mission_id)
+        self.assertEqual(stopped.uav.service, "stopped")
+        self.popen.reset_mock()
+        after_stop = self.coordinator.resume_uav(
+            state.mission_id,
+            recovered_at="2026-08-12T00:05:00Z",
+        )
+        self.assertEqual(after_stop.uav.service, "stopped")
+        self.popen.assert_not_called()
+        write_sample = Mock()
+        self.coordinator.record_gps_sample(
+            state.mission_id,
+            "2026-08-12T00:05:00Z",
+            write_sample,
+        )
+        write_sample.assert_not_called()
+
+
 class Ap3CliTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -841,6 +1048,16 @@ class Ap3CliTests(unittest.TestCase):
             args = self.module.parse_args()
 
         self.assertTrue(args.check)
+
+    def test_resume_gap_is_inclusive_at_300_seconds(self):
+        previous = datetime(2026, 8, 12, tzinfo=timezone.utc)
+
+        self.assertFalse(
+            self.module.resume_window_expired(previous, previous + timedelta(seconds=300), 300)
+        )
+        self.assertTrue(
+            self.module.resume_window_expired(previous, previous + timedelta(seconds=301), 300)
+        )
 
     def test_uses_bundled_adb(self):
         self.assertTrue(self.module.ADB.exists(), self.module.ADB)
@@ -1835,6 +2052,11 @@ class CaptureApiTests(unittest.TestCase):
                 asyncio.run(self.main.capture_uav_stop_post("flight_api")).mission_id,
                 "flight_api",
             )
+            coordinator.resume_uav.return_value = self._state("bind")
+            self.assertEqual(
+                asyncio.run(self.main.capture_uav_resume_post("flight_api")).mission_id,
+                "flight_api",
+            )
             self.assertEqual(
                 asyncio.run(self.main.capture_usrp_stop_post("flight_api")).mission_id,
                 "flight_api",
@@ -1846,6 +2068,7 @@ class CaptureApiTests(unittest.TestCase):
 
         coordinator.start_uav.assert_called_once()
         coordinator.start_usrp.assert_called_once()
+        coordinator.resume_uav.assert_called_once_with("flight_api")
         coordinator.stop_bind.assert_called_once_with("flight_api")
 
 
@@ -1995,6 +2218,61 @@ class GpsSyncTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(gps_path.read_text(encoding="utf-8"), original)
         self.assertFalse((bundle / "gps_sync.log").exists())
+
+    def test_sync_rejects_recovery_row_after_resume_deadline(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+        from app.gps_csv import GPS_CSV_HEADER
+
+        store = CaptureStore(self.root)
+        state = store.create(
+            bind=True,
+            selected_usrp_mode="usrp",
+            target="bind",
+            mission_id="flight_expired",
+        )
+        bundle = self.root / state.mission_id
+        gps_path = bundle / "gps.csv"
+        original = (
+            f"{GPS_CSV_HEADER}\n"
+            "2026-08-12T00:00:00+00:00,24.0,121.0,10,relative\n"
+        )
+        gps_path.write_text(original, encoding="utf-8")
+        state.started_at = "2026-08-12T00:00:00+00:00"
+        state.uav.path = str(gps_path)
+        state.uav.connection = "offline"
+        state.uav.service = "presumed_running"
+        state.uav.file = "recording"
+        state.uav.phase = "reconciling"
+        state.uav.last_sample_at = "2026-08-12T00:00:00+00:00"
+        state.uav.disconnected_at = "2026-08-12T00:00:11+00:00"
+        state.uav.resume_deadline_at = "2026-08-12T00:05:00+00:00"
+        state.usrp.service = "running"
+        state.usrp.file = "recording"
+        store.save(state)
+        coordinator = CaptureCoordinator(store, repo_root=self.repo_root)
+        coordinator._uav_processes[state.mission_id] = FakeProcess()
+        point = self.main.GpsSyncPointRequest(
+            mission_id=state.mission_id,
+            time_stamp="2026-08-12T00:05:01+00:00",
+            lat=24.1,
+            lon=121.1,
+            alt=11,
+        )
+
+        with (
+            patch.object(self.main, "INCOMING_CSV_DIR", self.root),
+            patch.object(self.main, "capture_coordinator", coordinator),
+            patch.object(self.main.gps_manager, "update_gps") as update_gps,
+            patch.object(self.main.gps_manager, "broadcast", new=AsyncMock()) as broadcast,
+        ):
+            response = asyncio.run(self.main.usrp_sync_gps_point_post(point))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(gps_path.read_text(encoding="utf-8"), original)
+        self.assertFalse((bundle / "gps_sync.log").exists())
+        self.assertEqual(store.load(state.mission_id).uav.phase, "resume_timeout")
+        update_gps.assert_not_called()
+        broadcast.assert_not_awaited()
 
     def test_sync_missions_lists_recent_incoming_data(self):
         bundle = self.root / "flight_visible"

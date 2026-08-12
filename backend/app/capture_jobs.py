@@ -13,7 +13,13 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.gps_csv import GPS_CSV_COLUMNS, GpsCsvSchemaError, ensure_gps_csv, validate_gps_csv
+from app.gps_csv import (
+    GPS_CSV_COLUMNS,
+    GpsCsvSchemaError,
+    ensure_gps_csv,
+    resume_window_expired,
+    validate_gps_csv,
+)
 from app.device_health import Ap3Health, DeviceHealthMonitor, RaspiHealth
 
 
@@ -171,6 +177,14 @@ class CapturePreflightError(CaptureUnavailableError):
 
 class CaptureNotFoundError(CaptureError):
     pass
+
+
+def uav_accepts_gps_sample(child: ChildState) -> bool:
+    return not (
+        child.service in {"stopping", "stopped", "failed"}
+        or child.phase
+        in {"stopping", "stopping_service", "finalizing_file", "stopped", "completed", "resume_timeout", "failed"}
+    )
 
 
 def _now_iso() -> str:
@@ -539,6 +553,9 @@ class CaptureCoordinator:
         state.uav.service = "starting"
         state.uav.file = "recording"
         state.uav.path = str(csv_path)
+        # A resume must keep the original mission start timestamp.  Ordinary
+        # start creates it exactly once, while an append-only resume only
+        # changes the child phase and process ownership.
         state.started_at = state.started_at or _iso(self._clock_now())
         self.store.save(state)
 
@@ -562,6 +579,8 @@ class CaptureCoordinator:
                 state.mission_id,
                 "--incoming-dir",
                 str(self.store.root),
+                "--resume-window-seconds",
+                str(self.resume_window_seconds),
                 *sync_args,
             ),
             cwd=self.repo_root,
@@ -651,7 +670,12 @@ class CaptureCoordinator:
             return latest
         return previous
 
-    def record_gps_sample(self, mission_id: str, sample_at: str | datetime) -> CaptureState | None:
+    def record_gps_sample(
+        self,
+        mission_id: str,
+        sample_at: str | datetime,
+        write_sample: Callable[[], None] | None = None,
+    ) -> CaptureState | None:
         """Persist a successful GPS write for an existing mission.
 
         The GPS sync endpoint also serves missions that are not managed by the
@@ -666,9 +690,34 @@ class CaptureCoordinator:
             try:
                 state = self.store.load(mission_id)
             except CaptureNotFoundError:
+                if write_sample is not None:
+                    write_sample()
                 return None
             if state.target not in {"uav", "bind"} or state.uav.service == "idle":
+                if write_sample is not None:
+                    write_sample()
                 return state
+            if not uav_accepts_gps_sample(state.uav):
+                return state
+            # The sync callback is the first positive reconnection evidence
+            # available to a bound mission.  Evaluate the gap against the
+            # persisted *previous* row before updating last_sample_at; the
+            # incoming row may already have been appended to gps.csv by the
+            # API handler.
+            if (
+                state.bind
+                and state.uav.phase == "reconciling"
+                and state.uav.service in {"presumed_running", "running", "starting"}
+            ):
+                state = self._resume_uav_locked(
+                    state,
+                    recovered_at=parsed,
+                    incoming_sample=True,
+                )
+                if state.uav.phase == "resume_timeout" or state.uav.service == "failed":
+                    return state
+            if write_sample is not None:
+                write_sample()
             previous = _parse_timestamp(state.uav.last_sample_at)
             if previous is None or parsed > previous:
                 state.uav.last_sample_at = _iso(parsed)
@@ -716,6 +765,200 @@ class CaptureCoordinator:
         child.phase = "reconciling"
         child.error = "GPS sample is stale" if not health_bad else "AP3 connection is offline"
         return state
+
+    def _terminate_uav_process(self, mission_id: str) -> None:
+        """Best-effort termination used when a resume window is closed."""
+
+        process = self._uav_processes.get(mission_id)
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+        finally:
+            self._uav_processes.pop(mission_id, None)
+
+    def _uav_partial_rows(self, path: Path) -> int:
+        """Count rows with parseable timestamps in a validated GPS file."""
+
+        if not path.exists() or not path.is_file():
+            return 0
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                if tuple(reader.fieldnames or ()) != GPS_CSV_COLUMNS:
+                    return 0
+                return sum(
+                    1
+                    for row in reader
+                    if _parse_timestamp(row.get("time_stamp")) is not None
+                )
+        except (OSError, UnicodeError, csv.Error):
+            return 0
+
+    def _resume_timeout_locked(
+        self,
+        state: CaptureState,
+        *,
+        path: Path,
+    ) -> CaptureState:
+        """Finalize a recoverable AP3 child as a Partial GPS Result."""
+
+        self._terminate_uav_process(state.mission_id)
+        child = state.uav
+        rows = self._uav_partial_rows(path)
+        child.service = "failed"
+        child.phase = "resume_timeout"
+        child.file = "ready" if rows else "failed"
+        child.pid = None
+        child.error = (
+            "AP3 Resume Timeout; partial GPS file available"
+            if rows
+            else "AP3 Resume Timeout; no valid GPS rows available"
+        )
+        return self.store.save(state)
+
+    def _resume_reject_locked(
+        self,
+        state: CaptureState,
+        *,
+        error: str,
+    ) -> CaptureState:
+        """Fail an unsafe resume without changing the existing GPS file."""
+
+        self._terminate_uav_process(state.mission_id)
+        state.uav.service = "failed"
+        state.uav.file = "failed"
+        state.uav.phase = "failed"
+        state.uav.pid = None
+        state.uav.error = error
+        return self.store.save(state)
+
+    def _resume_uav_locked(
+        self,
+        state: CaptureState,
+        *,
+        recovered_at: datetime | None = None,
+        incoming_sample: bool = False,
+    ) -> CaptureState:
+        """Resume one existing bound AP3 child under the coordinator lock."""
+
+        child = state.uav
+        # AP3 Capture Resume belongs to the existing Bound Mission.  A
+        # standalone UAV capture keeps the ticket-06 reconciling behaviour and
+        # must never be guessed into a replacement or resumed mission.
+        if (
+            not state.bind
+            or state.target not in {"bind", "uav"}
+            or state.overall_state
+            in {"stopping", "finalizing", "completed", "completed_with_warning", "failed"}
+            or child.service in {"stopping", "stopped", "failed"}
+            or child.phase in {"stopping", "stopping_service", "finalizing_file", "stop_failed", "resume_timeout"}
+        ):
+            return state
+        if child.service not in {"presumed_running", "running", "starting"} and child.phase != "reconciling":
+            return state
+
+        path = Path(child.path) if child.path else self.store.root / state.mission_id / "gps.csv"
+        try:
+            # Validate before spawning or changing any recorder state.  This
+            # keeps a malformed existing file byte-for-byte intact.
+            validate_gps_csv(path)
+        except (OSError, GpsCsvSchemaError) as exc:
+            return self._resume_reject_locked(state, error=str(exc))
+
+        persisted_sample = _parse_timestamp(child.last_sample_at)
+        file_sample = self._gps_last_sample(path)
+        # The canonical file is the source of truth for rows that survived a
+        # backend restart.  A recorder can flush a row before the callback
+        # persists ``last_sample_at``; never discard that newer evidence.
+        previous = (
+            persisted_sample
+            if incoming_sample and persisted_sample is not None
+            else file_sample or persisted_sample
+        )
+        if (
+            not incoming_sample
+            and
+            file_sample is not None
+            and (persisted_sample is None or file_sample > persisted_sample)
+        ):
+            child.last_sample_at = _iso(file_sample)
+            persisted_deadline = _parse_timestamp(child.resume_deadline_at)
+            if persisted_deadline is None or (
+                persisted_sample is not None
+                and persisted_deadline <= persisted_sample + timedelta(seconds=self.resume_window_seconds)
+            ):
+                child.resume_deadline_at = _iso(
+                    file_sample + timedelta(seconds=self.resume_window_seconds)
+                )
+        observed = recovered_at or self._clock_now()
+        deadline = _parse_timestamp(child.resume_deadline_at)
+        if deadline is None:
+            base = previous or _parse_timestamp(state.started_at) or observed
+            deadline = base + timedelta(seconds=self.resume_window_seconds)
+            child.resume_deadline_at = _iso(deadline)
+        if previous is not None and observed < previous:
+            return state
+        if resume_window_expired(previous, observed, self.resume_window_seconds) or observed > deadline:
+            return self._resume_timeout_locked(state, path=path)
+
+        process = self._uav_processes.get(state.mission_id)
+        process_alive = False
+        if process is not None:
+            try:
+                process_alive = process.poll() is None
+            except Exception:
+                process_alive = False
+        if process_alive:
+            child.connection = "ready"
+            child.service = "running"
+            child.file = "recording"
+            child.phase = "recording"
+            child.error = ""
+            child.pid = process.pid
+            child.disconnected_at = None
+            child.resume_deadline_at = None
+            return self.store.save(state)
+
+        try:
+            # The recorder opens this same canonical path in append mode.  No
+            # new mission is created and no prior rows/header are truncated.
+            resumed = self._launch_uav(state)
+        except Exception as exc:
+            return self._resume_reject_locked(state, error=f"AP3 resume failed: {exc}")
+        resumed.uav.connection = "ready"
+        resumed.uav.service = "running"
+        resumed.uav.file = "recording"
+        resumed.uav.phase = "recording"
+        resumed.uav.error = ""
+        resumed.uav.disconnected_at = None
+        resumed.uav.resume_deadline_at = None
+        return self.store.save(resumed)
+
+    def resume_uav(
+        self,
+        mission_id: str,
+        recovered_at: str | datetime | None = None,
+    ) -> CaptureState:
+        """Public AP3 Capture Resume operation for an existing Bound Mission.
+
+        ``recovered_at`` is the reconnection or first valid recovery sample
+        timestamp.  The comparison is inclusive at the five-minute boundary;
+        a later recovery is finalized as a Partial GPS Result.
+        """
+
+        parsed = recovered_at if isinstance(recovered_at, datetime) else _parse_timestamp(recovered_at)
+        if recovered_at is not None and parsed is None:
+            raise CaptureError("AP3 resume timestamp is invalid")
+        with self._lock:
+            state = self.store.load(mission_id)
+            return self._resume_uav_locked(state, recovered_at=parsed)
 
     def _launch_usrp(
         self,
@@ -829,6 +1072,11 @@ class CaptureCoordinator:
     def stop_uav(self, mission_id: str) -> CaptureState:
         with self._lock:
             state = self.store.load(mission_id)
+            # Resume Timeout is a terminal AP3 outcome for this mission.  Do
+            # not turn its Partial GPS Result back into a successful stopped
+            # child merely because a late Stop/status request arrived.
+            if state.uav.phase == "resume_timeout" and state.uav.service == "failed":
+                return state
             if state.uav.service == "stopped" and state.uav.file == "ready":
                 return state
 
@@ -1029,8 +1277,35 @@ class CaptureCoordinator:
                 "running",
                 "presumed_running",
             }:
+                previous_sample = _parse_timestamp(uav_state.uav.last_sample_at)
+                was_reconciling = uav_state.uav.phase == "reconciling"
+                had_disconnect = uav_state.uav.disconnected_at is not None
+                was_offline = uav_state.uav.connection == "offline"
                 process = self._uav_processes.get(uav_state.mission_id)
-                if process is None or process.poll() is not None:
+                process_alive = False
+                if process is not None:
+                    try:
+                        process_alive = process.poll() is None
+                    except Exception:
+                        process_alive = False
+                resumable_without_process = (
+                    uav_state.bind
+                    and uav_state.uav.phase == "reconciling"
+                )
+                process_code = None
+                if process is not None and not process_alive:
+                    try:
+                        process_code = process.poll()
+                    except Exception:
+                        process_code = None
+                if process_code == 2 and uav_state.bind:
+                    path = (
+                        Path(uav_state.uav.path)
+                        if uav_state.uav.path
+                        else self.store.root / uav_state.mission_id / "gps.csv"
+                    )
+                    uav_state = self._resume_timeout_locked(uav_state, path=path)
+                elif not process_alive and not resumable_without_process:
                     uav_state.uav.connection = "offline"
                     uav_state.uav.service = "failed"
                     uav_state.uav.file = "failed"
@@ -1043,6 +1318,36 @@ class CaptureCoordinator:
                     # recoverable reconciling state during the resume window.
                     uav_health = health.get("ap3")
                     refreshed = self._mark_uav_freshness(uav_state, uav_health)
+                    latest_sample = _parse_timestamp(refreshed.uav.last_sample_at)
+                    if (
+                        refreshed.bind
+                        and refreshed.uav.phase == "reconciling"
+                        and latest_sample is not None
+                        and (previous_sample is None or latest_sample > previous_sample)
+                    ):
+                        # A newly persisted row is positive reconnection
+                        # evidence.  Resume against the original mission and
+                        # path; the helper decides whether the process can be
+                        # reused or must be relaunched in append mode.
+                        refreshed = self._resume_uav_locked(
+                            refreshed,
+                            recovered_at=latest_sample,
+                        )
+                    elif (
+                        refreshed.bind
+                        and was_reconciling
+                        and had_disconnect
+                        and was_offline
+                        and (
+                            getattr(uav_health, "state", None)
+                            if not isinstance(uav_health, dict)
+                            else uav_health.get("state")
+                        ) == "ready"
+                    ):
+                        # A ready AP3 health result after a persisted offline
+                        # observation is the other allowed reconnection
+                        # confirmation when no recovery row has arrived yet.
+                        refreshed = self._resume_uav_locked(refreshed)
                     if refreshed.uav.phase in {"reconciling", "resume_timeout"} or refreshed.uav.last_sample_at:
                         self.store.save(refreshed)
             elif (

@@ -43,6 +43,7 @@ from app.capture_jobs import (
     CaptureNotFoundError,
     CaptureStore,
     CaptureUnavailableError,
+    uav_accepts_gps_sample,
 )
 from app.coordinate_frame import SceneFrame, enu_to_sionna, scene_frame_from_metadata
 from app.gps_csv import GpsCsvSchemaError, append_gps_row, validate_gps_csv_bytes
@@ -2368,6 +2369,15 @@ async def capture_uav_stop_post(mission_id: str = Query(...)):
         _capture_error(exc)
 
 
+@app.post("/api/capture/uav/resume")
+async def capture_uav_resume_post(mission_id: str = Query(...)):
+    """Resume the existing Bound Mission AP3 recorder in append mode."""
+    try:
+        return await _capture_call(capture_coordinator.resume_uav, mission_id)
+    except Exception as exc:
+        _capture_error(exc)
+
+
 @app.post("/api/capture/usrp/start")
 async def capture_usrp_start_post(req: CaptureStartRequest):
     try:
@@ -2577,18 +2587,8 @@ async def usrp_upload_gps_csv_post(
     }
 
 
-@app.post("/api/usrp/sync-gps-point")
-async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
-    try:
-        bundle_id = _safe_incoming_bundle_id(point.mission_id)
-    except ValueError as exc:
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
-    if not (
-        math.isfinite(point.lat)
-        and math.isfinite(point.lon)
-        and math.isfinite(point.alt)
-    ):
-        return JSONResponse({"success": False, "error": "lat, lon, and alt must be finite numbers"}, status_code=422)
+async def _sync_gps_point(point: GpsSyncPointRequest, bundle_id: str):
+    """Persist and publish one GPS sample through the coordinator seam."""
 
     bundle_dir = INCOMING_CSV_DIR / bundle_id
     csv_path = bundle_dir / "gps.csv"
@@ -2604,31 +2604,44 @@ async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
         "missionId": bundle_id,
     }
 
-    with GPS_SYNC_LOCK:
-        try:
+    log_line = (
+        f"{datetime.now().isoformat()} mission={bundle_id} "
+        f"device={point.device_id} lat={point.lat:.7f} lon={point.lon:.7f} alt={point.alt:.2f}"
+    )
+
+    def write_sample() -> None:
+        # The coordinator invokes this while holding the mission lock, so a
+        # concurrent Stop cannot accept a late recovery row after finalizing.
+        # GPS_SYNC_LOCK still serializes unmanaged incoming bundles.
+        with GPS_SYNC_LOCK:
             append_gps_row(
                 csv_path,
                 [point.time_stamp, point.lat, point.lon, point.alt, point.alt_mode],
             )
-        except GpsCsvSchemaError as exc:
-            return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
-        log_line = (
-            f"{datetime.now().isoformat()} mission={bundle_id} "
-            f"device={point.device_id} lat={point.lat:.7f} lon={point.lon:.7f} alt={point.alt:.2f}"
-        )
-        _append_gps_sync_log(bundle_dir, log_line)
+            _append_gps_sync_log(bundle_dir, log_line)
 
-    # Keep managed AP3 mission metadata in the coordinator's atomic state
-    # store.  GPS sync also supports standalone incoming bundles, so a missing
-    # capture mission is intentionally harmless.
     try:
-        await asyncio.to_thread(
+        capture = await asyncio.to_thread(
             capture_coordinator.record_gps_sample,
             bundle_id,
             point.time_stamp,
+            write_sample,
         )
+    except GpsCsvSchemaError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
     except Exception as exc:
-        logger.warning("GPS sample persisted to CSV but mission freshness update failed: %s", exc)
+        logger.warning("GPS sample coordination failed: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+    if capture is not None and not uav_accepts_gps_sample(capture.uav):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": capture.uav.error,
+                "mission_id": bundle_id,
+            },
+            status_code=409,
+        )
 
     gps_manager.names[point.device_id] = point.device_name
     gps_manager.update_gps(point.device_id, payload)
@@ -2641,6 +2654,21 @@ async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
         "gps_csv": str(csv_path),
         "log": log_line,
     }
+
+
+@app.post("/api/usrp/sync-gps-point")
+async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
+    try:
+        bundle_id = _safe_incoming_bundle_id(point.mission_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    if not (
+        math.isfinite(point.lat)
+        and math.isfinite(point.lon)
+        and math.isfinite(point.alt)
+    ):
+        return JSONResponse({"success": False, "error": "lat, lon, and alt must be finite numbers"}, status_code=422)
+    return await _sync_gps_point(point, bundle_id)
 
 
 @app.get("/api/usrp/gps-sync/logs")

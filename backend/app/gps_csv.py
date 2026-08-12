@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 import io
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,6 +11,14 @@ from typing import Iterable, Iterator, Sequence, TextIO
 GPS_CSV_COLUMNS = ("time_stamp", "lat", "lon", "alt", "alt_mode")
 GPS_CSV_LEGACY_COLUMNS = GPS_CSV_COLUMNS[:4]
 GPS_CSV_HEADER = ",".join(GPS_CSV_COLUMNS)
+
+
+def resume_window_expired(previous: datetime | None, current: datetime, window: float) -> bool:
+    """Return whether a recovery sample falls outside the inclusive window."""
+
+    if previous is None:
+        return False
+    return (current - previous).total_seconds() > max(0.0, window)
 
 
 class GpsCsvSchemaError(ValueError):
