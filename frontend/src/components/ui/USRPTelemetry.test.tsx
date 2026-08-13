@@ -10,6 +10,9 @@ type ChildOverrides = {
   file?: string;
   phase?: string;
   error?: string;
+  upload_state?: string;
+  upload_mode?: string;
+  upload_started_at?: string | null;
 };
 
 function captureStatus(options: {
@@ -647,6 +650,23 @@ describe('USRPTelemetry capture controls', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Internal Server Error');
     expect(screen.queryByText(/Unexpected token/)).not.toBeInTheDocument();
+  });
+
+  it('shows elapsed Manual Retry progress while the upload job is running', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'noise_manual_retry',
+      overall: 'finalizing',
+      usrp: {
+        service: 'stopped', file: 'upload_pending', phase: 'upload_pending',
+        upload_state: 'running', upload_mode: 'manual',
+        upload_started_at: new Date(Date.now() - 3000).toISOString(),
+      },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByText(/Manual retry \(\d+ s\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry upload' })).toBeDisabled();
   });
 
   it('announces structured per-device Bound Start preflight errors', async () => {

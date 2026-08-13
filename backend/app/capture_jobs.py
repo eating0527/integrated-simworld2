@@ -105,6 +105,15 @@ class ChildState(BaseModel):
     last_sample_at: str | None = None
     disconnected_at: str | None = None
     resume_deadline_at: str | None = None
+    # Noise upload is represented independently from the remote service/file
+    # state.  The fields are deliberately persisted in capture.json so a
+    # status poll (or a backend restart) never guesses that an in-flight job
+    # succeeded merely because the process that launched it disappeared.
+    upload_state: str = "idle"
+    upload_mode: str = "none"
+    upload_job_id: str | None = None
+    upload_started_at: str | None = None
+    upload_finished_at: str | None = None
 
     @field_validator("phase", mode="before")
     @classmethod
@@ -405,6 +414,8 @@ class CaptureCoordinator:
         self.usrp_backend = usrp_backend
         self._lock = threading.RLock()
         self._uav_processes: dict[str, subprocess.Popen] = {}
+        self._upload_jobs: dict[str, Any] = {}
+        self._upload_executor = ThreadPoolExecutor(max_workers=2)
         self._health_mode: UsrpMode = "test"
         self.gps_freshness_seconds = max(0.0, float(gps_freshness_seconds))
         self.resume_window_seconds = max(0.0, float(resume_window_seconds))
@@ -1236,6 +1247,20 @@ class CaptureCoordinator:
             state.usrp.service = "stopped" if service_state == "stopped" else "presumed_running"
             state.usrp.file = "upload_pending"
             state.usrp.phase = "upload_pending"
+            active_upload = self._upload_jobs.get(state.mission_id)
+            if (
+                state.usrp.upload_state == "running"
+                and (active_upload is None or active_upload.done())
+            ):
+                # A persisted running marker without a live worker is stale
+                # after restart (or after a worker was interrupted).  Remote
+                # pending state is authoritative evidence that it did not
+                # finish, so keep the artifact retryable rather than showing
+                # a permanent local Uploading indicator.
+                state.usrp.upload_state = "failure"
+                state.usrp.upload_mode = "none"
+                state.usrp.upload_job_id = None
+                state.usrp.upload_finished_at = _iso(self._clock_now())
             return state
 
         if upload_state == "uploaded":
@@ -1247,6 +1272,10 @@ class CaptureCoordinator:
             state.usrp.service = "stopped"
             state.usrp.file = "uploaded"
             state.usrp.phase = "completed"
+            state.usrp.upload_state = "success"
+            state.usrp.upload_mode = "none"
+            state.usrp.upload_job_id = None
+            state.usrp.upload_finished_at = _iso(self._clock_now())
             return state
 
         if remote_state in _REMOTE_FINALIZING_STATES or upload_state in {
@@ -1310,6 +1339,11 @@ class CaptureCoordinator:
                 raise CaptureError("remote USRP status is invalid")
             with self._lock:
                 state = self.store.load(mission_id)
+                # Status reconciliation reports the remote outcome but must
+                # not turn every poll of a failed Upload Pending state into a
+                # new immediate upload.  Initial automatic dispatch belongs
+                # to successful stop finalization; later retry scheduling is
+                # owned by the retry engine.
                 return self.store.save(self._reconcile_usrp_remote(state, remote))
         except Exception as exc:
             with self._lock:
@@ -1655,7 +1689,14 @@ class CaptureCoordinator:
 
         with self._lock:
             state = self.store.load(mission_id)
-            return self._apply_usrp_stop_result_locked(state, remote)
+            result = self._apply_usrp_stop_result_locked(state, remote)
+        # Finalization is complete once the remote service is stopped; noise
+        # delivery is deliberately decoupled and starts immediately in a
+        # bounded worker.  The request returns the persisted Uploading state
+        # instead of waiting for SSH/HTTP completion.
+        if result.usrp.file == "upload_pending":
+            return self._schedule_usrp_upload(mission_id)
+        return result
 
     def retry_stop(self, target: Literal["uav", "usrp"], mission_id: str) -> CaptureState:
         """Retry a previously unresolved stop for one child only.
@@ -1696,25 +1737,135 @@ class CaptureCoordinator:
     def retry_stop_usrp(self, mission_id: str) -> CaptureState:
         return self.retry_stop("usrp", mission_id)
 
-    def retry_usrp_upload(self, mission_id: str) -> CaptureState:
+    def _upload_result_ok(self, remote: object) -> bool:
+        """Return whether an upload adapter positively acknowledged success."""
+
+        if not isinstance(remote, dict):
+            return False
+        mission_state = remote.get("mission_state")
+        return (
+            isinstance(mission_state, dict)
+            and str(mission_state.get("upload_state") or "").lower() == "uploaded"
+        )
+
+    def _finish_usrp_upload_job(
+        self,
+        mission_id: str,
+        job_id: str,
+        remote: object = None,
+        error: str = "",
+    ) -> CaptureState | None:
+        """Persist one bounded upload job result under the coordinator lock."""
+
+        with self._lock:
+            try:
+                state = self.store.load(mission_id)
+            except CaptureNotFoundError:
+                return None
+            child = state.usrp
+            # An acknowledgement callback or a newer manual retry may have
+            # completed/replaced this job.  Never let an old worker downgrade
+            # that newer evidence.
+            if child.upload_job_id != job_id:
+                return state
+            child.upload_job_id = None
+            child.upload_finished_at = _iso(self._clock_now())
+            if self._upload_result_ok(remote):
+                child.upload_state = "success"
+                child.upload_mode = "none"
+                child.file = "uploaded"
+                child.phase = "completed"
+                child.service = "stopped"
+                child.error = ""
+            else:
+                child.upload_state = "failure"
+                child.upload_mode = "none"
+                # Upload failures remain retryable and must keep Mission in
+                # Finalizing; they are not a Completed-with-Warning result.
+                child.file = "upload_pending"
+                child.phase = "upload_pending"
+                child.service = "stopped"
+                child.error = error or "USRP noise upload failed"
+            saved = self.store.save(state)
+            self._upload_jobs.pop(mission_id, None)
+            return saved
+
+    def _run_usrp_upload_job(
+        self,
+        mission_id: str,
+        job_id: str,
+        upload_mode: Literal["automatic", "manual"],
+    ) -> None:
+        """Execute the adapter upload outside the async request and lock."""
+
+        try:
+            with self._lock:
+                state = self.store.load(mission_id)
+                mode = state.selected_usrp_mode
+            method = (
+                "upload_capture_job"
+                if upload_mode == "automatic"
+                else "retry_capture_upload"
+            )
+            upload = getattr(self.usrp_backend, method, None)
+            if not callable(upload):
+                raise CaptureError("USRP upload adapter is unavailable")
+            remote = upload(mode, mission_id)
+            if not self._upload_result_ok(remote):
+                detail = "USRP noise upload was not acknowledged"
+                if isinstance(remote, dict):
+                    detail = str(remote.get("message") or remote.get("error") or detail)
+                self._finish_usrp_upload_job(mission_id, job_id, remote, detail)
+            else:
+                self._finish_usrp_upload_job(mission_id, job_id, remote)
+        except Exception as exc:
+            self._finish_usrp_upload_job(mission_id, job_id, error=str(exc))
+
+    def _schedule_usrp_upload(
+        self,
+        mission_id: str,
+        *,
+        upload_mode: Literal["automatic", "manual"] = "automatic",
+    ) -> CaptureState:
+        """Start one bounded upload and return its persisted running state."""
+
         with self._lock:
             state = self.store.load(mission_id)
-            mode = state.selected_usrp_mode
-        try:
-            remote = self.usrp_backend.retry_capture_upload(mode, mission_id)
-            with self._lock:
-                state = self.store.load(mission_id)
-                state.usrp.connection = "ready"
-                state.usrp.service = "stopped"
-                state.usrp.file = "uploaded" if (remote.get("mission_state") or {}).get("upload_state") == "uploaded" else "upload_pending"
-                state.usrp.error = "" if state.usrp.file == "uploaded" else "upload retry failed"
-                return self.store.save(state)
-        except Exception as exc:
-            with self._lock:
-                state = self.store.load(mission_id)
-                state.usrp.file = "upload_pending"
-                state.usrp.error = str(exc)
-                return self.store.save(state)
+            child = state.usrp
+            if child.file == "uploaded":
+                return state
+            existing = self._upload_jobs.get(mission_id)
+            if existing is not None and not existing.done():
+                return state
+            # A persisted running marker with no in-memory Future is
+            # intentionally treated as unknown after restart.  Keep it
+            # pending and start a fresh bounded job; success is accepted only
+            # from the adapter's mission-state acknowledgement.
+            child.file = "upload_pending"
+            # Keep the public phase as Upload Pending for compatibility; the
+            # persisted ``upload_state=running`` field carries the finer job
+            # progress without changing mission aggregation semantics.
+            child.phase = "upload_pending"
+            child.upload_state = "running"
+            child.upload_mode = upload_mode
+            child.upload_job_id = uuid.uuid4().hex
+            child.upload_started_at = _iso(self._clock_now())
+            child.upload_finished_at = None
+            saved = self.store.save(state)
+            job_id = child.upload_job_id
+            assert job_id is not None
+            self._upload_jobs[mission_id] = self._upload_executor.submit(
+                self._run_usrp_upload_job,
+                mission_id,
+                job_id,
+                upload_mode,
+            )
+            return saved
+
+    def retry_usrp_upload(self, mission_id: str) -> CaptureState:
+        """Start one manual retry without overlapping the active upload job."""
+
+        return self._schedule_usrp_upload(mission_id, upload_mode="manual")
 
     def stop_bind(self, mission_id: str) -> CaptureState:
         """Best-effort Stop All for the selected children.
@@ -1788,5 +1939,10 @@ class CaptureCoordinator:
             state.usrp.path = str(path)
             state.usrp.service = "stopped"
             state.usrp.file = "uploaded"
+            state.usrp.phase = "completed"
+            state.usrp.upload_state = "success"
+            state.usrp.upload_mode = "none"
+            state.usrp.upload_job_id = None
+            state.usrp.upload_finished_at = _iso(self._clock_now())
             state.usrp.error = ""
             return self.store.save(state)

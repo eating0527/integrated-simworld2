@@ -28,6 +28,9 @@ interface ChildState {
   last_sample_at?: string | null;
   disconnected_at?: string | null;
   resume_deadline_at?: string | null;
+  upload_state?: string;
+  upload_mode?: string;
+  upload_started_at?: string | null;
 }
 
 interface DeviceHealth {
@@ -357,7 +360,20 @@ function normalizeChild(value: unknown): ChildState {
     last_sample_at: typeof child.last_sample_at === 'string' ? child.last_sample_at : null,
     disconnected_at: typeof child.disconnected_at === 'string' ? child.disconnected_at : null,
     resume_deadline_at: typeof child.resume_deadline_at === 'string' ? child.resume_deadline_at : null,
+    upload_state: typeof child.upload_state === 'string' ? child.upload_state : 'idle',
+    upload_mode: typeof child.upload_mode === 'string' ? child.upload_mode : 'none',
+    upload_started_at: typeof child.upload_started_at === 'string' ? child.upload_started_at : null,
   };
+}
+
+function uploadProgressLabel(child: ChildState, now: number): string | null {
+  if (child.upload_state !== 'running' || !child.upload_started_at) return null;
+  const started = Date.parse(child.upload_started_at);
+  if (Number.isNaN(started)) return null;
+  const elapsed = Math.max(0, Math.floor((now - started) / 1000));
+  return child.upload_mode === 'manual'
+    ? `Manual retry (${elapsed} s)`
+    : `Uploading (${elapsed} s)`;
 }
 
 function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth {
@@ -517,6 +533,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [health, setHealth] = useState<Record<string, DeviceHealth>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [now, setNow] = useState(() => Date.now());
   const statusFlight = useRef<Promise<void> | null>(null);
   const statusController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
@@ -600,6 +617,14 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  const uploadRunning = status?.usrp.upload_state === 'running';
+  useEffect(() => {
+    if (!uploadRunning) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [uploadRunning]);
 
   useEffect(() => {
     let active = true;
@@ -760,7 +785,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       ) : null}
       {child.service === 'presumed_running' ? <div style={S.error}>Presumed running; reconcile status before stopping.</div> : null}
       {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>Stopped; upload pending.</div> : null}
-      {child.file === 'upload_pending' && title.includes('USRP') ? <button type="button" style={S.button} disabled={busy} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}
+      {uploadProgressLabel(child, now) ? <div aria-live="polite" style={S.error}>{uploadProgressLabel(child, now)}</div> : null}
+      {child.file === 'upload_pending' && title.includes('USRP') ? <button type="button" style={S.button} disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}
       {actions}
     </section>
   );

@@ -2400,11 +2400,8 @@ async def capture_usrp_start_post(req: CaptureStartRequest):
 
 
 @app.post("/api/capture/usrp/upload/retry")
-async def capture_usrp_retry_upload_post(mission_id: str = Query(...), background_tasks: BackgroundTasks = None):
+async def capture_usrp_retry_upload_post(mission_id: str = Query(...)):
     try:
-        if background_tasks is not None:
-            background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
-            return await _capture_call(capture_coordinator.store.load, mission_id)
         return await _capture_call(capture_coordinator.retry_usrp_upload, mission_id)
     except Exception as exc:
         _capture_error(exc)
@@ -2413,10 +2410,10 @@ async def capture_usrp_retry_upload_post(mission_id: str = Query(...), backgroun
 @app.post("/api/capture/usrp/stop")
 async def capture_usrp_stop_post(mission_id: str = Query(...), background_tasks: BackgroundTasks = None):
     try:
-        result = await _capture_call(capture_coordinator.stop_usrp, mission_id)
-        if background_tasks is not None and result.usrp.file == "upload_pending":
-            background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
-        return result
+        # ``stop_usrp`` persists finalization and schedules the immediate
+        # bounded upload itself.  Do not enqueue a second manual retry here;
+        # doing so races the automatic worker and can overwrite its state.
+        return await _capture_call(capture_coordinator.stop_usrp, mission_id)
     except Exception as exc:
         _capture_error(exc)
 

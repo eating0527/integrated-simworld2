@@ -589,7 +589,9 @@ def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -
     return status
 
 
-def retry_capture_upload(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+def _run_capture_upload(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+    """Upload a finalized Noise artifact and persist remote acknowledgement."""
+
     status = get_capture_job(mode, mission_id, state_dir)
     mission_state = status.get("mission_state") or {}
     if not mission_state:
@@ -612,3 +614,18 @@ def retry_capture_upload(mode: str, mission_id: str, state_dir: str | None = Non
     status["mission_state"] = mission_state
     status["message"] = "upload retried" if exit_code == 0 else (err or out or "upload pending")
     return status
+
+
+def upload_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+    """Immediate automatic upload entry point.
+
+    It intentionally shares the bounded command and acknowledgement path with
+    manual retry while retaining a distinct adapter name so the coordinator
+    can dispatch automatic uploads without conflating user retry history.
+    """
+
+    return _run_capture_upload(mode, mission_id, state_dir)
+
+
+def retry_capture_upload(mode: str, mission_id: str, state_dir: str | None = None) -> dict:
+    return _run_capture_upload(mode, mission_id, state_dir)

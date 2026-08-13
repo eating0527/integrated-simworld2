@@ -5,6 +5,7 @@ from io import BytesIO
 import json
 import sys
 import threading
+import time
 import types
 import unittest
 import uuid
@@ -1960,14 +1961,22 @@ class BindCoordinatorTests(unittest.TestCase):
         }
 
         first = self.coordinator.stop_bind(state.mission_id)
+        for _ in range(20):
+            if self.coordinator.store.load(state.mission_id).usrp.upload_state != "running":
+                break
+            time.sleep(0.01)
         after_first = self.coordinator.store.load(state.mission_id)
         second = self.coordinator.retry_usrp_upload(state.mission_id)
+        for _ in range(20):
+            if self.coordinator.store.load(state.mission_id).usrp.file == "uploaded":
+                break
+            time.sleep(0.01)
         after_second = self.coordinator.store.load(state.mission_id)
 
         self.assertEqual(first.usrp.service, "stopped")
         self.assertEqual(first.usrp.file, "upload_pending")
         self.assertEqual(after_first.usrp.file, "upload_pending")
-        self.assertEqual(second.usrp.file, "uploaded")
+        self.assertEqual(second.usrp.upload_state, "running")
         self.assertEqual(after_second.usrp.service, "stopped")
         self.assertEqual(after_second.usrp.file, "uploaded")
         self.assertEqual(after_second.overall_state, "completed")
@@ -2360,6 +2369,69 @@ class NoiseUploadTests(unittest.TestCase):
         self.state.usrp.service = "stopped"
         self.state.usrp.file = "upload_pending"
         self.coordinator.store.save(self.state)
+
+    def test_usrp_stop_starts_immediate_background_upload(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.service = "running"
+        current.usrp.file = "recording"
+        self.coordinator.store.save(current)
+        self.coordinator.usrp_backend.stop_capture_job.return_value = {
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": "noise_upload",
+                "state": "stopped",
+                "upload_state": "upload_pending",
+            },
+        }
+
+        def upload(mode, mission_id):
+            started.set()
+            release.wait(timeout=1)
+            return {
+                "mission_state": {
+                    "mission_id": mission_id,
+                    "upload_state": "uploaded",
+                },
+            }
+
+        self.coordinator.usrp_backend.upload_capture_job.side_effect = upload
+        result = self.coordinator.stop_usrp("noise_upload")
+
+        self.assertEqual(result.usrp.file, "upload_pending")
+        self.assertEqual(result.usrp.upload_state, "running")
+        self.assertTrue(started.wait(timeout=1))
+        release.set()
+        for _ in range(20):
+            if self.coordinator.store.load("noise_upload").usrp.file == "uploaded":
+                break
+            time.sleep(0.01)
+        completed = self.coordinator.store.load("noise_upload")
+        self.assertEqual(completed.usrp.file, "uploaded")
+        self.assertEqual(completed.usrp.upload_state, "success")
+
+    def test_usrp_status_reconciles_orphaned_upload_job(self):
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.upload_state = "running"
+        current.usrp.upload_mode = "automatic"
+        current.usrp.upload_job_id = "orphaned"
+        self.coordinator.store.save(current)
+        self.coordinator.usrp_backend.get_capture_job.return_value = {
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": "noise_upload",
+                "state": "stopped",
+                "upload_state": "uploaded",
+            },
+        }
+
+        reconciled = self.coordinator.reconcile_usrp("noise_upload")
+
+        self.assertEqual(reconciled.usrp.file, "uploaded")
+        self.assertEqual(reconciled.usrp.upload_state, "success")
+        self.assertIsNone(reconciled.usrp.upload_job_id)
 
     def _upload_noise(
         self,
