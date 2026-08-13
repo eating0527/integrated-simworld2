@@ -52,7 +52,7 @@ __pycache__/
 /frontend/.npm-cache/
 
 ## Runtime mission 與暫存輸出
-/incoming/mission_*/
+*mission_*/
 /tmp/
 /.tmp/
 /outputs/
