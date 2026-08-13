@@ -169,6 +169,46 @@ incoming/<mission-id>/gps_sync.log
 incoming/<mission-id>/noise.csv
 ```
 
+## Bound Mission 實機驗收清單
+
+以下情境需要實際 AP3、Raspberry Pi 與可寫入的 Noise upload endpoint；一般
+backend/frontend 自動測試不應依賴硬體。每個情境都要記錄畫面上的
+`mission_id`、兩個 child 的 Connection／Service／File／Phase，以及最後的
+`capture.json`。
+
+### 基線與正常完成
+
+- [ ] AP3 ADB 已授權、forwarding 可用，Raspberry Pi SSH 與對應 service 可用；兩張 Device Health 都顯示 Ready。
+- [ ] 開啟 Bind 後啟動 Bound Capture；確認 AP3 與 USRP 都 Running，且 mission、GPS、Noise 的 `mission_id` 相同。
+- [ ] 按 Stop All；確認兩側都曾開始 stop，GPS 為 Ready、Noise 為 Uploaded，最後 Mission 顯示 Completed。
+- [ ] 確認 `incoming/<mission-id>/gps.csv` 只有一個 canonical header，Noise 檔案可在 upload endpoint 取得。
+
+### AP3 拔插與接續
+
+- [ ] 任務 Running 時拔除 AP3，十秒後確認 GPS 顯示 Offline／Reconciling、Mission 為 Degraded，而 Noise 仍 Recording。
+- [ ] 五分鐘內重新接回 AP3；確認同一 mission 自動 Resume，GPS 追加到原檔案、不重複 header、不建立新 mission。
+- [ ] 維持 AP3 拔除超過五分鐘再接回；確認顯示 Resume Timeout 與 Partial GPS file available，既有 GPS rows 保留，Noise 可繼續。
+- [ ] 完成 Stop All 後確認該任務不會因 AP3 後續恢復而被改寫；下一個任務的 AP3 Device Health 可回到 Ready。
+
+### Raspberry Pi 斷線與恢復
+
+- [ ] 任務 Running 時中斷 Raspberry Pi 網路；確認 Noise Connection 為 Offline、Service 保留 Presumed running／Reconciling，AP3 不被停止。
+- [ ] 恢復 SSH 後確認系統以原 mission 讀取遠端狀態；遠端仍 Running 才回到 Running，不可自動建立新 mission 或送出 restart。
+- [ ] 在遠端仍不確定時按 Stop All；確認不會顯示 Stopped／Completed，待重連後才可使用 USRP Retry Stop。
+
+### Stop failure、重試與上傳重試
+
+- [ ] 模擬單邊 Stop failure；確認另一側仍完成，Stop All 變成已消費，失敗 child 顯示 Retry Stop，成功 child 顯示 Disabled 的 Stopped。
+- [ ] 重連必要硬體後只按失敗 child 的 Retry Stop；確認不會再次停止 sibling，成功後重新聚合為 Completed 或 Completed with Warning。
+- [ ] 讓第一次 Noise upload 與 5／15／30 秒自動重試全部失敗；確認維持 Upload Pending、畫面顯示自動重試已用盡，不能提前 Completed with Warning。
+- [ ] 外部網路恢復後按 Manual Retry；確認顯示執行秒數、automatic attempt 仍為 3/3，成功後 Noise Uploaded 且任務才可 Completed。
+
+### 重啟恢復與證據留存
+
+- [ ] 在 AP3 Resume 等待、Stop failure、以及 upload retry waiting 各階段重啟 backend；確認 `capture.json` 的 deadline、stop intent、retry attempt 與 next-attempt timestamp 仍存在。
+- [ ] 重啟 frontend／重新整理頁面；確認仍顯示同一 mission 與 child 狀態，沒有重送 Stop All、Resume 或 upload job。
+- [ ] 將每個情境的時間、操作、畫面截圖、`capture.json` 與 backend log 一起歸檔；硬體測試結束後再清理 runtime 產物。
+
 ## Cloudflare Tunnel
 
 Windows PowerShell：
