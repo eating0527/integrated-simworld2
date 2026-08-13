@@ -13,6 +13,13 @@ type ChildOverrides = {
   upload_state?: string;
   upload_mode?: string;
   upload_started_at?: string | null;
+  upload_retry_mode?: string;
+  upload_retry_state?: string;
+  upload_retry_attempt?: number;
+  upload_retry_max_attempts?: number;
+  upload_retry_next_attempt_at?: string | null;
+  upload_retry_active_started_at?: string | null;
+  upload_retry_last_error?: string;
 };
 
 function captureStatus(options: {
@@ -91,6 +98,7 @@ describe('USRPTelemetry capture controls', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -665,8 +673,66 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText(/Manual retry \(\d+ s\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/手動重試 \(\d+ s\)/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry upload' })).toBeDisabled();
+  });
+
+  it('shows persisted automatic retry countdown and updates it each second', async () => {
+    vi.useFakeTimers();
+    const base = new Date('2026-08-13T00:00:00.000Z');
+    vi.setSystemTime(base);
+    const next = new Date(base.getTime() + 5000).toISOString();
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'noise_auto_wait',
+      overall: 'finalizing',
+      usrp: {
+        service: 'stopped', file: 'upload_pending', phase: 'upload_pending',
+        upload_retry_mode: 'automatic', upload_retry_state: 'waiting',
+        upload_retry_attempt: 1, upload_retry_max_attempts: 3,
+        upload_retry_next_attempt_at: next,
+      },
+    })));
+
+    render(<USRPTelemetry />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/自動重試 1\/3 \(5 s\)/)).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText(/自動重試 1\/3 \(4 s\)/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
+  });
+
+  it('shows automatic retry elapsed text and exhaustion without a transient error', async () => {
+    const started = new Date(Date.now() - 3000).toISOString();
+    vi.mocked(globalThis.fetch).mockImplementationOnce(() => jsonResponse(captureStatus({
+      missionId: 'noise_auto_running',
+      overall: 'finalizing',
+      usrp: {
+        service: 'stopped', file: 'upload_pending', phase: 'upload_pending',
+        upload_state: 'running', upload_mode: 'automatic', upload_started_at: started,
+        upload_retry_mode: 'automatic', upload_retry_state: 'running',
+        upload_retry_attempt: 2, upload_retry_max_attempts: 3,
+      },
+    })));
+    const user = await openTelemetry();
+    expect(await screen.findByText(/正在重試 2\/3 \(\d+ s\)/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
+
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'noise_auto_done',
+      overall: 'finalizing',
+      usrp: {
+        service: 'stopped', file: 'upload_pending', phase: 'upload_pending',
+        upload_retry_mode: 'automatic', upload_retry_state: 'exhausted',
+        upload_retry_attempt: 3, upload_retry_max_attempts: 3,
+      },
+    })));
+    await user.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('自動重試已用盡')).toBeInTheDocument();
   });
 
   it('announces structured per-device Bound Start preflight errors', async () => {

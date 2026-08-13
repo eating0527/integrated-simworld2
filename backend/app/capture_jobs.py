@@ -89,6 +89,9 @@ UsrpMode = Literal["test", "usrp"]
 # creating a second mission.
 GPS_FRESHNESS_THRESHOLD_SECONDS = 10.0
 AP3_RESUME_WINDOW_SECONDS = 300.0
+# The first automatic upload is immediate.  Only failures after that first
+# attempt consume this finite delayed retry budget.
+AUTO_UPLOAD_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
 
 
 class ChildState(BaseModel):
@@ -114,6 +117,16 @@ class ChildState(BaseModel):
     upload_job_id: str | None = None
     upload_started_at: str | None = None
     upload_finished_at: str | None = None
+    # Delayed automatic upload retry state.  These values live beside the
+    # upload job marker in capture.json so a backend restart can continue a
+    # waiting schedule without guessing how many attempts were consumed.
+    upload_retry_mode: str = "none"
+    upload_retry_state: str = "idle"
+    upload_retry_attempt: int = 0
+    upload_retry_max_attempts: int = 3
+    upload_retry_next_attempt_at: str | None = None
+    upload_retry_active_started_at: str | None = None
+    upload_retry_last_error: str = ""
 
     @field_validator("phase", mode="before")
     @classmethod
@@ -415,6 +428,7 @@ class CaptureCoordinator:
         self._lock = threading.RLock()
         self._uav_processes: dict[str, subprocess.Popen] = {}
         self._upload_jobs: dict[str, Any] = {}
+        self._upload_retry_timers: dict[str, threading.Timer] = {}
         self._upload_executor = ThreadPoolExecutor(max_workers=2)
         self._health_mode: UsrpMode = "test"
         self.gps_freshness_seconds = max(0.0, float(gps_freshness_seconds))
@@ -1257,10 +1271,21 @@ class CaptureCoordinator:
                 # pending state is authoritative evidence that it did not
                 # finish, so keep the artifact retryable rather than showing
                 # a permanent local Uploading indicator.
-                state.usrp.upload_state = "failure"
-                state.usrp.upload_mode = "none"
-                state.usrp.upload_job_id = None
-                state.usrp.upload_finished_at = _iso(self._clock_now())
+                was_automatic = (
+                    state.usrp.upload_mode == "automatic"
+                    or state.usrp.upload_retry_mode == "automatic"
+                )
+                error = state.usrp.upload_retry_last_error or "USRP noise upload did not complete"
+                if was_automatic:
+                    # The old worker cannot be safely resumed after a
+                    # restart.  Treat its remote-pending result as one failed
+                    # attempt and continue with the next persisted delay.
+                    self._queue_upload_retry_locked(state, error)
+                else:
+                    state.usrp.upload_state = "failure"
+                    state.usrp.upload_mode = "none"
+                    state.usrp.upload_job_id = None
+                    state.usrp.upload_finished_at = _iso(self._clock_now())
             return state
 
         if upload_state == "uploaded":
@@ -1276,6 +1301,8 @@ class CaptureCoordinator:
             state.usrp.upload_mode = "none"
             state.usrp.upload_job_id = None
             state.usrp.upload_finished_at = _iso(self._clock_now())
+            self._clear_upload_retry_locked(state.usrp)
+            self._cancel_upload_retry_timer_locked(state.mission_id)
             return state
 
         if remote_state in _REMOTE_FINALIZING_STATES or upload_state in {
@@ -1370,6 +1397,13 @@ class CaptureCoordinator:
 
     def status(self, mode: UsrpMode = "test") -> CaptureState:
         with self._lock:
+            # Status polling is also the lightweight scheduler tick.  It is
+            # safe after a restart because only persisted waiting timestamps
+            # can make a retry eligible, and the in-memory job map prevents
+            # overlapping workers within one coordinator instance.
+            self._recover_orphaned_uploads_locked()
+            self._schedule_due_upload_retries_locked()
+            self._arm_waiting_upload_timers_locked()
             # Read the mission snapshot under the same coordinator lock used by
             # GPS sample updates and persistence.  Reading first and locking
             # later lets an old snapshot overwrite a freshly persisted
@@ -1748,6 +1782,166 @@ class CaptureCoordinator:
             and str(mission_state.get("upload_state") or "").lower() == "uploaded"
         )
 
+    def _clear_upload_retry_locked(
+        self,
+        child: ChildState,
+        *,
+        result: Literal["success", "idle"] = "success",
+    ) -> None:
+        """Clear pending retry scheduling while retaining the attempt count."""
+
+        child.upload_retry_mode = "none"
+        child.upload_retry_state = result
+        child.upload_retry_next_attempt_at = None
+        child.upload_retry_active_started_at = None
+        child.upload_retry_last_error = ""
+
+    def _cancel_upload_retry_timer_locked(self, mission_id: str) -> None:
+        timer = self._upload_retry_timers.pop(mission_id, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _recover_orphaned_uploads_locked(self) -> int:
+        """Advance persisted automatic jobs that lost their worker on restart."""
+
+        recovered = 0
+        for state in self.store.list():
+            child = state.usrp
+            if child.upload_retry_state != "running":
+                continue
+            active = self._upload_jobs.get(state.mission_id)
+            if active is not None and not active.done():
+                continue
+            # A running marker without a live Future cannot be resumed safely:
+            # the remote outcome is unknown, so consume no new job and move to
+            # the next persisted finite retry slot. The attempt count is
+            # advanced exactly once by _queue_upload_retry_locked.
+            if (
+                child.upload_retry_mode == "automatic"
+                or child.upload_mode == "automatic"
+            ):
+                self._queue_upload_retry_locked(
+                    state,
+                    child.upload_retry_last_error
+                    or "USRP automatic upload was interrupted",
+                )
+            else:
+                child.upload_state = "failure"
+                child.upload_mode = "none"
+                child.upload_job_id = None
+                child.upload_finished_at = _iso(self._clock_now())
+                child.upload_retry_active_started_at = None
+                child.error = "USRP manual upload was interrupted"
+            self.store.save(state)
+            recovered += 1
+        return recovered
+
+    def _queue_upload_retry_locked(
+        self,
+        state: CaptureState,
+        error: str,
+    ) -> None:
+        """Persist the next finite automatic retry or its exhausted state."""
+
+        child = state.usrp
+        maximum = max(1, int(child.upload_retry_max_attempts or len(AUTO_UPLOAD_RETRY_DELAYS_SECONDS)))
+        child.upload_retry_max_attempts = maximum
+        next_attempt = max(1, int(child.upload_retry_attempt or 0) + 1)
+        child.upload_retry_attempt = min(next_attempt, maximum)
+        child.upload_retry_mode = "automatic"
+        child.upload_retry_last_error = error or "USRP noise upload failed"
+        child.upload_retry_active_started_at = None
+        child.upload_job_id = None
+        child.upload_mode = "none"
+        child.upload_state = "failure"
+        child.upload_finished_at = _iso(self._clock_now())
+        if next_attempt > maximum or next_attempt > len(AUTO_UPLOAD_RETRY_DELAYS_SECONDS):
+            child.upload_retry_state = "exhausted"
+            child.upload_retry_next_attempt_at = None
+            # Intermediate failures intentionally do not surface a transient
+            # alert.  Exhaustion is represented by the persisted retry state,
+            # which the frontend can label without losing the last error.
+            child.error = ""
+            return
+        delay = AUTO_UPLOAD_RETRY_DELAYS_SECONDS[next_attempt - 1]
+        child.upload_retry_state = "waiting"
+        child.upload_retry_next_attempt_at = _iso(
+            self._clock_now() + timedelta(seconds=delay)
+        )
+        child.error = ""
+        self._arm_upload_retry_timer_locked(state.mission_id, child.upload_retry_next_attempt_at)
+
+    def _arm_upload_retry_timer_locked(
+        self,
+        mission_id: str,
+        next_attempt_at: str | None,
+    ) -> None:
+        """Wake the coordinator at the persisted deadline.
+
+        The timestamp remains the source of truth; the timer is only a
+        best-effort wake-up.  This keeps restart restoration deterministic and
+        lets status polling recover if a timer is interrupted.
+        """
+
+        if not next_attempt_at:
+            return
+        due = _parse_timestamp(next_attempt_at)
+        if due is None:
+            return
+        previous = self._upload_retry_timers.pop(mission_id, None)
+        if previous is not None:
+            previous.cancel()
+        delay = max(0.0, (due - self._clock_now()).total_seconds())
+
+        def wake() -> None:
+            with self._lock:
+                self._upload_retry_timers.pop(mission_id, None)
+                self._schedule_due_upload_retries_locked()
+
+        timer = threading.Timer(delay, wake)
+        timer.daemon = True
+        self._upload_retry_timers[mission_id] = timer
+        timer.start()
+
+    def _arm_waiting_upload_timers_locked(self) -> None:
+        """Restore wake-up timers for persisted waiting retries."""
+
+        for state in self.store.list():
+            child = state.usrp
+            if child.upload_retry_state != "waiting":
+                continue
+            timer = self._upload_retry_timers.get(state.mission_id)
+            if timer is None or not timer.is_alive():
+                self._arm_upload_retry_timer_locked(
+                    state.mission_id,
+                    child.upload_retry_next_attempt_at,
+                )
+
+    def _schedule_due_upload_retries_locked(self) -> int:
+        """Start due automatic retries, returning the number dispatched.
+
+        The persisted timestamp is the scheduler.  This makes pending work
+        restart-safe and allows tests (and operators) to advance a supplied
+        coordinator clock without sleeping in the coordinator itself.
+        """
+
+        now = self._clock_now()
+        due: list[str] = []
+        for state in self.store.list():
+            child = state.usrp
+            if child.file == "uploaded" or child.upload_retry_state != "waiting":
+                continue
+            next_at = _parse_timestamp(child.upload_retry_next_attempt_at)
+            if next_at is None or next_at > now:
+                continue
+            existing = self._upload_jobs.get(state.mission_id)
+            if existing is not None and not existing.done():
+                continue
+            due.append(state.mission_id)
+        for mission_id in due:
+            self._schedule_usrp_upload_locked(mission_id, upload_mode="automatic")
+        return len(due)
+
     def _finish_usrp_upload_job(
         self,
         mission_id: str,
@@ -1768,6 +1962,7 @@ class CaptureCoordinator:
             # that newer evidence.
             if child.upload_job_id != job_id:
                 return state
+            active_mode = child.upload_mode
             child.upload_job_id = None
             child.upload_finished_at = _iso(self._clock_now())
             if self._upload_result_ok(remote):
@@ -1777,15 +1972,21 @@ class CaptureCoordinator:
                 child.phase = "completed"
                 child.service = "stopped"
                 child.error = ""
+                self._clear_upload_retry_locked(child)
+                self._cancel_upload_retry_timer_locked(mission_id)
             else:
-                child.upload_state = "failure"
-                child.upload_mode = "none"
-                # Upload failures remain retryable and must keep Mission in
-                # Finalizing; they are not a Completed-with-Warning result.
                 child.file = "upload_pending"
                 child.phase = "upload_pending"
                 child.service = "stopped"
-                child.error = error or "USRP noise upload failed"
+                # Automatic failures advance directly to a persisted waiting
+                # countdown; manual failures remain independently retryable
+                # and must not reset automatic attempt history.
+                if active_mode == "automatic":
+                    self._queue_upload_retry_locked(state, error)
+                else:
+                    child.upload_state = "failure"
+                    child.upload_mode = "none"
+                    child.error = error or "USRP noise upload failed"
             saved = self.store.save(state)
             self._upload_jobs.pop(mission_id, None)
             return saved
@@ -1830,42 +2031,84 @@ class CaptureCoordinator:
         """Start one bounded upload and return its persisted running state."""
 
         with self._lock:
-            state = self.store.load(mission_id)
-            child = state.usrp
-            if child.file == "uploaded":
-                return state
-            existing = self._upload_jobs.get(mission_id)
-            if existing is not None and not existing.done():
-                return state
-            # A persisted running marker with no in-memory Future is
-            # intentionally treated as unknown after restart.  Keep it
-            # pending and start a fresh bounded job; success is accepted only
-            # from the adapter's mission-state acknowledgement.
-            child.file = "upload_pending"
-            # Keep the public phase as Upload Pending for compatibility; the
-            # persisted ``upload_state=running`` field carries the finer job
-            # progress without changing mission aggregation semantics.
-            child.phase = "upload_pending"
-            child.upload_state = "running"
-            child.upload_mode = upload_mode
-            child.upload_job_id = uuid.uuid4().hex
-            child.upload_started_at = _iso(self._clock_now())
-            child.upload_finished_at = None
-            saved = self.store.save(state)
-            job_id = child.upload_job_id
-            assert job_id is not None
-            self._upload_jobs[mission_id] = self._upload_executor.submit(
-                self._run_usrp_upload_job,
+            return self._schedule_usrp_upload_locked(
                 mission_id,
-                job_id,
-                upload_mode,
+                upload_mode=upload_mode,
             )
-            return saved
+
+    def _schedule_usrp_upload_locked(
+        self,
+        mission_id: str,
+        *,
+        upload_mode: Literal["automatic", "manual"],
+    ) -> CaptureState:
+        state = self.store.load(mission_id)
+        child = state.usrp
+        if child.file == "uploaded":
+            return state
+        if (
+            upload_mode == "manual"
+            and child.upload_retry_mode == "automatic"
+            and child.upload_retry_state != "exhausted"
+        ):
+            return state
+        if upload_mode == "automatic" and child.upload_retry_state == "exhausted":
+            return state
+        existing = self._upload_jobs.get(mission_id)
+        if existing is not None and not existing.done():
+            return state
+        # A persisted running marker with no in-memory Future is intentionally
+        # treated as unknown after restart.  Keep it pending and start a fresh
+        # bounded job only when the schedule says it is due.
+        child.file = "upload_pending"
+        child.phase = "upload_pending"
+        child.upload_state = "running"
+        child.upload_mode = upload_mode
+        child.upload_job_id = uuid.uuid4().hex
+        child.upload_started_at = _iso(self._clock_now())
+        child.upload_finished_at = None
+        if upload_mode == "automatic":
+            child.upload_retry_mode = "automatic"
+            child.upload_retry_state = "running"
+            child.upload_retry_active_started_at = child.upload_started_at
+            child.upload_retry_next_attempt_at = None
+        saved = self.store.save(state)
+        job_id = child.upload_job_id
+        assert job_id is not None
+        self._upload_jobs[mission_id] = self._upload_executor.submit(
+            self._run_usrp_upload_job,
+            mission_id,
+            job_id,
+            upload_mode,
+        )
+        return saved
 
     def retry_usrp_upload(self, mission_id: str) -> CaptureState:
         """Start one manual retry without overlapping the active upload job."""
 
-        return self._schedule_usrp_upload(mission_id, upload_mode="manual")
+        with self._lock:
+            state = self.store.load(mission_id)
+            child = state.usrp
+            if (
+                child.upload_retry_mode == "automatic"
+                and child.upload_retry_state in {"waiting", "running"}
+            ):
+                # Automatic retry schedule owns the artifact until exhaustion;
+                # a manual click is a no-op rather than a competing upload.
+                return state
+            return self._schedule_usrp_upload_locked(
+                mission_id,
+                upload_mode="manual",
+            )
+
+    def process_upload_retries(self) -> int:
+        """Dispatch due automatic retries from persisted mission state."""
+
+        with self._lock:
+            self._recover_orphaned_uploads_locked()
+            count = self._schedule_due_upload_retries_locked()
+            self._arm_waiting_upload_timers_locked()
+            return count
 
     def stop_bind(self, mission_id: str) -> CaptureState:
         """Best-effort Stop All for the selected children.
@@ -1945,4 +2188,6 @@ class CaptureCoordinator:
             state.usrp.upload_job_id = None
             state.usrp.upload_finished_at = _iso(self._clock_now())
             state.usrp.error = ""
+            self._clear_upload_retry_locked(state.usrp)
+            self._cancel_upload_retry_timer_locked(mission_id)
             return self.store.save(state)

@@ -1966,6 +1966,15 @@ class BindCoordinatorTests(unittest.TestCase):
                 break
             time.sleep(0.01)
         after_first = self.coordinator.store.load(state.mission_id)
+        # Manual Retry is available only after the finite automatic schedule
+        # is exhausted; preserve the historical manual-success assertions by
+        # moving this fixture to that terminal automatic state.
+        after_first.usrp.upload_retry_mode = "automatic"
+        after_first.usrp.upload_retry_state = "exhausted"
+        after_first.usrp.upload_retry_attempt = 3
+        after_first.usrp.upload_retry_max_attempts = 3
+        after_first.usrp.upload_retry_next_attempt_at = None
+        self.coordinator.store.save(after_first)
         second = self.coordinator.retry_usrp_upload(state.mission_id)
         for _ in range(20):
             if self.coordinator.store.load(state.mission_id).usrp.file == "uploaded":
@@ -2432,6 +2441,270 @@ class NoiseUploadTests(unittest.TestCase):
         self.assertEqual(reconciled.usrp.file, "uploaded")
         self.assertEqual(reconciled.usrp.upload_state, "success")
         self.assertIsNone(reconciled.usrp.upload_job_id)
+
+    def test_failed_automatic_uploads_follow_persisted_5_15_30_schedule(self):
+        from app.capture_jobs import _parse_timestamp
+
+        now = [datetime(2026, 8, 13, tzinfo=timezone.utc)]
+        self.coordinator._clock = lambda: now[0]
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.service = "running"
+        current.usrp.file = "recording"
+        self.coordinator.store.save(current)
+        self.coordinator.usrp_backend.stop_capture_job.return_value = {
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": "noise_upload",
+                "state": "stopped",
+                "upload_state": "upload_pending",
+            },
+        }
+        calls: list[str] = []
+
+        def fail_upload(mode, mission_id):
+            calls.append(mode)
+            return {
+                "mission_state": {
+                    "mission_id": mission_id,
+                    "upload_state": "upload_pending",
+                    "error": "network down",
+                },
+            }
+
+        self.coordinator.usrp_backend.upload_capture_job.side_effect = fail_upload
+        result = self.coordinator.stop_usrp("noise_upload")
+        self.assertEqual(result.usrp.upload_retry_state, "running")
+        for _ in range(50):
+            if self.coordinator.store.load("noise_upload").usrp.upload_retry_state == "waiting":
+                break
+            time.sleep(0.01)
+        waiting = self.coordinator.store.load("noise_upload")
+        self.assertEqual(calls, ["usrp"])
+        self.assertEqual(waiting.usrp.upload_retry_attempt, 1)
+        self.assertEqual(waiting.usrp.upload_retry_state, "waiting")
+        self.assertEqual(
+            _parse_timestamp(waiting.usrp.upload_retry_next_attempt_at),
+            now[0] + timedelta(seconds=5),
+        )
+
+        now[0] += timedelta(seconds=5)
+        self.assertEqual(self.coordinator.process_upload_retries(), 1)
+        for _ in range(50):
+            if self.coordinator.store.load("noise_upload").usrp.upload_retry_attempt == 2:
+                break
+            time.sleep(0.01)
+        second = self.coordinator.store.load("noise_upload")
+        self.assertEqual(calls, ["usrp", "usrp"])
+        self.assertEqual(
+            _parse_timestamp(second.usrp.upload_retry_next_attempt_at),
+            now[0] + timedelta(seconds=15),
+        )
+
+        now[0] += timedelta(seconds=15)
+        self.assertEqual(self.coordinator.process_upload_retries(), 1)
+        for _ in range(50):
+            if self.coordinator.store.load("noise_upload").usrp.upload_retry_attempt == 3:
+                break
+            time.sleep(0.01)
+        third = self.coordinator.store.load("noise_upload")
+        self.assertEqual(calls, ["usrp", "usrp", "usrp"])
+        self.assertEqual(
+            _parse_timestamp(third.usrp.upload_retry_next_attempt_at),
+            now[0] + timedelta(seconds=30),
+        )
+
+        now[0] += timedelta(seconds=30)
+        self.assertEqual(self.coordinator.process_upload_retries(), 1)
+        for _ in range(50):
+            if self.coordinator.store.load("noise_upload").usrp.upload_retry_state == "exhausted":
+                break
+            time.sleep(0.01)
+        exhausted = self.coordinator.store.load("noise_upload")
+        self.assertEqual(calls, ["usrp", "usrp", "usrp", "usrp"])
+        self.assertEqual(exhausted.usrp.upload_retry_state, "exhausted")
+        self.assertEqual(exhausted.usrp.upload_retry_attempt, 3)
+        self.assertEqual(exhausted.usrp.file, "upload_pending")
+
+    def test_due_retry_restores_after_backend_restart_without_resetting_attempt(self):
+        from app.capture_jobs import _iso
+
+        now = [datetime(2026, 8, 13, tzinfo=timezone.utc)]
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.upload_retry_mode = "automatic"
+        current.usrp.upload_retry_state = "waiting"
+        current.usrp.upload_retry_attempt = 2
+        current.usrp.upload_retry_max_attempts = 3
+        current.usrp.upload_retry_next_attempt_at = _iso(now[0])
+        current.usrp.file = "upload_pending"
+        current.usrp.phase = "upload_pending"
+        current.usrp.service = "stopped"
+        self.coordinator.store.save(current)
+
+        restarted_backend = Mock()
+        restarted_backend.upload_capture_job.return_value = {
+            "mission_state": {
+                "mission_id": "noise_upload",
+                "upload_state": "uploaded",
+            },
+        }
+        from app.capture_jobs import CaptureCoordinator, CaptureStore
+
+        restarted = CaptureCoordinator(
+            CaptureStore(self.root),
+            repo_root=self.repo_root,
+            usrp_backend=restarted_backend,
+            clock=lambda: now[0],
+        )
+        self.assertEqual(restarted.process_upload_retries(), 1)
+        for _ in range(50):
+            if restarted.store.load("noise_upload").usrp.file == "uploaded":
+                break
+            time.sleep(0.01)
+        loaded = restarted.store.load("noise_upload")
+        restarted_backend.upload_capture_job.assert_called_once_with("usrp", "noise_upload")
+        self.assertEqual(loaded.usrp.file, "uploaded")
+        self.assertEqual(loaded.usrp.upload_retry_state, "success")
+        self.assertEqual(loaded.usrp.upload_retry_attempt, 2)
+
+    def test_running_retry_restores_to_next_waiting_slot_after_backend_restart(self):
+        from app.capture_jobs import CaptureCoordinator, CaptureStore, _iso, _parse_timestamp
+
+        now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.service = "stopped"
+        current.usrp.file = "upload_pending"
+        current.usrp.phase = "upload_pending"
+        current.usrp.upload_state = "running"
+        current.usrp.upload_mode = "automatic"
+        current.usrp.upload_job_id = "lost-worker"
+        current.usrp.upload_retry_mode = "automatic"
+        current.usrp.upload_retry_state = "running"
+        current.usrp.upload_retry_attempt = 1
+        current.usrp.upload_retry_max_attempts = 3
+        current.usrp.upload_retry_active_started_at = _iso(now)
+        self.coordinator.store.save(current)
+
+        restarted = CaptureCoordinator(
+            CaptureStore(self.root),
+            repo_root=self.repo_root,
+            usrp_backend=Mock(),
+            clock=lambda: now,
+        )
+        self.assertEqual(restarted.process_upload_retries(), 0)
+        recovered = restarted.store.load("noise_upload")
+        self.assertEqual(recovered.usrp.upload_retry_state, "waiting")
+        self.assertEqual(recovered.usrp.upload_retry_attempt, 2)
+        self.assertEqual(
+            _parse_timestamp(recovered.usrp.upload_retry_next_attempt_at),
+            now + timedelta(seconds=15),
+        )
+        # Repeated startup/status ticks must not consume another attempt or
+        # create a duplicate upload while the restored schedule is waiting.
+        self.assertEqual(restarted.process_upload_retries(), 0)
+        stable = restarted.store.load("noise_upload")
+        self.assertEqual(stable.usrp.upload_retry_attempt, 2)
+        self.assertEqual(stable.usrp.upload_retry_state, "waiting")
+
+    def test_due_retry_dispatch_does_not_overlap_an_existing_upload_job(self):
+        from app.capture_jobs import _iso
+
+        now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.service = "stopped"
+        current.usrp.file = "upload_pending"
+        current.usrp.phase = "upload_pending"
+        current.usrp.upload_retry_mode = "automatic"
+        current.usrp.upload_retry_state = "waiting"
+        current.usrp.upload_retry_attempt = 1
+        current.usrp.upload_retry_max_attempts = 3
+        current.usrp.upload_retry_next_attempt_at = _iso(now)
+        self.coordinator.store.save(current)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def upload(mode, mission_id):
+            started.set()
+            release.wait(timeout=1)
+            return {
+                "mission_state": {
+                    "mission_id": mission_id,
+                    "upload_state": "uploaded",
+                },
+            }
+
+        self.coordinator._clock = lambda: now
+        self.coordinator.usrp_backend.upload_capture_job.side_effect = upload
+        self.assertEqual(self.coordinator.process_upload_retries(), 1)
+        self.assertTrue(started.wait(timeout=1))
+        self.assertEqual(self.coordinator.process_upload_retries(), 0)
+        self.coordinator.usrp_backend.upload_capture_job.assert_called_once_with(
+            "usrp", "noise_upload"
+        )
+        release.set()
+        for _ in range(50):
+            if self.coordinator.store.load("noise_upload").usrp.file == "uploaded":
+                break
+            time.sleep(0.01)
+        self.assertEqual(self.coordinator.store.load("noise_upload").usrp.file, "uploaded")
+
+    def test_manual_retry_is_noop_while_automatic_retry_waits_or_runs(self):
+        from app.capture_jobs import _iso
+
+        now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.service = "stopped"
+        current.usrp.file = "upload_pending"
+        current.usrp.phase = "upload_pending"
+        current.usrp.upload_retry_mode = "automatic"
+        current.usrp.upload_retry_state = "waiting"
+        current.usrp.upload_retry_attempt = 1
+        current.usrp.upload_retry_max_attempts = 3
+        current.usrp.upload_retry_next_attempt_at = _iso(now + timedelta(seconds=5))
+        self.coordinator.store.save(current)
+
+        waiting = self.coordinator.retry_usrp_upload("noise_upload")
+        self.assertEqual(waiting.usrp.upload_retry_state, "waiting")
+        self.coordinator.usrp_backend.retry_capture_upload.assert_not_called()
+
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.upload_state = "running"
+        current.usrp.upload_mode = "automatic"
+        current.usrp.upload_retry_state = "running"
+        current.usrp.upload_retry_active_started_at = _iso(now)
+        current.usrp.upload_job_id = "automatic-worker"
+        self.coordinator.store.save(current)
+        running = self.coordinator.retry_usrp_upload("noise_upload")
+        self.assertEqual(running.usrp.upload_retry_state, "running")
+        self.coordinator.usrp_backend.retry_capture_upload.assert_not_called()
+
+    def test_manual_retry_does_not_reset_automatic_history_after_exhaustion(self):
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.upload_retry_mode = "automatic"
+        current.usrp.upload_retry_state = "exhausted"
+        current.usrp.upload_retry_attempt = 3
+        current.usrp.upload_retry_max_attempts = 3
+        current.usrp.file = "upload_pending"
+        current.usrp.phase = "upload_pending"
+        current.usrp.service = "stopped"
+        self.coordinator.store.save(current)
+        self.coordinator.usrp_backend.retry_capture_upload.return_value = {
+            "mission_state": {
+                "mission_id": "noise_upload",
+                "upload_state": "upload_pending",
+                "error": "still offline",
+            },
+        }
+
+        self.coordinator.retry_usrp_upload("noise_upload")
+        for _ in range(50):
+            if self.coordinator.store.load("noise_upload").usrp.upload_state == "failure":
+                break
+            time.sleep(0.01)
+        failed = self.coordinator.store.load("noise_upload")
+        self.assertEqual(failed.usrp.upload_retry_attempt, 3)
+        self.assertEqual(failed.usrp.upload_retry_state, "exhausted")
+        self.assertEqual(failed.usrp.file, "upload_pending")
 
     def _upload_noise(
         self,

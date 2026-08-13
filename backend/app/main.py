@@ -1511,6 +1511,9 @@ async def _process_scene_task(task_id: str):
 @app.on_event("startup")
 async def refresh_scene_index_on_startup():
     await asyncio.to_thread(rebuild_scene_index)
+    # Resume any persisted automatic upload retry whose server timestamp is
+    # already due.  Future retries remain timestamp-driven by status polling.
+    await asyncio.to_thread(capture_coordinator.process_upload_retries)
 
 
 @app.post("/api/location/select")

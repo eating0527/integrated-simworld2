@@ -31,6 +31,13 @@ interface ChildState {
   upload_state?: string;
   upload_mode?: string;
   upload_started_at?: string | null;
+  upload_retry_mode?: string;
+  upload_retry_state?: string;
+  upload_retry_attempt?: number;
+  upload_retry_max_attempts?: number;
+  upload_retry_next_attempt_at?: string | null;
+  upload_retry_active_started_at?: string | null;
+  upload_retry_last_error?: string;
 }
 
 interface DeviceHealth {
@@ -363,6 +370,13 @@ function normalizeChild(value: unknown): ChildState {
     upload_state: typeof child.upload_state === 'string' ? child.upload_state : 'idle',
     upload_mode: typeof child.upload_mode === 'string' ? child.upload_mode : 'none',
     upload_started_at: typeof child.upload_started_at === 'string' ? child.upload_started_at : null,
+    upload_retry_mode: typeof child.upload_retry_mode === 'string' ? child.upload_retry_mode : 'none',
+    upload_retry_state: typeof child.upload_retry_state === 'string' ? child.upload_retry_state : 'idle',
+    upload_retry_attempt: typeof child.upload_retry_attempt === 'number' ? child.upload_retry_attempt : 0,
+    upload_retry_max_attempts: typeof child.upload_retry_max_attempts === 'number' ? child.upload_retry_max_attempts : 3,
+    upload_retry_next_attempt_at: typeof child.upload_retry_next_attempt_at === 'string' ? child.upload_retry_next_attempt_at : null,
+    upload_retry_active_started_at: typeof child.upload_retry_active_started_at === 'string' ? child.upload_retry_active_started_at : null,
+    upload_retry_last_error: typeof child.upload_retry_last_error === 'string' ? child.upload_retry_last_error : '',
   };
 }
 
@@ -372,8 +386,24 @@ function uploadProgressLabel(child: ChildState, now: number): string | null {
   if (Number.isNaN(started)) return null;
   const elapsed = Math.max(0, Math.floor((now - started) / 1000));
   return child.upload_mode === 'manual'
-    ? `Manual retry (${elapsed} s)`
+    ? `手動重試 (${elapsed} s)`
+    : child.upload_retry_attempt && child.upload_retry_attempt > 0
+      ? `正在重試 ${child.upload_retry_attempt}/${child.upload_retry_max_attempts ?? 3} (${elapsed} s)`
     : `Uploading (${elapsed} s)`;
+}
+
+function uploadRetryLabel(child: ChildState, now: number): string | null {
+  const attempt = child.upload_retry_attempt ?? 0;
+  const maximum = child.upload_retry_max_attempts ?? 3;
+  if (child.upload_retry_state === 'waiting' && child.upload_retry_next_attempt_at) {
+    const next = Date.parse(child.upload_retry_next_attempt_at);
+    if (!Number.isNaN(next)) {
+      const remaining = Math.max(0, Math.ceil((next - now) / 1000));
+      return `自動重試 ${attempt}/${maximum} (${remaining} s)`;
+    }
+  }
+  if (child.upload_retry_state === 'exhausted') return '自動重試已用盡';
+  return null;
 }
 
 function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth {
@@ -619,12 +649,13 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   }, [loadStatus]);
 
   const uploadRunning = status?.usrp.upload_state === 'running';
+  const uploadWaiting = status?.usrp.upload_retry_state === 'waiting';
   useEffect(() => {
-    if (!uploadRunning) return;
+    if (!uploadRunning && !uploadWaiting) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [uploadRunning]);
+  }, [uploadRunning, uploadWaiting]);
 
   useEffect(() => {
     let active = true;
@@ -756,8 +787,12 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     child: ChildState,
     actions: React.ReactNode,
     steps: string[],
-  ) => (
-    <section style={S.section}>
+  ) => {
+    const retryLabel = uploadRetryLabel(child, now);
+    const progressLabel = uploadProgressLabel(child, now);
+    const autoRetryActive = child.upload_retry_mode === 'automatic'
+      && ['waiting', 'running'].includes(child.upload_retry_state ?? '');
+    return <section style={S.section}>
       <div style={S.sectionTitle}>{title}</div>
       <div style={S.rows}>
         <span style={S.key}>Connection</span>
@@ -785,11 +820,12 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       ) : null}
       {child.service === 'presumed_running' ? <div style={S.error}>Presumed running; reconcile status before stopping.</div> : null}
       {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>Stopped; upload pending.</div> : null}
-      {uploadProgressLabel(child, now) ? <div aria-live="polite" style={S.error}>{uploadProgressLabel(child, now)}</div> : null}
-      {child.file === 'upload_pending' && title.includes('USRP') ? <button type="button" style={S.button} disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}
+      {retryLabel ? <div aria-live="polite" style={S.error}>{retryLabel}</div> : null}
+      {progressLabel ? <div aria-live="polite" style={S.error}>{progressLabel}</div> : null}
+      {child.file === 'upload_pending' && title.includes('USRP') && !autoRetryActive ? <button type="button" style={S.button} disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}
       {actions}
     </section>
-  );
+  };
 
   return (
     <MinPanel
