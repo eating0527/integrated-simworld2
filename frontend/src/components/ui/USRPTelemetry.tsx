@@ -309,6 +309,11 @@ function canStop(service: ServiceDisplay): boolean {
   return ['starting', 'running', 'presumed_running'].includes(service);
 }
 
+function canRetryStop(child: ChildState, stopRequested: boolean): boolean {
+  return child.phase === 'stop_failed'
+    || (stopRequested && child.phase === 'reconciling');
+}
+
 function normalizeOverall(value: unknown): DisplayState {
   return typeof value === 'string' && OVERALL_STATES.has(value as OverallState)
     ? value as OverallState
@@ -691,6 +696,35 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const bothReady = uavKnown && usrpKnown && ap3Ready && raspiReady;
   const canStartUav = uavKnown && !bind && !busy && !isUnresolved(uav) && ap3Ready;
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
+  const stopAction = (
+    target: 'uav' | 'usrp',
+    child: ChildState,
+    childMissionId: string,
+  ) => {
+    const retry = canRetryStop(child, Boolean(status?.stop_requested_at));
+    const stopped = child.service === 'stopped';
+    const raspiUnavailable = target === 'usrp' && !raspiReady;
+    const disabled = busy || stopped || (retry ? raspiUnavailable : !canStop(child.service));
+    const label = stopped ? 'Stopped' : retry ? 'Retry Stop' : target === 'uav' ? 'Stop UAV' : 'Stop USRP';
+    const path = retry
+      ? `/api/capture/${target}/retry-stop?mission_id=${encodeURIComponent(childMissionId)}`
+      : `/api/capture/${target}/stop?mission_id=${encodeURIComponent(childMissionId)}`;
+    return <>
+      <button
+        type="button"
+        style={{ ...S.button, ...S.stop, ...disabledStyle(disabled) }}
+        disabled={disabled}
+        aria-label={label}
+        title={retry && raspiUnavailable ? 'Reconnect Raspberry Pi before retrying stop.' : undefined}
+        onClick={() => void request(path)}
+      >
+        {label}
+      </button>
+      {retry && raspiUnavailable ? (
+        <div aria-live="polite" style={S.error}>Reconnect Raspberry Pi before retrying stop.</div>
+      ) : null}
+    </>;
+  };
 
   const childSection = (
     title: string,
@@ -782,14 +816,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             >
               Start UAV
             </button>
-            <button
-              type="button"
-              style={{ ...S.button, ...S.stop, ...disabledStyle(busy || !canStop(uav.service)) }}
-              disabled={busy || !canStop(uav.service)}
-              onClick={() => void request(`/api/capture/uav/stop?mission_id=${encodeURIComponent(uavMissionId)}`)}
-            >
-              Stop UAV
-            </button>
+            {stopAction('uav', uav, uavMissionId)}
           </div>,
           ['Start recorder', 'Record', 'Stop recorder', 'Finalize CSV', 'Complete'],
         )}
@@ -826,14 +853,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
               >
                 Start USRP
               </button>
-              <button
-                type="button"
-                style={{ ...S.button, ...S.stop, ...disabledStyle(busy || !canStop(usrp.service)) }}
-                disabled={busy || !canStop(usrp.service)}
-                onClick={() => void request(`/api/capture/usrp/stop?mission_id=${encodeURIComponent(usrpMissionId)}`)}
-              >
-                Stop USRP
-              </button>
+              {stopAction('usrp', usrp, usrpMissionId)}
             </div>
           </>,
           ['Connect', 'Configure', 'Start service', 'Record', 'Stop service', 'Finalize CSV', 'Upload', 'Complete'],

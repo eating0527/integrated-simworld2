@@ -489,6 +489,70 @@ describe('USRPTelemetry capture controls', () => {
     expect(await screen.findByRole('button', { name: 'Stop All' })).toBeDisabled();
   });
 
+  it('offers Retry Stop only for the failed child and keeps a stopped sibling disabled', async () => {
+    const status = captureStatus({
+      missionId: 'retry_child',
+      bind: true,
+      overall: 'stopping',
+      stopRequestedAt: '2026-08-12T00:00:00Z',
+      uav: { service: 'presumed_running', file: 'finalizing', phase: 'stop_failed', error: 'AP3 timeout' },
+      usrp: { service: 'stopped', file: 'uploaded', phase: 'completed' },
+    });
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/uav/retry-stop')) {
+        return jsonResponse({ ...status, uav: { ...status.uav, service: 'stopped', phase: 'stopped' } });
+      }
+      return jsonResponse(status);
+    });
+    const user = await openTelemetry();
+
+    await screen.findByRole('button', { name: 'Retry Stop' });
+    const gps = screen.getByText('無人機 GPS 採樣').closest('section') as HTMLElement;
+    const noise = screen.getByText('USRP 干擾採樣').closest('section') as HTMLElement;
+    expect(within(gps).getByRole('button', { name: 'Retry Stop' })).toBeEnabled();
+    expect(within(noise).getByRole('button', { name: 'Stopped' })).toBeDisabled();
+
+    await user.click(within(gps).getByRole('button', { name: 'Retry Stop' }));
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/uav/retry-stop?mission_id=retry_child',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('disables USRP Retry Stop while Raspberry Pi is offline and enables it after recovery', async () => {
+    const offline = captureStatus({
+      missionId: 'retry_usrp',
+      bind: true,
+      overall: 'stopping',
+      stopRequestedAt: '2026-08-12T00:00:00Z',
+      usrp: { connection: 'offline', service: 'presumed_running', file: 'finalizing', phase: 'stop_failed' },
+    });
+    offline.device_health.raspi.state = 'offline';
+    offline.device_health.raspi.error = 'SSH timeout';
+    const recovered = { ...offline, device_health: {
+      ...offline.device_health,
+      raspi: { ...offline.device_health.raspi, state: 'ready', error: '' },
+    } };
+    let healthCalls = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/health')) {
+        healthCalls += 1;
+        return jsonResponse(healthCalls === 1 ? offline : recovered);
+      }
+      return jsonResponse(healthCalls === 0 ? offline : recovered);
+    });
+    vi.useFakeTimers();
+    render(<USRPTelemetry />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const noise = screen.getByText('USRP 干擾採樣').closest('section') as HTMLElement;
+    expect(within(noise).getByRole('button', { name: 'Retry Stop' })).toBeDisabled();
+    expect(within(noise).getByText(/Reconnect Raspberry Pi/i)).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(within(noise).getByRole('button', { name: 'Retry Stop' })).toBeEnabled();
+    vi.useRealTimers();
+  });
+
   it('stops independent jobs with each child mission id', async () => {
     const status = captureStatus({
       usrp: { service: 'running', file: 'recording' },

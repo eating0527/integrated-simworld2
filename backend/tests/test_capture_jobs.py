@@ -1750,6 +1750,109 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(stopped.usrp.connection, "offline")
         self.assertEqual(stopped.overall_state, "stopping")
 
+    def test_retry_stop_only_retries_failed_uav_child(self):
+        state = self.coordinator.start_bind("test")
+        state.stop_requested_at = "2026-08-12T00:00:00+00:00"
+        state.uav.service = "presumed_running"
+        state.uav.file = "finalizing"
+        state.uav.phase = "stop_failed"
+        state.uav.error = "AP3 finalize timeout"
+        state.usrp.service = "stopped"
+        state.usrp.file = "uploaded"
+        state.usrp.phase = "completed"
+        self.coordinator.store.save(state)
+
+        retried = self.coordinator.retry_stop_uav(state.mission_id)
+
+        self.assertEqual(retried.uav.service, "stopped")
+        self.assertEqual(retried.uav.file, "ready")
+        self.assertEqual(retried.uav.phase, "stopped")
+        self.assertEqual(retried.usrp.service, "stopped")
+        self.assertEqual(retried.overall_state, "completed")
+        self.backend.stop_capture_job.assert_not_called()
+
+    def test_retry_stop_retries_usrp_with_original_mission_id(self):
+        state = self.coordinator.start_bind("test")
+        state.stop_requested_at = "2026-08-12T00:00:00+00:00"
+        state.usrp.connection = "ready"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "finalizing"
+        state.usrp.phase = "stop_failed"
+        self.coordinator.store.save(state)
+        self.backend.stop_capture_job.return_value = {
+            "success": True,
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": state.mission_id,
+                "state": "stopped",
+                "upload_state": "uploaded",
+            },
+        }
+
+        retried = self.coordinator.retry_stop_usrp(state.mission_id)
+
+        self.assertEqual(retried.usrp.service, "stopped")
+        self.assertEqual(retried.usrp.file, "uploaded")
+        self.assertEqual(retried.usrp.phase, "stopped")
+        self.backend.stop_capture_job.assert_called_once_with("test", state.mission_id)
+        self.assertEqual(retried.uav.service, "running")
+
+    def test_retry_usrp_stop_failure_keeps_error_and_sibling_running(self):
+        state = self.coordinator.start_bind("test")
+        state.stop_requested_at = "2026-08-12T00:00:00+00:00"
+        state.usrp.connection = "ready"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "finalizing"
+        state.usrp.phase = "stop_failed"
+        state.usrp.error = "first stop timed out"
+        self.coordinator.store.save(state)
+        self.backend.stop_capture_job.side_effect = RuntimeError("SSH timeout again")
+
+        retried = self.coordinator.retry_stop_usrp(state.mission_id)
+
+        self.assertEqual(retried.usrp.service, "presumed_running")
+        self.assertEqual(retried.usrp.phase, "stop_failed")
+        self.assertIn("SSH timeout again", retried.usrp.error)
+        self.assertEqual(retried.uav.service, "running")
+        self.assertEqual(retried.uav.file, "recording")
+
+    def test_retry_uav_stop_requires_process_ownership_after_restart(self):
+        state = self.coordinator.start_bind("test")
+        state.stop_requested_at = "2026-08-12T00:00:00+00:00"
+        state.uav.service = "presumed_running"
+        state.uav.file = "finalizing"
+        state.uav.phase = "stop_failed"
+        state.uav.error = "AP3 finalize timeout"
+        self.coordinator.store.save(state)
+
+        from app.capture_jobs import CaptureCoordinator, CaptureConflictError
+        restarted = CaptureCoordinator(
+            self.coordinator.store,
+            repo_root=self.repo_root,
+            run_command=self.run_command,
+            popen_factory=self.popen,
+            usrp_backend=self.backend,
+        )
+        with self.assertRaises(CaptureConflictError):
+            restarted.retry_stop_uav(state.mission_id)
+
+        restored = restarted.store.load(state.mission_id)
+        self.assertEqual(restored.uav.phase, "stop_failed")
+        self.assertEqual(restored.uav.service, "presumed_running")
+        self.assertEqual(restored.usrp.service, "running")
+
+    def test_retry_stop_rejects_general_launch_failure(self):
+        state = self.coordinator.start_bind("test")
+        state.uav.service = "failed"
+        state.uav.file = "failed"
+        state.uav.phase = "failed"
+        self.coordinator.store.save(state)
+
+        from app.capture_jobs import CaptureConflictError
+        with self.assertRaises(CaptureConflictError):
+            self.coordinator.retry_stop_uav(state.mission_id)
+        self.backend.stop_capture_job.assert_not_called()
+
     def test_idle_status_reports_independent_readiness(self):
         state = self.coordinator.status("test")
 
@@ -2183,6 +2286,8 @@ class CaptureApiTests(unittest.TestCase):
         coordinator.stop_uav.return_value = self._state("uav")
         coordinator.stop_usrp.return_value = self._state("usrp")
         coordinator.stop_bind.return_value = self._state("bind")
+        coordinator.retry_stop_uav.return_value = self._state("uav")
+        coordinator.retry_stop_usrp.return_value = self._state("usrp")
 
         with patch.object(self.main, "capture_coordinator", coordinator):
             self.assertEqual(
@@ -2201,6 +2306,10 @@ class CaptureApiTests(unittest.TestCase):
                 asyncio.run(self.main.capture_uav_stop_post("flight_api")).mission_id,
                 "flight_api",
             )
+            self.assertEqual(
+                asyncio.run(self.main.capture_uav_retry_stop_post("flight_api")).mission_id,
+                "flight_api",
+            )
             coordinator.resume_uav.return_value = self._state("bind")
             self.assertEqual(
                 asyncio.run(self.main.capture_uav_resume_post("flight_api")).mission_id,
@@ -2208,6 +2317,10 @@ class CaptureApiTests(unittest.TestCase):
             )
             self.assertEqual(
                 asyncio.run(self.main.capture_usrp_stop_post("flight_api")).mission_id,
+                "flight_api",
+            )
+            self.assertEqual(
+                asyncio.run(self.main.capture_usrp_retry_stop_post("flight_api")).mission_id,
                 "flight_api",
             )
             self.assertEqual(
@@ -2219,6 +2332,8 @@ class CaptureApiTests(unittest.TestCase):
         coordinator.start_usrp.assert_called_once()
         coordinator.resume_uav.assert_called_once_with("flight_api")
         coordinator.stop_bind.assert_called_once_with("flight_api")
+        coordinator.retry_stop_uav.assert_called_once_with("flight_api")
+        coordinator.retry_stop_usrp.assert_called_once_with("flight_api")
 
 
 class NoiseUploadTests(unittest.TestCase):

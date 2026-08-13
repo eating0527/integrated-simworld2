@@ -2369,6 +2369,14 @@ async def capture_uav_stop_post(mission_id: str = Query(...)):
         _capture_error(exc)
 
 
+@app.post("/api/capture/uav/retry-stop")
+async def capture_uav_retry_stop_post(mission_id: str = Query(...)):
+    try:
+        return await _capture_call(capture_coordinator.retry_stop_uav, mission_id)
+    except Exception as exc:
+        _capture_error(exc)
+
+
 @app.post("/api/capture/uav/resume")
 async def capture_uav_resume_post(mission_id: str = Query(...)):
     """Resume the existing Bound Mission AP3 recorder in append mode."""
@@ -2409,6 +2417,14 @@ async def capture_usrp_stop_post(mission_id: str = Query(...), background_tasks:
         if background_tasks is not None and result.usrp.file == "upload_pending":
             background_tasks.add_task(capture_coordinator.retry_usrp_upload, mission_id)
         return result
+    except Exception as exc:
+        _capture_error(exc)
+
+
+@app.post("/api/capture/usrp/retry-stop")
+async def capture_usrp_retry_stop_post(mission_id: str = Query(...)):
+    try:
+        return await _capture_call(capture_coordinator.retry_stop_usrp, mission_id)
     except Exception as exc:
         _capture_error(exc)
 

@@ -1102,6 +1102,7 @@ class CaptureCoordinator:
                 return state
 
             process = self._uav_processes.get(mission_id)
+            prior_service = state.uav.service
             csv_path = Path(state.uav.path) if state.uav.path else (
                 self.store.root / mission_id / "gps.csv"
             )
@@ -1134,6 +1135,19 @@ class CaptureCoordinator:
         with self._lock:
             state = self.store.load(mission_id)
             child = state.uav
+            if process is None and prior_service in {
+                "starting",
+                "running",
+                "presumed_running",
+                "stopping",
+            }:
+                # After a backend restart the local process ownership map is
+                # empty.  A valid CSV alone is not evidence that an AP3
+                # recorder stopped, so retain an explicit retryable failure.
+                return self._mark_uav_stop_failure_locked(
+                    state,
+                    "AP3 recorder process ownership is unavailable",
+                )
             if process_error is not None:
                 # A local process that could not be proven stopped remains an
                 # unresolved stop.  Do not fabricate a terminal result.
@@ -1642,6 +1656,45 @@ class CaptureCoordinator:
         with self._lock:
             state = self.store.load(mission_id)
             return self._apply_usrp_stop_result_locked(state, remote)
+
+    def retry_stop(self, target: Literal["uav", "usrp"], mission_id: str) -> CaptureState:
+        """Retry a previously unresolved stop for one child only.
+
+        Stop All is deliberately one-shot.  A retry is accepted only for a
+        child that recorded ``stop_failed`` (or a reconciled remote state
+        after Stop All); ordinary launch/execution failures are not silently
+        turned into stop commands.
+        """
+
+        if target not in {"uav", "usrp"}:
+            raise CaptureError(f"unsupported retry stop target: {target}")
+        with self._lock:
+            state = self.store.load(mission_id)
+            child = state.uav if target == "uav" else state.usrp
+            if child.service == "stopped":
+                return state
+            retryable = child.phase == "stop_failed" or (
+                state.stop_requested_at is not None
+                and child.phase == "reconciling"
+            )
+            if not retryable:
+                raise CaptureConflictError(
+                    f"{target.upper()} stop is not retryable in phase {child.phase}"
+                )
+            if target == "uav" and mission_id not in self._uav_processes:
+                raise CaptureConflictError(
+                    "AP3 recorder ownership is unavailable; reconcile the device before retrying stop"
+                )
+
+        # Keep the existing child stop implementations as the single control
+        # path.  They preserve mission identity and isolate the sibling.
+        return self.stop_uav(mission_id) if target == "uav" else self.stop_usrp(mission_id)
+
+    def retry_stop_uav(self, mission_id: str) -> CaptureState:
+        return self.retry_stop("uav", mission_id)
+
+    def retry_stop_usrp(self, mission_id: str) -> CaptureState:
+        return self.retry_stop("usrp", mission_id)
 
     def retry_usrp_upload(self, mission_id: str) -> CaptureState:
         with self._lock:
