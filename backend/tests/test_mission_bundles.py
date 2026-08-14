@@ -86,7 +86,7 @@ class MissionBundleImportTests(unittest.TestCase):
         unsafe_id = asyncio.run(main.get_mission_bundle_artifact("..", "gps"))
         unsafe_kind = asyncio.run(main.get_mission_bundle_artifact("safe", "../capture"))
 
-        self.assertEqual(valid.path, str(mission / "gps.csv"))
+        self.assertEqual(valid.path, mission / "gps.csv")
         self.assertEqual(unsafe_id.status_code, 404)
         self.assertEqual(unsafe_kind.status_code, 404)
 
