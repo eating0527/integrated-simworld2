@@ -535,6 +535,50 @@ class IndependentUavTests(unittest.TestCase):
         with self.assertRaises(CaptureConflictError):
             coordinator.start_uav()
 
+    def test_independent_uav_rejects_bound_noise_that_is_still_unresolved(self):
+        from app.capture_jobs import CaptureConflictError
+
+        coordinator = self._coordinator()
+        bound = coordinator.store.create(
+            bind=True,
+            selected_usrp_mode="test",
+            target="bind",
+            mission_id="bound-noise-active",
+        )
+        bound.started_at = "2026-08-12T00:00:00+00:00"
+        bound.uav.service = "stopped"
+        bound.uav.file = "ready"
+        bound.usrp.service = "running"
+        bound.usrp.file = "recording"
+        coordinator.store.save(bound)
+
+        with self.assertRaises(CaptureConflictError):
+            coordinator.start_uav()
+
+        self.run_command.assert_not_called()
+
+    def test_independent_usrp_rejects_bound_gps_that_is_still_unresolved(self):
+        from app.capture_jobs import CaptureConflictError
+
+        coordinator = self._coordinator()
+        bound = coordinator.store.create(
+            bind=True,
+            selected_usrp_mode="test",
+            target="bind",
+            mission_id="bound-gps-active",
+        )
+        bound.started_at = "2026-08-12T00:00:00+00:00"
+        bound.uav.service = "running"
+        bound.uav.file = "recording"
+        bound.usrp.service = "stopped"
+        bound.usrp.file = "uploaded"
+        coordinator.store.save(bound)
+
+        with self.assertRaises(CaptureConflictError):
+            coordinator.start_usrp("test")
+
+        self.run_command.assert_not_called()
+
     def test_status_marks_stale_stopping_uav_failed_after_backend_restart(self):
         from app.capture_jobs import CaptureCoordinator
 
@@ -1576,6 +1620,28 @@ class BindCoordinatorTests(unittest.TestCase):
         with self.assertRaises(CaptureConflictError):
             self.coordinator.start_bind("usrp")
 
+    def test_bind_rejects_independent_upload_retry_before_creating_new_mission(self):
+        from app.capture_jobs import CaptureConflictError
+
+        old = self.coordinator.store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="retrying-upload",
+        )
+        old.started_at = "2026-08-12T00:00:00+00:00"
+        old.usrp.service = "stopped"
+        old.usrp.file = "ready"
+        old.usrp.upload_retry_state = "waiting"
+        self.coordinator.store.save(old)
+
+        self.assertEqual(old.overall_state, "finalizing")
+
+        with self.assertRaises(CaptureConflictError):
+            self.coordinator.start_bind("usrp")
+
+        self.assertEqual(len(self.coordinator.store.list()), 1)
+
     def test_bind_start_shares_mission_id(self):
         state = self.coordinator.start_bind("usrp")
 
@@ -1611,6 +1677,22 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(failed.usrp.service, "failed")
         self.assertEqual(failed.usrp.file, "failed")
         self.assertIn("systemctl failed", failed.usrp.error)
+
+    def test_independent_uav_then_usrp_can_run_concurrently(self):
+        uav = self.coordinator.start_uav()
+        usrp = self.coordinator.start_usrp("test")
+
+        self.assertNotEqual(uav.mission_id, usrp.mission_id)
+        self.assertEqual(uav.uav.service, "running")
+        self.assertEqual(usrp.usrp.service, "running")
+
+    def test_independent_usrp_then_uav_can_run_concurrently(self):
+        usrp = self.coordinator.start_usrp("test")
+        uav = self.coordinator.start_uav()
+
+        self.assertNotEqual(usrp.mission_id, uav.mission_id)
+        self.assertEqual(usrp.usrp.service, "running")
+        self.assertEqual(uav.uav.service, "running")
 
     def test_stop_all_waits_for_both_finalizers(self):
         state = self.coordinator.start_bind("test")
@@ -1898,6 +1980,24 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.usrp.mission_id, usrp_state.mission_id)
         self.assertEqual(dashboard.uav.service, "running")
         self.assertEqual(dashboard.usrp.service, "running")
+
+    def test_independent_noise_start_is_allowed_while_gps_is_running(self):
+        gps = self.coordinator.start_uav()
+
+        noise = self.coordinator.start_usrp("usrp")
+
+        self.assertNotEqual(gps.mission_id, noise.mission_id)
+        self.assertEqual(gps.uav.service, "running")
+        self.assertEqual(noise.usrp.service, "running")
+
+    def test_independent_gps_start_is_allowed_while_noise_is_running(self):
+        noise = self.coordinator.start_usrp("usrp")
+
+        gps = self.coordinator.start_uav()
+
+        self.assertNotEqual(gps.mission_id, noise.mission_id)
+        self.assertEqual(gps.uav.service, "running")
+        self.assertEqual(noise.usrp.service, "running")
 
     def test_status_marks_lost_local_process_failed_after_backend_restart(self):
         from app.capture_jobs import CaptureCoordinator

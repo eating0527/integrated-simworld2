@@ -284,18 +284,98 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByRole('button', { name: 'Start USRP' })).toBeDisabled();
   });
 
-  it('locks Bind and mode switching while USRP is running', async () => {
+  it('keeps mode switching interactive and explains an active Noise task', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'noise_2',
       mode: 'usrp',
       usrp: { service: 'running', file: 'recording' },
     })));
 
-    await openTelemetry();
+    const user = await openTelemetry();
 
-    expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeDisabled();
+    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    expect(bindSwitch).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
+
+    await user.click(bindSwitch);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('請先停止 Noise 任務。');
+    expect(bindSwitch).toHaveAttribute('aria-checked', 'false');
+    expect(vi.mocked(globalThis.fetch).mock.calls.some(([input]) => String(input).includes('/stop'))).toBe(false);
+  });
+
+  it('keeps the mode switch available when an active GPS mission has unknown Noise health', async () => {
+    const status = captureStatus({
+      missionId: 'gps_health_unknown',
+      uav: { service: 'running', file: 'recording' },
+      usrp: { connection: 'unknown' },
+    });
+    status.device_health.raspi.state = 'unknown';
+    status.device_health.raspi.stale = true;
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+    const user = await openTelemetry();
+
+    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    expect(bindSwitch).toBeEnabled();
+    await user.click(bindSwitch);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('請先停止 GPS 任務。');
+  });
+
+  it.each([
+    ['GPS', { uav: { service: 'running', file: 'recording' } }, '請先停止 GPS 任務。'],
+    ['GPS and Noise', {
+      uav: { service: 'running', file: 'recording' },
+      usrp: { service: 'running', file: 'recording' },
+    }, '請先停止 GPS 與 Noise 任務。'],
+    ['Noise upload', {
+      usrp: { service: 'stopped', file: 'upload_pending' },
+    }, '請先等待 Noise 上傳。'],
+  ])('shows the %s mode-switch blocker', async (_name, overrides, notice) => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus(overrides)));
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(notice);
+    expect(screen.getByRole('switch', { name: 'Bind services' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('uses the Bound task blocker while an active Bound Mission is displayed', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'bound_2',
+      bind: true,
+      overall: 'running',
+      uav: { service: 'running', file: 'recording' },
+      usrp: { service: 'running', file: 'recording' },
+    })));
+    const user = await openTelemetry();
+
+    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    expect(bindSwitch).toHaveAttribute('aria-checked', 'true');
+    await user.click(bindSwitch);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('請先停止當前任務。');
+    expect(bindSwitch).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it.each([
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+  ])('allows switching after a %s result', async (_name, overall) => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: `terminal_${overall}`,
+      overall,
+      uav: { service: overall === 'completed' ? 'stopped' : 'failed', file: overall === 'completed' ? 'ready' : 'failed' },
+    })));
+    const user = await openTelemetry();
+
+    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    await user.click(bindSwitch);
+
+    expect(bindSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('shows presumed running and pending upload without reporting completion', async () => {
@@ -785,7 +865,7 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('Raspberry Pi');
   });
 
-  it('locks Bind and mode while either child is finalizing or upload is pending', async () => {
+  it('keeps the mode switch interactive while a Bound child is finalizing or upload is pending', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'pending-bound',
       bind: true,
@@ -796,7 +876,7 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeDisabled();
+    expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Start Bound Capture' })).toBeDisabled();

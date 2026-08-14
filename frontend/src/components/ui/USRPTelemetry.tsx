@@ -273,7 +273,26 @@ function isActive(service: ServiceDisplay): boolean {
 function isUnresolved(child: ChildState): boolean {
   return isActive(child.service)
     || ['finalizing', 'upload_pending'].includes(child.file)
-    || ['stopping', 'stopping_service', 'finalizing_file', 'upload_pending', 'uploading', 'reconciling', 'stop_failed'].includes(child.phase ?? 'idle');
+    || ['stopping', 'stopping_service', 'finalizing_file', 'upload_pending', 'uploading', 'reconciling', 'stop_failed'].includes(child.phase ?? 'idle')
+    || child.upload_state === 'running'
+    || ['waiting', 'running'].includes(child.upload_retry_state ?? '');
+}
+
+function modeBlocker(bind: boolean, status: CaptureStatus | null): string | null {
+  if (!status) return null;
+  const gpsUnresolved = isUnresolved(status.uav);
+  const noiseUnresolved = isUnresolved(status.usrp);
+  if (bind || status.bind) {
+    return gpsUnresolved || noiseUnresolved ? '請先停止當前任務。' : null;
+  }
+  if (!gpsUnresolved && !noiseUnresolved) return null;
+  const noiseUploading = status.usrp.file === 'upload_pending'
+    || status.usrp.upload_state === 'running'
+    || ['upload_pending', 'uploading'].includes(status.usrp.phase ?? '')
+    || ['waiting', 'running'].includes(status.usrp.upload_retry_state ?? '');
+  if (gpsUnresolved && noiseUnresolved) return '請先停止 GPS 與 Noise 任務。';
+  if (gpsUnresolved) return '請先停止 GPS 任務。';
+  return noiseUploading ? '請先等待 Noise 上傳。' : '請先停止 Noise 任務。';
 }
 
 function isPollingPhase(phase?: PhaseDisplay): boolean {
@@ -752,7 +771,20 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const noiseModeLocked = busy || isUnresolved(usrp) || !raspiReady;
   const bothReady = uavKnown && usrpKnown && ap3Ready && raspiReady;
   const canStartUav = uavKnown && !bind && !busy && !isUnresolved(uav) && ap3Ready;
+  // Control Mode is only a projection switch; an unresolved child must be
+  // able to announce its blocker even when the sibling health projection is
+  // unknown.  Before the first status response there is no mode to switch.
+  const modeDisabled = busy || status === null;
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
+  const switchMode = () => {
+    const notice = modeBlocker(bind, status);
+    if (notice) {
+      setError(notice);
+      return;
+    }
+    setError('');
+    setBind(value => !value);
+  };
   const stopAction = (
     target: 'uav' | 'usrp',
     child: ChildState,
@@ -843,9 +875,9 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             role="switch"
             aria-label="Bind services"
             aria-checked={bind}
-            disabled={controlsLocked || !uavKnown || !usrpKnown}
-            style={{ ...S.button, ...(bind ? S.active : null), ...disabledStyle(controlsLocked || !uavKnown || !usrpKnown) }}
-            onClick={() => setBind(value => !value)}
+            disabled={modeDisabled}
+            style={{ ...S.button, ...(bind ? S.active : null), ...disabledStyle(modeDisabled) }}
+            onClick={switchMode}
           >
             {bind ? '啟用' : '關閉'}
           </button>

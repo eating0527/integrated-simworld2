@@ -273,6 +273,8 @@ def _child_unresolved(child: ChildState) -> bool:
         child.service in {"starting", "running", "presumed_running", "stopping"}
         or child.file in {"finalizing", "upload_pending"}
         or child.phase in _UNRESOLVED_PHASES
+        or child.upload_state == "running"
+        or child.upload_retry_state in {"waiting", "running"}
     )
 
 
@@ -283,7 +285,12 @@ def _aggregate_state(state: CaptureState) -> OverallState:
         child.service == "stopped" and child.file in {"ready", "uploaded"}
         for child in children
     ]
-    pending = any(child.file in {"finalizing", "upload_pending"} for child in children)
+    pending = any(
+        child.file in {"finalizing", "upload_pending"}
+        or child.upload_state == "running"
+        or child.upload_retry_state in {"waiting", "running"}
+        for child in children
+    )
     uncertain = any(child.service == "presumed_running" for child in children)
     fault = any(
         child.service == "failed"
@@ -469,19 +476,24 @@ class CaptureCoordinator:
             return {"state": "ready", "message": "Raspberry Pi reachable"}
         return {"state": "unknown", "error": "Raspberry Pi health result is unknown"}
 
-    def _active_uav(self) -> CaptureState | None:
+    def _active_bound(self) -> CaptureState | None:
+        """Return the newest Bound Mission that still owns either child."""
+
         for state in reversed(self.store.list()):
-            if state.target not in {"uav", "bind"}:
+            if not state.bind or state.target != "bind":
                 continue
-            if _child_unresolved(state.uav):
+            if _child_unresolved(state.uav) or _child_unresolved(state.usrp):
                 return state
         return None
 
-    def _active_usrp(self) -> CaptureState | None:
+    def _active_independent(self, target: Literal["uav", "usrp"]) -> CaptureState | None:
+        """Return the newest unresolved Independent child for ``target``."""
+
         for state in reversed(self.store.list()):
-            if state.target not in {"usrp", "bind"}:
+            if state.bind or state.target != target:
                 continue
-            if _child_unresolved(state.usrp):
+            child = state.uav if target == "uav" else state.usrp
+            if _child_unresolved(child):
                 return state
         return None
 
@@ -1028,8 +1040,19 @@ class CaptureCoordinator:
         selected_usrp_mode: UsrpMode = "test",
     ) -> CaptureState:
         with self._lock:
-            if self._active_uav() is not None:
-                raise CaptureConflictError("UAV capture is already running")
+            if bind:
+                if self._active_bound() is not None:
+                    raise CaptureConflictError("Bound capture is already running")
+                if (
+                    self._active_independent("uav") is not None
+                    or self._active_independent("usrp") is not None
+                ):
+                    raise CaptureConflictError("an Independent capture is still unresolved")
+            else:
+                if self._active_independent("uav") is not None:
+                    raise CaptureConflictError("UAV capture is already running")
+                if self._active_bound() is not None:
+                    raise CaptureConflictError("Bound capture is still unresolved")
             self.preflight_uav()
             state = self.store.create(
                 bind=bind,
@@ -1049,8 +1072,19 @@ class CaptureCoordinator:
         map_type: str = "iss",
     ) -> CaptureState:
         with self._lock:
-            if self._active_usrp() is not None:
-                raise CaptureConflictError("USRP capture is already running")
+            if bind:
+                if self._active_bound() is not None:
+                    raise CaptureConflictError("Bound capture is already running")
+                if (
+                    self._active_independent("uav") is not None
+                    or self._active_independent("usrp") is not None
+                ):
+                    raise CaptureConflictError("an Independent capture is still unresolved")
+            else:
+                if self._active_independent("usrp") is not None:
+                    raise CaptureConflictError("USRP capture is already running")
+                if self._active_bound() is not None:
+                    raise CaptureConflictError("Bound capture is still unresolved")
             self.preflight_usrp(mode)
             state = self.store.create(
                 bind=bind,
@@ -1075,7 +1109,11 @@ class CaptureCoordinator:
         map_type: str = "iss",
     ) -> CaptureState:
         with self._lock:
-            if self._active_uav() is not None or self._active_usrp() is not None:
+            if (
+                self._active_bound() is not None
+                or self._active_independent("uav") is not None
+                or self._active_independent("usrp") is not None
+            ):
                 raise CaptureConflictError("a capture job is already running")
             self._preflight_bind(mode)
             state = self.store.create(
