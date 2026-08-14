@@ -83,11 +83,9 @@ CAPTURE_PHASES = frozenset({
 CaptureTarget = Literal["uav", "usrp", "bind"]
 UsrpMode = Literal["test", "usrp"]
 
-# A recorder process is only considered healthy while a valid GPS row keeps
-# arriving.  The five-minute resume window is deliberately longer than the
-# freshness window so a short AP3/forwarding outage can be reconciled without
-# creating a second mission.
-GPS_FRESHNESS_THRESHOLD_SECONDS = 10.0
+# GPS row freshness is telemetry only. Recorder health comes from AP3
+# connectivity and local process ownership; a recorder may legitimately have
+# no rows while the UAV is disconnected or not producing a fix.
 AP3_RESUME_WINDOW_SECONDS = 300.0
 # The first automatic upload is immediate.  Only failures after that first
 # attempt consume this finite delayed retry budget.
@@ -412,7 +410,6 @@ class CaptureCoordinator:
         popen_factory=subprocess.Popen,
         usrp_backend=None,
         health_monitor=None,
-        gps_freshness_seconds: float = GPS_FRESHNESS_THRESHOLD_SECONDS,
         resume_window_seconds: float = AP3_RESUME_WINDOW_SECONDS,
         clock: Callable[[], datetime] | None = None,
     ):
@@ -431,7 +428,6 @@ class CaptureCoordinator:
         self._upload_retry_timers: dict[str, threading.Timer] = {}
         self._upload_executor = ThreadPoolExecutor(max_workers=2)
         self._health_mode: UsrpMode = "test"
-        self.gps_freshness_seconds = max(0.0, float(gps_freshness_seconds))
         self.resume_window_seconds = max(0.0, float(resume_window_seconds))
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         if health_monitor is not None:
@@ -754,20 +750,19 @@ class CaptureCoordinator:
             return self.store.save(state)
 
     def _mark_uav_freshness(self, state: CaptureState, health: Any | None = None) -> CaptureState:
-        """Reconcile a live recorder against AP3 health and GPS freshness."""
+        """Reconcile a live recorder against AP3 health.
+
+        A missing or old GPS row is valid during a healthy recording (for
+        example, while no UAV is connected), so row age must not move a child
+        into ``reconciling``.  AP3 health remains an independent safety signal
+        and still drives the existing recovery window.
+        """
 
         child = state.uav
         if child.service not in {"starting", "running", "presumed_running"}:
             return state
         now = self._clock_now()
         latest = self._refresh_uav_sample_metadata(state)
-        age: float | None = None
-        if latest is not None:
-            age = max(0.0, (now - latest).total_seconds())
-        elif state.started_at:
-            started = _parse_timestamp(state.started_at)
-            if started is not None:
-                age = max(0.0, (now - started).total_seconds())
 
         health_state = getattr(health, "state", None)
         health_stale = bool(getattr(health, "stale", False))
@@ -775,8 +770,7 @@ class CaptureCoordinator:
             health_state = health.get("state")
             health_stale = bool(health.get("stale", False))
         health_bad = bool(health is not None and (health_state != "ready" or health_stale))
-        stale = health_bad or (age is not None and age > self.gps_freshness_seconds)
-        if not stale:
+        if not health_bad:
             return state
 
         if child.disconnected_at is None:
@@ -793,7 +787,7 @@ class CaptureCoordinator:
         child.service = "presumed_running"
         child.file = "recording"
         child.phase = "reconciling"
-        child.error = "GPS sample is stale" if not health_bad else "AP3 connection is offline"
+        child.error = "AP3 connection is offline"
         return state
 
     def _terminate_uav_process(self, mission_id: str) -> None:
@@ -1467,8 +1461,8 @@ class CaptureCoordinator:
                     self.store.save(uav_state)
                 else:
                     # A live subprocess alone is not proof of a healthy AP3
-                    # capture.  Require a recent valid GPS row and preserve a
-                    # recoverable reconciling state during the resume window.
+                    # capture.  AP3 health remains an independent signal;
+                    # missing GPS rows are valid while that health is ready.
                     uav_health = health.get("ap3")
                     refreshed = self._mark_uav_freshness(uav_state, uav_health)
                     latest_sample = _parse_timestamp(refreshed.uav.last_sample_at)
@@ -1569,15 +1563,16 @@ class CaptureCoordinator:
                 "presumed_running",
                 "stopping",
             }
-            # Device Health is a current projection. Only an idle, never-started
-            # child may borrow its connection/error for legacy dashboard fields;
-            # terminal mission child results remain immutable historical truth.
-            if not uav_active and state.uav.service == "idle" and state.started_at is None:
+            # Device Health is a current projection. An idle child that was
+            # never selected by this mission may borrow its connection/error
+            # for legacy dashboard fields; terminal mission child results
+            # remain immutable historical truth.
+            if not uav_active and state.uav.service == "idle" and not state.uav.mission_id:
                 result = health.get("ap3")
                 if result is not None:
                     state.uav.connection = result.state
                     state.uav.error = result.error
-            if not usrp_active and state.usrp.service == "idle" and state.started_at is None:
+            if not usrp_active and state.usrp.service == "idle" and not state.usrp.mission_id:
                 result = health.get("raspi")
                 if result is not None:
                     state.selected_usrp_mode = mode

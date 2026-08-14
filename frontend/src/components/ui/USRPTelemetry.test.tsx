@@ -344,6 +344,20 @@ describe('USRPTelemetry capture controls', () => {
     expect(await screen.findByText(/^DEGRADED · NOISE OFFLINE/)).toBeInTheDocument();
   });
 
+  it('keeps Noise mode selection enabled while GPS is recording', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'gps_active',
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+    })));
+
+    await openTelemetry();
+
+    expect(await screen.findByRole('button', { name: 'Test mode' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'USRP mode' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
+  });
+
   it('shows GPS offline while Noise keeps recording after freshness loss', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'gps_stale',

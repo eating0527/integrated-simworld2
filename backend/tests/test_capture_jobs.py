@@ -587,7 +587,6 @@ class Ap3FreshnessTests(unittest.TestCase):
             popen_factory=Mock(return_value=self.process),
             health_monitor=self.health,
             clock=lambda: self.now[0],
-            gps_freshness_seconds=10,
             resume_window_seconds=300,
         )
 
@@ -674,24 +673,39 @@ class Ap3FreshnessTests(unittest.TestCase):
         saved = self.coordinator.store.load(state.mission_id)
         self.assertEqual(saved.uav.last_sample_at, "2026-08-12T00:00:01+00:00")
 
-    def test_live_recorder_without_fresh_sample_enters_reconciling(self):
+    def test_healthy_recorder_without_gps_rows_remains_running(self):
         state = self.coordinator.start_uav()
         self.now[0] += timedelta(seconds=11)
 
         dashboard = self.coordinator.status("test")
 
+        self.assertEqual(dashboard.mission_id, state.mission_id)
+        self.assertEqual(dashboard.uav.connection, "ready")
+        self.assertEqual(dashboard.uav.service, "running")
+        self.assertEqual(dashboard.uav.phase, "recording")
+        self.assertEqual(dashboard.uav.file, "recording")
+        self.assertIsNone(dashboard.uav.disconnected_at)
+        self.assertIsNone(dashboard.uav.resume_deadline_at)
+        self.assertEqual(dashboard.usrp.connection, "ready")
+        self.assertEqual(dashboard.usrp.service, "idle")
+        self.assertEqual(dashboard.usrp.phase, "idle")
+
+    def test_ap3_health_loss_still_reconciles_without_gps_rows(self):
+        from app.device_health import HealthResult
+
+        state = self.coordinator.start_uav()
+        self.health.poll.return_value = {
+            "ap3": HealthResult("ap3", "offline", 0.0, "USB disconnected"),
+            "raspi": HealthResult("raspi", "ready", 0.0, ""),
+        }
+
+        dashboard = self.coordinator.status("test")
+
+        self.assertEqual(dashboard.mission_id, state.mission_id)
         self.assertEqual(dashboard.uav.connection, "offline")
         self.assertEqual(dashboard.uav.service, "presumed_running")
         self.assertEqual(dashboard.uav.phase, "reconciling")
-        self.assertEqual(dashboard.uav.file, "recording")
-        self.assertEqual(dashboard.overall_state, "degraded")
-        self.assertIsNotNone(dashboard.uav.disconnected_at)
-        self.assertIsNotNone(dashboard.uav.resume_deadline_at)
-        self.assertEqual(
-            dashboard.uav.resume_deadline_at,
-            "2026-08-12T00:05:00+00:00",
-        )
-        self.assertEqual(dashboard.usrp.service, "idle")
+        self.assertEqual(dashboard.uav.error, "AP3 connection is offline")
 
     def test_bound_ap3_stale_keeps_usrp_child_unchanged(self):
         from app.capture_jobs import CaptureCoordinator, CaptureStore
@@ -705,7 +719,6 @@ class Ap3FreshnessTests(unittest.TestCase):
             usrp_backend=backend,
             health_monitor=self.health,
             clock=lambda: self.now[0],
-            gps_freshness_seconds=10,
             resume_window_seconds=300,
         )
         state = store.create(
@@ -756,9 +769,15 @@ class Ap3FreshnessTests(unittest.TestCase):
         self.assertEqual(dashboard.usrp.mission_id, state.mission_id)
         self.assertEqual(dashboard.overall_state, "degraded")
 
-    def test_fresh_sample_does_not_resume_reconciling_child(self):
+    def test_fresh_sample_does_not_resume_health_reconciling_independent_child(self):
         state = self.coordinator.start_uav()
+        from app.device_health import HealthResult
+
         self.now[0] += timedelta(seconds=11)
+        self.health.poll.return_value = {
+            "ap3": HealthResult("ap3", "offline", 0.0, "USB disconnected"),
+            "raspi": HealthResult("raspi", "ready", 0.0, ""),
+        }
         degraded = self.coordinator.status("test")
         self.assertEqual(degraded.uav.phase, "reconciling")
         deadline = degraded.uav.resume_deadline_at
@@ -800,7 +819,7 @@ class Ap3FreshnessTests(unittest.TestCase):
         self.assertEqual(dashboard.uav.file, "failed")
         self.assertEqual(dashboard.uav.phase, "failed")
 
-    def test_resume_deadline_is_persisted_without_expiry_transition(self):
+    def test_stale_gps_rows_do_not_create_resume_deadline(self):
         state = self.coordinator.start_uav()
         gps_path = Path(state.uav.path)
         gps_path.write_text(
@@ -810,19 +829,18 @@ class Ap3FreshnessTests(unittest.TestCase):
         )
         self.coordinator.record_gps_sample(state.mission_id, "2026-08-12T00:00:00Z")
         self.now[0] += timedelta(seconds=11)
-        degraded = self.coordinator.status("test")
-        self.assertEqual(
-            degraded.uav.resume_deadline_at,
-            "2026-08-12T00:05:00+00:00",
-        )
+        healthy = self.coordinator.status("test")
+        self.assertEqual(healthy.uav.service, "running")
+        self.assertEqual(healthy.uav.phase, "recording")
+        self.assertIsNone(healthy.uav.resume_deadline_at)
         self.now[0] += timedelta(seconds=301)
 
-        expired = self.coordinator.status("test")
+        still_healthy = self.coordinator.status("test")
 
-        self.assertEqual(expired.uav.service, "presumed_running")
-        self.assertEqual(expired.uav.phase, "reconciling")
-        self.assertEqual(expired.uav.file, "recording")
-        self.assertEqual(expired.uav.resume_deadline_at, "2026-08-12T00:05:00+00:00")
+        self.assertEqual(still_healthy.uav.service, "running")
+        self.assertEqual(still_healthy.uav.phase, "recording")
+        self.assertEqual(still_healthy.uav.file, "recording")
+        self.assertIsNone(still_healthy.uav.resume_deadline_at)
 
 
 class Ap3CaptureResumeTests(unittest.TestCase):

@@ -749,6 +749,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const usrpKnown = usrp.connection !== 'unknown' && usrp.service !== 'unknown'
     && usrp.file !== 'unknown' && usrp.phase !== 'unknown';
   const controlsLocked = busy || isUnresolved(uav) || isUnresolved(usrp);
+  const noiseModeLocked = busy || isUnresolved(usrp) || !raspiReady;
   const bothReady = uavKnown && usrpKnown && ap3Ready && raspiReady;
   const canStartUav = uavKnown && !bind && !busy && !isUnresolved(uav) && ap3Ready;
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
@@ -894,11 +895,11 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
                   type="button"
                   aria-label={value === 'test' ? 'Test mode' : 'USRP mode'}
                   aria-pressed={mode === value}
-                  disabled={controlsLocked || !usrpKnown || !raspiReady}
+                  disabled={noiseModeLocked || !usrpKnown}
                   style={{
                     ...S.button,
                     ...(mode === value ? S.active : null),
-                    ...disabledStyle(controlsLocked || !usrpKnown || !raspiReady),
+                    ...disabledStyle(noiseModeLocked || !usrpKnown),
                   }}
                   onClick={() => setMode(value)}
                 >
