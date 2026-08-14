@@ -1,5 +1,47 @@
 # ISS_UNET Noise/GPS Context
 
+## Mission Import Language
+
+**Mission Bundle**:
+An imported mission record uniquely identified by `mission_id`, containing the available GPS, Noise, and capture metadata artifacts. A trajectory event is only its GPS visualization when GPS is available.
+_Avoid_: Mission import, trajectory event
+
+**Invalid Artifact**:
+A present GPS or Noise file that fails header validation and therefore is not an importable artifact. It remains distinct from a missing artifact and never replaces a verified artifact of the same Mission Bundle.
+_Avoid_: Missing file, absent data
+
+**Healthy Artifact**:
+A GPS or Noise artifact that is present and has passed header validation. Mission selection shows `[GPS]` and `[NOISE]` independently for healthy artifacts, or `[N/A]` when neither exists; measurement rows are filtered by Simulation or ISS-UNet.
+_Avoid_: Complete mission, import status
+
+**Artifact Header Contract**:
+A healthy GPS artifact has exactly `time_stamp,lat,lon,alt,alt_mode` as its header. A healthy Noise artifact includes `time_stamp,noise_floor_db` and may contain extra columns.
+_Avoid_: Row validation, sample validation
+
+**Apply Mission**:
+The explicit action that replaces each corresponding Simulation Panel CSV with a healthy artifact from the selected Mission Bundle. An artifact absent from that bundle leaves the panel's current CSV unchanged; manual upload and clearing remain available.
+_Avoid_: Select trajectory, replace all files
+
+**Simulation Mode**:
+The user-selected ISS-UNet input mode. Applying a Mission Bundle updates CSV artifacts only and never changes this mode.
+_Avoid_: Mission mode, import mode
+
+**Applied Artifact Snapshot**:
+The CSV content currently held by the Simulation Panel after manual upload or Apply Mission. Later Mission Bundle imports do not alter this snapshot; applying the Mission again is required.
+_Avoid_: Live mission link, automatic refresh
+
+**Metadata-only Mission Bundle**:
+A Mission Bundle with capture metadata but no healthy GPS or Noise artifact. It remains visible in the import panel with `[N/A]`; a folder with no recognized artifacts is not a Mission Bundle.
+_Avoid_: Empty mission, hidden mission
+
+**Historical Mission List**:
+The single panel that lists imported Mission Bundles and their healthy artifact labels. It supersedes the historical trajectory list without creating a separate mission-import panel.
+_Avoid_: Mission import panel, duplicate panel
+
+**Mission Selection**:
+Selecting a Mission Bundle displays its GPS trajectory when available. It does not modify Simulation Panel input; Apply Mission is the separate, explicit action that does so.
+_Avoid_: Automatic apply, live selection
+
 這個 context 定義 ISS_UNET「Noise with GPS」流程中，雜訊測量與 GPS 路徑位置的共同語言。
 
 ## Language
