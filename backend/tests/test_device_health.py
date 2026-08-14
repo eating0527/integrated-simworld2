@@ -295,8 +295,11 @@ class DeviceHealthTests(unittest.TestCase):
 
         payload = coordinator.status_payload("usrp")
 
-        self.assertEqual(payload["overall_state"], "completed")
-        self.assertEqual(payload["uav"]["connection"], "ready")
+        # Terminal mission history is retained on disk but hidden from the
+        # clean control-panel projection; current health remains visible.
+        self.assertEqual(payload["overall_state"], "ready")
+        self.assertEqual(payload["uav"]["service"], "idle")
+        self.assertEqual(payload["uav"]["connection"], "offline")
         self.assertEqual(payload["device_health"]["ap3"]["state"], "offline")
         self.assertEqual(store.load("history").uav.connection, "ready")
 

@@ -577,11 +577,142 @@ class CaptureCoordinator:
 
     def status_payload(self, mode: UsrpMode = "test") -> dict:
         with self._lock:
-            state = self.status(mode)
+            self.status(mode)
+            projection, active = self._status_projection_locked(mode)
+            control_mode = "bound" if active is not None and active.bind else "independent"
             return {
-                **state.model_dump(),
+                **projection.model_dump(),
                 "device_health": self.health_monitor.as_dict(),
+                "control_mode": control_mode,
+                "active": active.model_dump() if active is not None else None,
+                "history": self._mission_history_locked(),
             }
+
+    @staticmethod
+    def _state_order(state: CaptureState) -> tuple[datetime, str, str]:
+        """Return a stable chronological key for persisted mission states."""
+
+        value = _parse_timestamp(state.started_at or state.created_at)
+        if value is None:
+            value = datetime.min.replace(tzinfo=timezone.utc)
+        return value, state.created_at or "", state.mission_id
+
+    def _latest_child_state(
+        self,
+        states: list[CaptureState],
+        target: Literal["uav", "usrp"],
+        *,
+        unresolved_only: bool = False,
+    ) -> CaptureState | None:
+        candidates: list[CaptureState] = []
+        for item in states:
+            if item.bind or item.target != target:
+                continue
+            child = item.uav if target == "uav" else item.usrp
+            if unresolved_only and not _child_unresolved(child):
+                continue
+            candidates.append(item)
+        if not candidates:
+            return None
+        return max(candidates, key=self._state_order)
+
+    def _active_projection_locked(self, states: list[CaptureState]) -> CaptureState | None:
+        """Build the current projection without importing terminal history.
+
+        Bound missions remain one shared state. Independent GPS and Noise
+        states are merged only when both are unresolved; terminal siblings are
+        deliberately represented by idle children in the clean projection.
+        """
+
+        bound = [
+            item
+            for item in states
+            if item.bind
+            and item.target == "bind"
+            and (_child_unresolved(item.uav) or _child_unresolved(item.usrp))
+        ]
+        if bound:
+            return max(bound, key=self._state_order)
+
+        gps = self._latest_child_state(states, "uav", unresolved_only=True)
+        noise = self._latest_child_state(states, "usrp", unresolved_only=True)
+        if gps is None and noise is None:
+            return None
+        if gps is not None and noise is None:
+            return gps
+        if noise is not None and gps is None:
+            return noise
+
+        assert gps is not None and noise is not None
+        started = [item.started_at for item in (gps, noise) if item.started_at]
+        created = min(gps.created_at, noise.created_at)
+        merged = CaptureState(
+            mission_id="",
+            target="bind",
+            bind=False,
+            selected_usrp_mode=noise.selected_usrp_mode,
+            created_at=created,
+            started_at=min(started) if started else None,
+            uav=gps.uav.model_copy(deep=True),
+            usrp=noise.usrp.model_copy(deep=True),
+        )
+        return merged
+
+    def _clean_projection(self, mode: UsrpMode, health: dict[str, Any]) -> CaptureState:
+        """Return idle controls while retaining current device health."""
+
+        def idle_child(device: str) -> ChildState:
+            snapshot = health.get(device) or {}
+            value = snapshot.get("state")
+            connection: ConnectionState = value if value in {"ready", "offline", "unknown"} else "unknown"
+            # Device Health errors remain in the dedicated health cards; do
+            # not copy them into an idle child and make them look like a
+            # historical mission error in the clean panel.
+            return ChildState(connection=connection)
+
+        return CaptureState(
+            mission_id="",
+            target="bind",
+            bind=False,
+            selected_usrp_mode=mode,
+            overall_state="ready",
+            created_at="",
+            uav=idle_child("ap3"),
+            usrp=idle_child("raspi"),
+        )
+
+    def _status_projection_locked(
+        self,
+        mode: UsrpMode,
+    ) -> tuple[CaptureState, CaptureState | None]:
+        states = self.store.list()
+        active = self._active_projection_locked(states)
+        if active is not None:
+            return active, active
+        return self._clean_projection(mode, self.health_monitor.as_dict()), None
+
+    def _mission_history_locked(self) -> dict[str, dict[str, str] | None]:
+        """Return the latest started mission involving each service."""
+
+        history: dict[str, dict[str, str] | None] = {"gps": None, "noise": None}
+        states = self.store.list()
+        for key, target in (("gps", "uav"), ("noise", "usrp")):
+            candidates = [
+                item
+                for item in states
+                if item.target in {target, "bind"}
+                and (item.uav if target == "uav" else item.usrp).mission_id
+                and (item.started_at or item.created_at)
+            ]
+            if not candidates:
+                continue
+            item = max(candidates, key=self._state_order)
+            child = item.uav if target == "uav" else item.usrp
+            history[key] = {
+                "started_at": item.started_at or item.created_at,
+                "mission_id": child.mission_id or item.mission_id,
+            }
+        return history
 
     def _launch_uav(self, state: CaptureState) -> CaptureState:
         csv_path = self.store.root / state.mission_id / "gps.csv"
@@ -1443,14 +1574,29 @@ class CaptureCoordinator:
             states = self.store.list()
             self._health_mode = mode
             health = self.health_monitor.poll(mode=mode)
-            uav_state = next(
-                (item for item in reversed(states) if item.target in {"uav", "bind"}),
-                None,
-            )
-            usrp_state = next(
-                (item for item in reversed(states) if item.target in {"usrp", "bind"}),
-                None,
-            )
+            def latest_for(target: Literal["uav", "usrp"]) -> CaptureState | None:
+                candidates = [
+                    item
+                    for item in states
+                    if item.target in {target, "bind"}
+                ]
+                if not candidates:
+                    return None
+                unresolved = [
+                    item
+                    for item in candidates
+                    if _child_unresolved(item.uav if target == "uav" else item.usrp)
+                ]
+                return max(
+                    unresolved or candidates,
+                    key=self._state_order,
+                )
+
+            # Prefer persisted work that still owns a service over a newer
+            # terminal record.  This is what lets a reload restore an older
+            # unresolved mission without rehydrating unrelated history.
+            uav_state = latest_for("uav")
+            usrp_state = latest_for("usrp")
             # A terminal AP3 recorder exit is local evidence about only the
             # UAV child.  Do not let an unrelated USRP status probe downgrade
             # the sibling in the same dashboard snapshot.

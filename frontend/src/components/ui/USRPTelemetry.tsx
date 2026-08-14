@@ -64,6 +64,17 @@ interface CaptureStatus {
   uav: ChildState;
   usrp: ChildState;
   device_health?: Record<string, DeviceHealth>;
+  control_mode?: 'bound' | 'independent';
+  active?: Partial<CaptureStatus> | null;
+  history?: {
+    gps?: MissionSummary | null;
+    noise?: MissionSummary | null;
+  };
+}
+
+interface MissionSummary {
+  started_at: string;
+  mission_id: string;
 }
 
 type DeviceErrorMap = Record<string, string>;
@@ -442,6 +453,40 @@ function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth 
   };
 }
 
+export function formatTaipeiTime(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '—';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(parsed).reduce<Record<string, string>>((result, part) => {
+    result[part.type] = part.value;
+    return result;
+  }, {});
+  if (!parts.month || !parts.day || !parts.hour || !parts.minute || !parts.second) return '—';
+  return `${parts.month}/${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function normalizeSummary(value: unknown): MissionSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const summary = value as Record<string, unknown>;
+  const startedAt = typeof summary.started_at === 'string' ? summary.started_at : '';
+  const missionId = typeof summary.mission_id === 'string' ? summary.mission_id : '';
+  if (!startedAt || !missionId) return null;
+  return { started_at: startedAt, mission_id: missionId };
+}
+
+function missionSummaryLabel(summary: MissionSummary | null | undefined): string {
+  if (!summary?.mission_id || !summary.started_at) return '—';
+  return `${formatTaipeiTime(summary.started_at)} #${summary.mission_id.slice(-5)}`;
+}
+
 function missionIssue(status: CaptureStatus, failuresOnly = false): string | null {
   const children = [['GPS', status.uav], ['NOISE', status.usrp]] as const;
   const resumeTimeout = children
@@ -492,24 +537,73 @@ function missionLabel(status: CaptureStatus | null): string {
 }
 
 function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
-  return {
-    mission_id: String(value.mission_id ?? ''),
-    target: value.target === 'usrp' || value.target === 'bind' ? value.target : 'uav',
-    bind: Boolean(value.bind),
-    selected_usrp_mode: value.selected_usrp_mode === 'usrp' ? 'usrp' : 'test',
-    overall_state: normalizeOverall(value.overall_state),
-    created_at: String(value.created_at ?? ''),
-    started_at: value.started_at ?? null,
-    finished_at: value.finished_at ?? null,
-    stop_requested_at: value.stop_requested_at ?? null,
-    uav: normalizeChild(value.uav),
-    usrp: normalizeChild(value.usrp),
-    device_health: value.device_health && typeof value.device_health === 'object'
+  const activeValue = value.active && typeof value.active === 'object'
+    ? value.active
+    : null;
+  const hasProjection = 'active' in value || 'control_mode' in value;
+  const cleanChild = (child: unknown) => {
+    const raw = child && typeof child === 'object' ? child as Record<string, unknown> : {};
+    return {
+      ...raw,
+      mission_id: '',
+      service: 'idle',
+      file: 'none',
+      phase: 'idle',
+      error: '',
+      path: '',
+      pid: null,
+      upload_state: 'idle',
+      upload_mode: 'none',
+      upload_retry_mode: 'none',
+      upload_retry_state: 'idle',
+    };
+  };
+  // An active projection is authoritative.  This also lets a frontend
+  // consume a status response that carries terminal compatibility fields at
+  // the top level without rehydrating those fields into the panel.
+  const source = activeValue
+    ? { ...value, ...activeValue, device_health: value.device_health, history: value.history }
+    : hasProjection
       ? {
-        ap3: normalizeHealth(value.device_health.ap3, 'ap3'),
-        raspi: normalizeHealth(value.device_health.raspi, 'raspi'),
+        ...value,
+        mission_id: '',
+        target: 'bind' as const,
+        bind: false,
+        overall_state: 'ready' as const,
+        started_at: null,
+        finished_at: null,
+        stop_requested_at: null,
+        uav: cleanChild(value.uav),
+        usrp: cleanChild(value.usrp),
+      }
+    : value;
+  const history = source.history && typeof source.history === 'object'
+    ? {
+      gps: normalizeSummary(source.history.gps),
+      noise: normalizeSummary(source.history.noise),
+    }
+    : undefined;
+  return {
+    mission_id: String(source.mission_id ?? ''),
+    target: source.target === 'usrp' || source.target === 'bind' ? source.target : 'uav',
+    bind: Boolean(source.bind),
+    selected_usrp_mode: source.selected_usrp_mode === 'usrp' ? 'usrp' : 'test',
+    overall_state: normalizeOverall(source.overall_state),
+    created_at: String(source.created_at ?? ''),
+    started_at: source.started_at ?? null,
+    finished_at: source.finished_at ?? null,
+    stop_requested_at: source.stop_requested_at ?? null,
+    uav: normalizeChild(source.uav),
+    usrp: normalizeChild(source.usrp),
+    device_health: source.device_health && typeof source.device_health === 'object'
+      ? {
+        ap3: normalizeHealth(source.device_health.ap3, 'ap3'),
+        raspi: normalizeHealth(source.device_health.raspi, 'raspi'),
       }
       : undefined,
+    control_mode: value.control_mode === 'bound' ? 'bound' : 'independent',
+    active: value.active ?? null,
+    history,
   };
 }
 
@@ -599,7 +693,15 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     const next = normalizeStatus(data);
     setStatus(next);
     if (next.device_health) setHealth(next.device_health);
-    if (next.bind && (isUnresolved(next.uav) || isUnresolved(next.usrp))) {
+    if ('active' in data || 'control_mode' in data) {
+      if (next.active) {
+        setBind(next.control_mode === 'bound' || next.bind);
+      } else {
+        // The backend deliberately returns Independent for an idle
+        // projection; terminal history must never rehydrate Bound mode.
+        setBind(false);
+      }
+    } else if (next.bind && (isUnresolved(next.uav) || isUnresolved(next.usrp))) {
       setBind(true);
     }
     if (isActive(next.usrp.service)) {
@@ -754,6 +856,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const usrpMissionId = usrp.mission_id || missionId;
   const ap3Health = health.ap3;
   const raspiHealth = health.raspi;
+  const gpsHistory = status?.history?.gps;
+  const noiseHistory = status?.history?.noise;
   const ap3Ready = ap3Health?.state === 'ready' && !ap3Health.stale;
   const raspiReady = raspiHealth?.state === 'ready' && !raspiHealth.stale;
   const anyActive = isActive(uav.service) || isActive(usrp.service);
@@ -817,6 +921,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
 
   const childSection = (
     title: string,
+    summary: MissionSummary | null | undefined,
     child: ChildState,
     actions: React.ReactNode,
     steps: string[],
@@ -836,6 +941,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         <span style={S.value}>{SERVICE_LABELS[child.service]}</span>
         <span style={S.key}>File</span>
         <span style={S.value}>{FILE_LABELS[child.file]}</span>
+        <span style={S.key}>Last mission</span>
+        <span style={S.value} aria-label={`${title} last mission`}>{missionSummaryLabel(summary)}</span>
         {child.last_sample_at ? <>
           <span style={S.key}>Last GPS</span>
           <span style={S.value}>{child.last_sample_at}</span>
@@ -892,7 +999,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
               <div key={device} style={S.healthCard} aria-label={`${label} Device Health`}>
                 <strong>{label}</strong>
                 <div style={S.value}>{CONNECTION_LABELS[state]}</div>
-                {item?.last_checked_at ? <div>Last check: {item.last_checked_at}</div> : null}
+                {item?.last_checked_at ? <div>Last check: {formatTaipeiTime(item.last_checked_at)}</div> : null}
                 {item?.error ? <div style={S.error}>{item.error}</div> : null}
               </div>
             );
@@ -901,6 +1008,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
 
         {childSection(
           '無人機 GPS 採樣',
+          gpsHistory,
           uav,
           <div style={S.actions}>
             <button
@@ -918,6 +1026,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
 
         {childSection(
           'USRP 干擾採樣',
+          noiseHistory,
           usrp,
           <>
             <div style={S.modes} aria-label="USRP capture mode">

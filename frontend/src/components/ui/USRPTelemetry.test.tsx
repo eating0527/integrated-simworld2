@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-import { USRPTelemetry } from './USRPTelemetry';
+import { formatTaipeiTime, USRPTelemetry } from './USRPTelemetry';
 
 type ChildOverrides = {
   connection?: string;
@@ -622,6 +622,107 @@ describe('USRPTelemetry capture controls', () => {
       '/api/capture/uav/retry-stop?mission_id=retry_child',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('renders a clean idle projection while retaining per-service mission history', async () => {
+    const status = captureStatus({
+      missionId: 'terminal_old_12345',
+      overall: 'completed',
+      uav: { service: 'stopped', file: 'ready', phase: 'completed', error: 'old terminal error' },
+      usrp: { service: 'failed', file: 'failed', phase: 'failed' },
+    }) as ReturnType<typeof captureStatus> & {
+      control_mode: 'independent';
+      active: null;
+      history: { gps: { started_at: string; mission_id: string }; noise: null };
+    };
+    status.control_mode = 'independent';
+    status.active = null;
+    status.history = {
+      gps: { started_at: '2026-08-13T16:00:00Z', mission_id: 'terminal_old_12345' },
+      noise: null,
+    };
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+
+    await openTelemetry();
+
+    const gps = await screen.findByText('無人機 GPS 採樣');
+    const gpsSection = gps.closest('section') as HTMLElement;
+    expect(within(gpsSection).getAllByText('Idle').length).toBeGreaterThanOrEqual(2);
+    expect(within(gpsSection).getByText('None')).toBeInTheDocument();
+    expect(within(gpsSection).getByLabelText('無人機 GPS 採樣 last mission'))
+      .toHaveTextContent('08/14 00:00:00 #12345');
+    const noise = screen.getByText('USRP 干擾採樣').closest('section') as HTMLElement;
+    expect(within(noise).getByLabelText('USRP 干擾採樣 last mission')).toHaveTextContent('—');
+    expect(screen.queryByText('old terminal error')).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Bind services' }))
+      .toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('restores the active projection instead of terminal compatibility fields', async () => {
+    const terminal = captureStatus({
+      missionId: 'old_terminal',
+      overall: 'completed',
+      uav: { service: 'stopped', file: 'ready', phase: 'completed' },
+    });
+    const active = captureStatus({
+      missionId: 'bound_active',
+      bind: true,
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    const payload = {
+      ...terminal,
+      control_mode: 'bound' as const,
+      active,
+      history: {
+        gps: { started_at: '2026-08-13T17:00:00Z', mission_id: 'bound_active' },
+        noise: { started_at: '2026-08-13T17:00:00Z', mission_id: 'bound_active' },
+      },
+    };
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(payload));
+
+    await openTelemetry();
+
+    expect(await screen.findByRole('switch', { name: 'Bind services' }))
+      .toHaveAttribute('aria-checked', 'true');
+    expect(screen.getAllByText('Recording').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/08\/14 01:00:00 #ctive/).length).toBe(2);
+  });
+
+  it('restores concurrent independent GPS and Noise captures after reload', async () => {
+    const active = captureStatus({
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    active.mission_id = '';
+    active.uav.mission_id = 'gps_active';
+    active.usrp.mission_id = 'noise_active';
+    const payload = {
+      ...captureStatus(),
+      control_mode: 'independent' as const,
+      active,
+      history: {
+        gps: { started_at: '2026-08-13T17:00:00Z', mission_id: 'gps_active' },
+        noise: { started_at: '2026-08-13T17:01:00Z', mission_id: 'noise_active' },
+      },
+    };
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(payload));
+
+    await openTelemetry();
+
+    expect(await screen.findByRole('switch', { name: 'Bind services' }))
+      .toHaveAttribute('aria-checked', 'false');
+    expect(screen.getAllByText('Recording').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole('button', { name: 'Stop UAV' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Stop USRP' })).toBeEnabled();
+  });
+
+  it('formats mission and health timestamps in Asia/Taipei', () => {
+    expect(formatTaipeiTime('2026-08-13T16:00:00Z')).toBe('08/14 00:00:00');
+    expect(formatTaipeiTime('bad timestamp')).toBe('—');
   });
 
   it('disables USRP Retry Stop while Raspberry Pi is offline and enables it after recovery', async () => {

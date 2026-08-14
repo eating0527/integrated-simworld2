@@ -1981,6 +1981,107 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(dashboard.uav.service, "running")
         self.assertEqual(dashboard.usrp.service, "running")
 
+    def test_status_payload_projects_terminal_history_as_clean_idle_panel(self):
+        state = self.coordinator.store.create(
+            bind=False,
+            selected_usrp_mode="test",
+            target="uav",
+            mission_id="gps_terminal_12345",
+        )
+        state.started_at = "2026-08-13T16:00:00+00:00"
+        state.uav.service = "stopped"
+        state.uav.file = "ready"
+        state.uav.phase = "stopped"
+        self.coordinator.store.save(state)
+
+        payload = self.coordinator.status_payload("test")
+
+        self.assertEqual(payload["control_mode"], "independent")
+        self.assertIsNone(payload["active"])
+        self.assertEqual(payload["mission_id"], "")
+        self.assertEqual(payload["uav"]["phase"], "idle")
+        self.assertEqual(payload["uav"]["file"], "none")
+        self.assertEqual(
+            payload["history"]["gps"],
+            {"started_at": "2026-08-13T16:00:00+00:00", "mission_id": "gps_terminal_12345"},
+        )
+        self.assertIsNone(payload["history"]["noise"])
+
+    def test_status_payload_restores_unresolved_independent_noise_projection(self):
+        state = self.coordinator.store.create(
+            bind=False,
+            selected_usrp_mode="usrp",
+            target="usrp",
+            mission_id="noise_active_12345",
+        )
+        state.started_at = "2026-08-13T17:00:00+00:00"
+        state.usrp.service = "running"
+        state.usrp.file = "recording"
+        state.usrp.phase = "recording"
+        self.coordinator.store.save(state)
+        self.backend.get_capture_job.return_value = {
+            "service_state": "running",
+            "mission_state": {
+                "mission_id": state.mission_id,
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+
+        payload = self.coordinator.status_payload("usrp")
+
+        self.assertEqual(payload["control_mode"], "independent")
+        self.assertIsNotNone(payload["active"])
+        self.assertEqual(payload["active"]["mission_id"], state.mission_id)
+        self.assertEqual(payload["usrp"]["service"], "running")
+        self.assertEqual(payload["uav"]["service"], "idle")
+
+    def test_status_payload_merges_unresolved_independent_children(self):
+        gps = self.coordinator.start_uav()
+        noise = self.coordinator.start_usrp("test")
+        self.backend.get_capture_job.return_value = {
+            "service_state": "running",
+            "mission_state": {
+                "mission_id": noise.mission_id,
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+
+        payload = self.coordinator.status_payload("test")
+
+        self.assertEqual(payload["control_mode"], "independent")
+        self.assertIsNotNone(payload["active"])
+        self.assertEqual(payload["uav"]["mission_id"], gps.mission_id)
+        self.assertEqual(payload["usrp"]["mission_id"], noise.mission_id)
+        self.assertEqual(payload["uav"]["service"], "running")
+        self.assertEqual(payload["usrp"]["service"], "running")
+
+    def test_bound_history_is_shared_between_gps_and_noise(self):
+        state = self.coordinator.store.create(
+            bind=True,
+            selected_usrp_mode="test",
+            target="bind",
+            mission_id="bound_shared_12345",
+        )
+        state.started_at = "2026-08-13T18:00:00+00:00"
+        state.uav.service = "stopped"
+        state.uav.file = "ready"
+        state.uav.phase = "stopped"
+        state.usrp.service = "failed"
+        state.usrp.file = "failed"
+        state.usrp.phase = "failed"
+        self.coordinator.store.save(state)
+
+        payload = self.coordinator.status_payload("test")
+
+        expected = {
+            "started_at": "2026-08-13T18:00:00+00:00",
+            "mission_id": "bound_shared_12345",
+        }
+        self.assertEqual(payload["history"]["gps"], expected)
+        self.assertEqual(payload["history"]["noise"], expected)
+
     def test_independent_noise_start_is_allowed_while_gps_is_running(self):
         gps = self.coordinator.start_uav()
 
