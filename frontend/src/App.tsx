@@ -26,7 +26,10 @@ import { UAVControlPanel } from './components/ui/UAVControlPanel';
 import { AircraftTelemetry } from './components/ui/AircraftTelemetry';
 import { USRPTelemetry } from './components/ui/USRPTelemetry';
 import { Workspace } from './components/ui/Workspace';
-import { TrajectoryHistoryPanel, type TrajectoryEvent } from './components/ui/TrajectoryHistoryPanel';
+import {
+  TrajectoryHistoryPanel,
+  type TrajectoryEvent,
+} from './components/ui/TrajectoryHistoryPanel';
 import { useManualControl } from './hooks/useManualControl';
 import { useDeviceStore } from './store/useDeviceStore';
 import type { CFARBeacon, CFARCluster } from './types/cfar';
@@ -395,6 +398,11 @@ export function App() {
   const [heatmapOverlay, setHeatmapOverlay] = useState<HeatmapOverlayConfig | null>(null);
   const [issRouteOverlay, setIssRouteOverlay] = useState<ISSRouteOverlayConfig | null>(null);
   const [selectedTrajectoryEvent, setSelectedTrajectoryEvent] = useState<TrajectoryEvent | null>(null);
+  const [appliedMissionFiles, setAppliedMissionFiles] = useState<{
+    missionId: string;
+    gpsFile?: File;
+    noiseFile?: File;
+  } | null>(null);
   const cfarBeacons = useMemo<CFARBeacon[]>(
     () => cfarClusters.filter((cluster) => cluster.grid.displayable),
     [cfarClusters],
@@ -431,6 +439,17 @@ export function App() {
       })
       .filter(track => track.path.length >= 2);
   }, [activeFrame, selectedTrajectoryEvent]);
+
+  const handleApplyMissionBundle = useCallback((files: {
+    missionId: string;
+    gpsFile?: File;
+    noiseFile?: File;
+  }) => {
+    // Keep File objects as a local snapshot.  A later incoming-bundle scan may
+    // update its manifest, but must not mutate files already applied to the
+    // SimulationPanel.
+    setAppliedMissionFiles(files);
+  }, []);
 
   const aircraftPanel = (
     <AircraftTelemetry
@@ -510,6 +529,7 @@ export function App() {
             sceneId={simulationSceneId}
             generatedScene={simulationUsesGeneratedScene}
             sceneFrame={activeFrame}
+            appliedFiles={appliedMissionFiles}
             onCfarClustersChange={setCfarClusters}
             onHeatmapOverlayChange={setHeatmapOverlay}
             onRouteOverlayChange={setIssRouteOverlay}
@@ -523,6 +543,7 @@ export function App() {
           <TrajectoryHistoryPanel
             selectedEventId={selectedTrajectoryEvent?.id ?? null}
             onSelectEvent={setSelectedTrajectoryEvent}
+            onApplyToSimulation={handleApplyMissionBundle}
           />
           <PhotoViewer photos={photos} onDelete={handleDelete} />
         </>

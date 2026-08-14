@@ -77,6 +77,9 @@ SCENE_TASKS_JSON = UPLOAD_DIR / "scene_tasks.json"
 SCENE_INDEX_JSON = UPLOAD_DIR / "scene_index.json"
 TRAJECTORY_EVENTS_DIR = UPLOAD_DIR / "trajectory_events"
 TRAJECTORY_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+BUNDLE_MANIFEST_FILENAME = "bundle_manifest.json"
+GPS_BUNDLE_HEADER = ("time_stamp", "lat", "lon", "alt", "alt_mode")
+NOISE_BUNDLE_HEADER = ("time_stamp", "noise_floor_db")
 SCENE_DIR = BASE_DIR / "static" / "scenes"
 GENERATED_SCENES_DIR = SCENE_DIR / "generated"
 GENERATED_SCENES_DIR.mkdir(parents=True, exist_ok=True)
@@ -580,6 +583,310 @@ def _trajectory_event_summary(path: Path) -> Optional[Dict[str, Any]]:
         }
     except Exception:
         return None
+
+
+def _bundle_manifest_path(bundle_dir: Path) -> Path:
+    """Return the canonical, persisted manifest path for one mission bundle."""
+
+    return bundle_dir / BUNDLE_MANIFEST_FILENAME
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _csv_header(path: Path) -> list[str] | None:
+    """Read only a CSV header; row values intentionally are not validated here."""
+
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            row = next(csv.reader(handle), None)
+    except (OSError, UnicodeError, csv.Error):
+        return None
+    if row is None:
+        return None
+    return list(row)
+
+
+def _bundle_artifact(bundle_dir: Path, kind: Literal["gps", "noise"], previous: dict[str, Any]) -> dict[str, Any]:
+    filename = f"{kind}.csv"
+    path = bundle_dir / filename
+    required = GPS_BUNDLE_HEADER if kind == "gps" else NOISE_BUNDLE_HEADER
+    try:
+        exists = path.is_file() and path.resolve().parent == bundle_dir.resolve()
+    except OSError:
+        exists = False
+    header = _csv_header(path) if exists else None
+    healthy = bool(
+        header is not None
+        and (
+            tuple(header) == required
+            if kind == "gps"
+            else all(field in header for field in required)
+        )
+    )
+    sha256: str | None = None
+    size = 0
+    mtime: str | None = None
+    if exists:
+        try:
+            sha256 = _sha256_file(path)
+            stat = path.stat()
+            size = stat.st_size
+            mtime = datetime.fromtimestamp(stat.st_mtime).isoformat()
+        except OSError:
+            exists = False
+            header = None
+            healthy = False
+
+    previous_sha256 = previous.get("sha256") if isinstance(previous, dict) else None
+    changed = bool(previous_sha256 and previous_sha256 != sha256)
+    status = "healthy" if healthy else ("invalid_header" if exists else "missing")
+    return {
+        "kind": kind,
+        "filename": filename,
+        "url": None,
+        "exists": exists,
+        "healthy": healthy,
+        "status": status,
+        "header": header,
+        "required_header": list(required),
+        "size": size,
+        "sha256": sha256,
+        "changed": changed,
+        "previous_sha256": previous_sha256,
+        "updated_at": mtime,
+    }
+
+
+def _write_bundle_manifest(bundle_dir: Path, manifest: dict[str, Any]) -> None:
+    manifest_path = _bundle_manifest_path(bundle_dir)
+    temp_path = manifest_path.with_suffix(".json.tmp")
+    temp_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(manifest_path)
+
+
+def _bundle_metadata(bundle_dir: Path) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for name, key in (("bundle.json", "bundle"), ("capture.json", "capture")):
+        value = _read_json_object(bundle_dir / name)
+        if value:
+            metadata[key] = value
+    return metadata
+
+
+def _bundle_has_content(bundle_dir: Path) -> bool:
+    try:
+        return any(path.is_file() for path in bundle_dir.iterdir())
+    except OSError:
+        return False
+
+
+def _mission_bundle(bundle_dir: Path, *, persist: bool = True, include_trajectory: bool = False) -> dict[str, Any] | None:
+    """Build one safe mission-bundle projection and update its manifest."""
+
+    if not bundle_dir.is_dir() or not _bundle_has_content(bundle_dir):
+        return None
+    try:
+        if bundle_dir.resolve().parent != INCOMING_CSV_DIR.resolve():
+            return None
+    except OSError:
+        return None
+    mission_id = bundle_dir.name
+    try:
+        _safe_incoming_bundle_id(mission_id)
+    except ValueError:
+        return None
+
+    manifest_path = _bundle_manifest_path(bundle_dir)
+    old_manifest = _read_json_object(manifest_path)
+    had_manifest = old_manifest.get("version") == 1 and isinstance(old_manifest.get("artifacts"), dict)
+    old_artifacts = old_manifest.get("artifacts") if isinstance(old_manifest.get("artifacts"), dict) else {}
+    gps = _bundle_artifact(bundle_dir, "gps", old_artifacts.get("gps", {}))
+    noise = _bundle_artifact(bundle_dir, "noise", old_artifacts.get("noise", {}))
+    artifact_data = {"gps": gps, "noise": noise}
+    changed = any(item.get("changed") for item in artifact_data.values())
+    import_state = "created" if not had_manifest else ("updated" if changed else "unchanged")
+
+    # Keep the manifest small and deterministic.  ``changed`` is derived for
+    # the response from the previous persisted hash and is not written back as
+    # a permanent true value on every scan.
+    manifest = {
+        "version": 1,
+        "mission_id": mission_id,
+        "updated_at": datetime.now().isoformat(),
+        "gps_sha256": gps["sha256"],
+        "noise_sha256": noise["sha256"],
+        "artifacts": {
+            kind: {
+                key: value
+                for key, value in artifact.items()
+                if key not in {"url", "changed", "previous_sha256"}
+            }
+            for kind, artifact in artifact_data.items()
+        },
+    }
+    previous_manifest = old_manifest
+    if persist and (not manifest_path.exists() or previous_manifest.get("artifacts") != manifest["artifacts"]):
+        try:
+            _write_bundle_manifest(bundle_dir, manifest)
+        except OSError:
+            logger.warning("Unable to persist mission bundle manifest: %s", manifest_path)
+
+    for kind, artifact in artifact_data.items():
+        if artifact["exists"]:
+            artifact["url"] = f"/api/mission-bundles/{urllib.parse.quote(mission_id, safe='')}/artifacts/{kind}"
+
+    metadata = _bundle_metadata(bundle_dir)
+    labels: list[str] = []
+    if gps["healthy"]:
+        labels.append("[GPS]")
+    if noise["healthy"]:
+        labels.append("[NOISE]")
+    if not labels:
+        labels.append("[N/A]")
+    mtimes = [path.stat().st_mtime for path in bundle_dir.iterdir() if path.is_file()]
+    updated_at = datetime.fromtimestamp(max(mtimes)).isoformat() if mtimes else None
+    result: dict[str, Any] = {
+        "mission_id": mission_id,
+        "missionId": mission_id,
+        "updated_at": updated_at,
+        "metadata": metadata,
+        "metadata_only": not gps["healthy"] and not noise["healthy"],
+        "labels": labels,
+        "badges": labels,
+        "gps": gps,
+        "noise": noise,
+        "artifacts": artifact_data,
+        "manifest": manifest,
+        "manifest_filename": BUNDLE_MANIFEST_FILENAME,
+        "manifest_changed": changed,
+        "import_state": import_state,
+    }
+    if include_trajectory and gps["healthy"]:
+        result["trajectory"] = _read_gps_csv_trajectory(bundle_dir / "gps.csv")
+    return result
+
+
+def _scan_mission_bundles(*, include_trajectory: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    bundles: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    try:
+        directories = sorted((path for path in INCOMING_CSV_DIR.iterdir() if path.is_dir()), key=lambda p: p.name)
+    except OSError as exc:
+        return [], [{"path": str(INCOMING_CSV_DIR), "error": str(exc)}]
+    for bundle_dir in directories:
+        try:
+            bundle = _mission_bundle(bundle_dir, include_trajectory=include_trajectory)
+            if bundle is not None:
+                bundles.append(bundle)
+        except Exception as exc:
+            logger.exception("Failed to scan mission bundle: %s", bundle_dir)
+            try:
+                display_path = str(bundle_dir.relative_to(REPO_ROOT))
+            except ValueError:
+                display_path = str(bundle_dir)
+            errors.append({"path": display_path, "error": str(exc)})
+    bundles.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return bundles, errors
+
+
+def _resolve_bundle_artifact(mission_id: str, kind: str) -> Path | None:
+    try:
+        safe_id = _safe_incoming_bundle_id(mission_id)
+    except ValueError:
+        return None
+    kind = kind.removesuffix(".csv")
+    if kind not in {"gps", "noise"}:
+        return None
+    root = INCOMING_CSV_DIR.resolve()
+    bundle_dir = (INCOMING_CSV_DIR / safe_id).resolve()
+    if bundle_dir.parent != root:
+        return None
+    path = (bundle_dir / f"{kind}.csv").resolve()
+    if path.parent != bundle_dir or not path.is_file():
+        return None
+    return path
+
+
+@app.get("/api/mission-bundles")
+async def list_mission_bundles():
+    bundles, errors = _scan_mission_bundles()
+    return {
+        "success": not errors,
+        "bundles": bundles,
+        "missions": bundles,
+        "count": len(bundles),
+        "errors": errors,
+    }
+
+
+@app.post("/api/mission-bundles/import")
+async def import_mission_bundles():
+    bundles, errors = _scan_mission_bundles()
+    return JSONResponse(
+        {
+            "success": not errors,
+            "bundles": bundles,
+            "imported": bundles,
+            "count": len(bundles),
+            "errors": errors,
+        },
+        status_code=200 if not errors else 207,
+    )
+
+
+@app.post("/api/mission-bundles/scan")
+async def scan_mission_bundles():
+    return await import_mission_bundles()
+
+
+@app.post("/api/mission-bundles/import-incoming")
+async def import_mission_bundles_alias():
+    return await import_mission_bundles()
+
+
+@app.get("/api/mission-bundles/{mission_id}")
+async def get_mission_bundle(mission_id: str):
+    try:
+        safe_id = _safe_incoming_bundle_id(mission_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    bundle = _mission_bundle(INCOMING_CSV_DIR / safe_id, include_trajectory=True)
+    if bundle is None:
+        return JSONResponse({"success": False, "error": f"mission bundle not found: {mission_id}"}, status_code=404)
+    return {"success": True, "bundle": bundle, **bundle}
+
+
+@app.get("/api/mission-bundles/{mission_id}/artifacts/{kind}")
+async def get_mission_bundle_artifact(mission_id: str, kind: str):
+    path = _resolve_bundle_artifact(mission_id, kind)
+    if path is None:
+        return JSONResponse({"success": False, "error": "mission artifact not found"}, status_code=404)
+    # FileResponse streams the CSV and never exposes the server filesystem path
+    # in the response body.  The artifact kind is constrained above.
+    return FileResponse(path, media_type="text/csv", filename=path.name, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/mission-bundles/{mission_id}/artifact/{kind}")
+async def get_mission_bundle_artifact_alias(mission_id: str, kind: str):
+    """Singular alias kept for clients that model one selected artifact."""
+
+    return await get_mission_bundle_artifact(mission_id, kind)
 
 
 def _read_gps_csv_trajectory(csv_path: Path) -> Optional[Dict[str, Any]]:
@@ -1925,6 +2232,8 @@ def _safe_incoming_bundle_id(mission_id: str) -> str:
     bundle_id = mission_id.strip()
     if not bundle_id:
         raise ValueError("mission_id is required")
+    if bundle_id in {".", ".."}:
+        raise ValueError("mission_id may not be a path segment")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", bundle_id):
         raise ValueError("mission_id may only contain letters, numbers, underscore, dash, and dot")
     return bundle_id
@@ -1949,7 +2258,8 @@ def _incoming_mission_summary(bundle_dir: Path) -> dict[str, Any] | None:
     gps_path = bundle_dir / "gps.csv"
     noise_path = bundle_dir / "noise.csv"
     log_path = bundle_dir / "gps_sync.log"
-    if not (gps_path.exists() or noise_path.exists() or log_path.exists()):
+    metadata_paths = (bundle_dir / "bundle.json", bundle_dir / "capture.json", _bundle_manifest_path(bundle_dir))
+    if not (gps_path.exists() or noise_path.exists() or log_path.exists() or any(path.exists() for path in metadata_paths)):
         return None
 
     mtimes = [
@@ -1965,6 +2275,7 @@ def _incoming_mission_summary(bundle_dir: Path) -> dict[str, Any] | None:
         "updated_at": datetime.fromtimestamp(latest_mtime).isoformat(),
         "has_gps": gps_path.exists(),
         "has_noise": noise_path.exists(),
+        "has_metadata": any(path.exists() for path in metadata_paths),
         "gps_size": gps_path.stat().st_size if gps_path.exists() else 0,
         "noise_size": noise_path.stat().st_size if noise_path.exists() else 0,
         "last_gps_row": gps_lines[-1] if len(gps_lines) > 1 else "",
@@ -2570,6 +2881,10 @@ async def usrp_upload_gps_csv_post(
         return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
 
     bundle_id = mission_id.strip() or f"mission_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    try:
+        bundle_id = _safe_incoming_bundle_id(bundle_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
     bundle_dir = INCOMING_CSV_DIR / bundle_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
     (bundle_dir / "gps.csv").write_bytes(gps_data)
@@ -2763,8 +3078,10 @@ async def usrp_upload_noise_csv_post(
         return JSONResponse({"success": False, "error": "noise_file filename is required"}, status_code=422)
 
     bundle_id = mission_id_value.strip()
-    if not bundle_id:
-        return JSONResponse({"success": False, "error": "mission_id is required"}, status_code=422)
+    try:
+        bundle_id = _safe_incoming_bundle_id(bundle_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
     noise_bytes = await noise_file.read()
     actual_sha256 = hashlib.sha256(noise_bytes).hexdigest()
     if noise_size != len(noise_bytes) or noise_sha256.lower() != actual_sha256:

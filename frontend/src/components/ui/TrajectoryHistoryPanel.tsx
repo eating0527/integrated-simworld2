@@ -41,9 +41,38 @@ export interface TrajectoryEvent extends TrajectoryEventSummary {
   devices: TrajectoryDevice[];
 }
 
+export interface MissionBundleArtifact {
+  kind: 'gps' | 'noise';
+  filename: string;
+  url?: string | null;
+  exists: boolean;
+  healthy: boolean;
+  status: string;
+  header?: string[] | null;
+  size: number;
+  sha256?: string | null;
+  changed?: boolean;
+}
+
+export interface MissionBundle {
+  mission_id: string;
+  missionId?: string;
+  updated_at?: string | null;
+  metadata?: Record<string, unknown>;
+  metadata_only?: boolean;
+  labels: string[];
+  badges?: string[];
+  gps: MissionBundleArtifact;
+  noise: MissionBundleArtifact;
+  artifacts?: { gps: MissionBundleArtifact; noise: MissionBundleArtifact };
+  trajectory?: TrajectoryEvent | null;
+}
+
 interface TrajectoryHistoryPanelProps {
   selectedEventId: string | null;
   onSelectEvent: (event: TrajectoryEvent | null) => void;
+  selectedBundleId?: string | null;
+  onApplyToSimulation?: (files: { missionId: string; gpsFile?: File; noiseFile?: File }) => void;
 }
 
 function formatDate(value?: string | number | null): string {
@@ -53,36 +82,70 @@ function formatDate(value?: string | number | null): string {
   return date.toLocaleString();
 }
 
-async function fetchEvents(): Promise<TrajectoryEventSummary[]> {
-  const res = await fetch(`${API}/api/trajectory-events`);
-  if (!res.ok) throw new Error(`Failed to load trajectory events: ${res.status}`);
+function labelsFor(bundle: MissionBundle): string[] {
+  if (Array.isArray(bundle.labels) && bundle.labels.length > 0) return bundle.labels;
+  const labels = [
+    bundle.gps?.healthy ? '[GPS]' : '',
+    bundle.noise?.healthy ? '[NOISE]' : '',
+  ].filter(Boolean);
+  return labels.length > 0 ? labels : ['[N/A]'];
+}
+
+async function fetchBundles(): Promise<MissionBundle[]> {
+  const res = await fetch(`${API}/api/mission-bundles`);
+  if (!res.ok) throw new Error(`Failed to load mission bundles: ${res.status}`);
   const payload = await res.json();
-  return Array.isArray(payload?.events) ? payload.events as TrajectoryEventSummary[] : [];
+  return Array.isArray(payload?.bundles)
+    ? payload.bundles as MissionBundle[]
+    : Array.isArray(payload?.missions) ? payload.missions as MissionBundle[] : [];
 }
 
-async function fetchEvent(id: string): Promise<TrajectoryEvent> {
-  const res = await fetch(`${API}/api/trajectory-events/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error(`Failed to load trajectory event: ${res.status}`);
+async function fetchBundle(id: string): Promise<MissionBundle> {
+  const res = await fetch(`${API}/api/mission-bundles/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`Failed to load mission bundle: ${res.status}`);
   const payload = await res.json();
-  return payload.event as TrajectoryEvent;
+  return (payload?.bundle ?? payload) as MissionBundle;
 }
 
-async function importIncomingEvents(): Promise<{ imported?: Array<{ eventId: string }> }> {
-  const res = await fetch(`${API}/api/trajectory-events/import-incoming`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Failed to import incoming GPS CSV: ${res.status}`);
-  return await res.json();
+async function importBundles(): Promise<void> {
+  const res = await fetch(`${API}/api/mission-bundles/import`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to import mission bundles: ${res.status}`);
 }
 
-export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: TrajectoryHistoryPanelProps) {
-  const [events, setEvents] = useState<TrajectoryEventSummary[]>([]);
+function artifactFetchUrl(url: string): string {
+  // The URL is supplied by the backend.  Restrict it to the CSV artifact API
+  // before concatenating VITE_API_URL so an imported metadata value cannot turn
+  // the Apply action into an arbitrary browser fetch.
+  if (!url.startsWith('/api/mission-bundles/')) throw new Error('Invalid mission artifact URL');
+  return `${API}${url}`;
+}
+
+async function fetchArtifactFile(artifact: MissionBundleArtifact): Promise<File> {
+  if (!artifact.url || !artifact.healthy) throw new Error(`${artifact.kind} artifact is not healthy`);
+  const res = await fetch(artifactFetchUrl(artifact.url));
+  if (!res.ok) throw new Error(`Failed to download ${artifact.filename}: ${res.status}`);
+  const blob = await res.blob();
+  return new File([blob], artifact.filename, { type: blob.type || 'text/csv' });
+}
+
+export function TrajectoryHistoryPanel({
+  selectedEventId,
+  onSelectEvent,
+  selectedBundleId,
+  onApplyToSimulation,
+}: TrajectoryHistoryPanelProps) {
+  const [bundles, setBundles] = useState<MissionBundle[]>([]);
+  const [selectedBundle, setSelectedBundle] = useState<MissionBundle | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [applyMessage, setApplyMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setStatus('loading');
     setError(null);
     try {
-      setEvents(await fetchEvents());
+      setBundles(await fetchBundles());
       setStatus('idle');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -94,12 +157,16 @@ export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: Traje
     void refresh();
   }, [refresh]);
 
-  const selectEvent = useCallback(async (id: string) => {
+  const selectBundle = useCallback(async (id: string) => {
     setStatus('loading');
     setError(null);
+    setApplyMessage(null);
     try {
-      const event = await fetchEvent(id);
-      onSelectEvent(event);
+      const bundle = await fetchBundle(id);
+      setSelectedBundle(bundle);
+      // A bundle click is intentionally a GPS-only overlay operation. Noise is
+      // available for the explicit Apply action below and never becomes a path.
+      onSelectEvent(bundle.trajectory ?? null);
       setStatus('idle');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -111,24 +178,49 @@ export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: Traje
     setStatus('loading');
     setError(null);
     try {
-      const result = await importIncomingEvents();
-      setEvents(await fetchEvents());
-      const firstImported = result.imported?.[0]?.eventId;
-      if (firstImported) {
-        onSelectEvent(await fetchEvent(firstImported));
-      }
+      await importBundles();
+      setBundles(await fetchBundles());
       setStatus('idle');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus('error');
     }
-  }, [onSelectEvent]);
+  }, []);
 
-  const selected = events.find(event => event.id === selectedEventId) ?? null;
+  const applyToSimulation = useCallback(async () => {
+    if (!selectedBundle || !onApplyToSimulation) return;
+    setApplying(true);
+    setApplyMessage(null);
+    const files: { missionId: string; gpsFile?: File; noiseFile?: File } = {
+      missionId: selectedBundle.mission_id,
+    };
+    const failures: string[] = [];
+    try {
+      const downloads: Array<Promise<void>> = [];
+      if (selectedBundle.gps?.healthy) {
+        downloads.push(fetchArtifactFile(selectedBundle.gps).then(file => { files.gpsFile = file; }).catch(err => {
+          failures.push(err instanceof Error ? err.message : String(err));
+        }));
+      }
+      if (selectedBundle.noise?.healthy) {
+        downloads.push(fetchArtifactFile(selectedBundle.noise).then(file => { files.noiseFile = file; }).catch(err => {
+          failures.push(err instanceof Error ? err.message : String(err));
+        }));
+      }
+      await Promise.all(downloads);
+      if (files.gpsFile || files.noiseFile) onApplyToSimulation(files);
+      setApplyMessage(failures.length > 0 ? failures.join('; ') : '已套用健康資料');
+    } finally {
+      setApplying(false);
+    }
+  }, [onApplyToSimulation, selectedBundle]);
+
+  const activeBundleId = selectedBundleId ?? selectedBundle?.mission_id ?? null;
+  const selected = bundles.find(bundle => bundle.mission_id === activeBundleId) ?? selectedBundle;
 
   return (
     <MinPanel
-      title="歷史軌跡"
+      title="歷史任務清單"
       className="panel-ui trajectory-history-panel"
       defaultMinimized
       actions={
@@ -143,32 +235,44 @@ export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: Traje
       }
     >
       <PanelGrid>
-        <PanelField label="Events" value={events.length} />
-        <PanelField label="Selected" value={selected ? selected.pointCount : '-'} />
+        <PanelField label="Missions" value={bundles.length} />
+        <PanelField label="Selected" value={selected ? selected.mission_id : '-'} />
       </PanelGrid>
 
       {status === 'error' && <PanelEmpty>{error}</PanelEmpty>}
-      {events.length === 0 && status !== 'loading' && <PanelEmpty>No trajectory events saved yet.</PanelEmpty>}
+      {bundles.length === 0 && status !== 'loading' && <PanelEmpty>No mission bundles found.</PanelEmpty>}
       {status === 'loading' && <PanelStatus label="Loading" tone="waiting" />}
 
       <div className="trajectory-history-panel__list">
-        {events.map(event => {
-          const active = event.id === selectedEventId;
+        {bundles.map(bundle => {
+          const active = bundle.mission_id === activeBundleId || bundle.mission_id === selectedEventId;
+          const labels = labelsFor(bundle);
           return (
             <button
-              key={event.id}
+              key={bundle.mission_id}
               type="button"
               className={`trajectory-history-panel__item${active ? ' is-active' : ''}`}
-              onClick={() => void selectEvent(event.id)}
+              onClick={() => void selectBundle(bundle.mission_id)}
             >
               <span className="trajectory-history-panel__item-title">
-                {event.missionId || event.id}
+                {bundle.mission_id}
               </span>
               <span className="trajectory-history-panel__item-meta">
-                {event.pointCount} pts · {event.deviceCount} device
+                {labels.map(label => (
+                  <span
+                    key={label}
+                    style={{
+                      color: label === '[N/A]' ? 'rgba(255,255,255,.4)' : '#67e8f9',
+                      marginRight: 6,
+                    }}
+                  >
+                    {label}
+                  </span>
+                ))}
+                {bundle.metadata_only && <span>metadata-only</span>}
               </span>
               <span className="trajectory-history-panel__item-meta">
-                {formatDate(event.createdAt)}
+                {formatDate(bundle.updated_at)}
               </span>
             </button>
           );
@@ -179,7 +283,17 @@ export function TrajectoryHistoryPanel({ selectedEventId, onSelectEvent }: Traje
         <button type="button" className="trajectory-history-panel__link-btn" onClick={() => onSelectEvent(null)}>
           Clear overlay
         </button>
-        <span>{selected ? formatDate(selected.createdAt) : 'No overlay'}</span>
+        {selected && onApplyToSimulation && (
+          <button
+            type="button"
+            className="trajectory-history-panel__link-btn"
+            onClick={() => void applyToSimulation()}
+            disabled={applying || (!selected.gps?.healthy && !selected.noise?.healthy)}
+          >
+            {applying ? '套用中…' : '套用至模擬'}
+          </button>
+        )}
+        <span>{applyMessage || (selected ? selected.mission_id : 'No overlay')}</span>
       </PanelFooter>
     </MinPanel>
   );

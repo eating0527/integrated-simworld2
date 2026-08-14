@@ -153,6 +153,11 @@ interface SimulationPanelProps {
   sceneId?: string | null;
   generatedScene?: boolean;
   sceneFrame?: SceneFrame;
+  appliedFiles?: {
+    missionId: string;
+    gpsFile?: File;
+    noiseFile?: File;
+  } | null;
   onCfarClustersChange?: (clusters: CFARCluster[]) => void;
   onHeatmapOverlayChange?: (overlay: HeatmapOverlayConfig | null) => void;
   onRouteOverlayChange?: (overlay: ISSRouteOverlayConfig | null) => void;
@@ -168,6 +173,7 @@ export function SimulationPanel({
   sceneId = 'NTPU',
   generatedScene = false,
   sceneFrame = createSceneFrame('scene-default', { lat: 0, lon: 0, alt_m: 0 }),
+  appliedFiles = null,
   onCfarClustersChange,
   onHeatmapOverlayChange,
   onRouteOverlayChange,
@@ -212,6 +218,7 @@ export function SimulationPanel({
     gpsFile: null,
     noiseFile: null,
   });
+  const [appliedMissionId, setAppliedMissionId] = useState<string | null>(null);
   const [issUnetStatistics, setIssUnetStatistics] = useState<ISSUNetStatisticsState>({
     loading: false,
     imageUrl: null,
@@ -224,6 +231,19 @@ export function SimulationPanel({
   const [issRouteClearVersion, setIssRouteClearVersion] = useState(0);
   const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(false);
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.55);
+
+  useEffect(() => {
+    if (!appliedFiles) return;
+    setIssUnetParams(prev => ({
+      ...prev,
+      // Undefined means that the corresponding artifact was not healthy and
+      // must preserve the user's current manual selection.  A healthy
+      // artifact replaces only that side; the mode is intentionally untouched.
+      gpsFile: appliedFiles.gpsFile ?? prev.gpsFile,
+      noiseFile: appliedFiles.noiseFile ?? prev.noiseFile,
+    }));
+    setAppliedMissionId(appliedFiles.missionId);
+  }, [appliedFiles]);
 
   const clearHeatmapOverlay = useCallback(() => {
     setIssUnetOverlay(null);
@@ -700,6 +720,12 @@ export function SimulationPanel({
                       />
                       <div />
                       <Hint>{issUnetParams.filterNoise ? '僅計算 < -1 dB。' : '不套用 -1 dB 門檻。'}</Hint>
+                    </>
+                  )}
+                  {appliedMissionId && (
+                    <>
+                      <Label>Applied mission</Label>
+                      <Hint>{appliedMissionId}</Hint>
                     </>
                   )}
                   <Label>OS-CFAR</Label>
