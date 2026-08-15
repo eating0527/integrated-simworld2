@@ -102,6 +102,10 @@ _Avoid_: 一般錯誤、服務不可用
 由 Raspberry Pi 上的測試腳本產生的 Noise 採樣，不使用 USRP B210；它仍由 Raspberry Pi 的 Noise 控制平面管理。
 _Avoid_: USRP 測試、模擬 GPS
 
+**Noise 採樣（Noise Capture）**：
+由 Raspberry Pi 的 Noise 控制平面執行的採樣任務，可使用 Test mode 或 USRP mode。使用者介面的開始與停止操作以「Noise 採樣」為對象；USRP 僅指硬體或模式名稱，不與採樣任務混用。
+_Avoid_: 開始 USRP、停止 USRP
+
 **裝置健康（Device Health）**：
 裝置目前是否可參與新任務的即時狀態，不會回寫或改變既有任務的結果。
 _Avoid_: 任務狀態、裝置任務狀態
