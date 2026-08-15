@@ -50,6 +50,7 @@ __pycache__/
 /backend/.pip-cache/
 /backend/tests/tmp*/
 /frontend/.npm-cache/
+/output/playwright/
 
 ## Runtime mission 與暫存輸出
 *mission_*/
