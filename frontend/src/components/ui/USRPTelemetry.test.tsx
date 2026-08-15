@@ -796,9 +796,9 @@ describe('USRPTelemetry capture controls', () => {
 
     const uavProgress = await screen.findByLabelText('無人機 GPS 採樣 progress');
     const usrpProgress = screen.getByLabelText('USRP 干擾採樣 progress');
-    expect(within(uavProgress).getByText(/Finalize CSV — current/)).toBeInTheDocument();
-    expect(within(usrpProgress).getByText(/Upload — current/)).toBeInTheDocument();
-    expect(within(usrpProgress).getByText(/Connect — completed/)).toBeInTheDocument();
+    expect(within(uavProgress).getByText(/收尾 — 進行中/)).toBeInTheDocument();
+    expect(within(usrpProgress).getByText(/收尾與上傳 — 進行中/)).toBeInTheDocument();
+    expect(within(usrpProgress).getByText(/連線與設定 — 已完成/)).toBeInTheDocument();
   });
 
   it('retries a saved USRP upload without restarting capture', async () => {
@@ -1102,5 +1102,38 @@ describe('USRPTelemetry capture controls', () => {
 
     view.unmount();
     expect(pendingSignal?.aborted).toBe(true);
+  });
+
+  it('renders Ticket 02 control mode segment switcher, Chinese actions, and grouped progress', async () => {
+    const user = userEvent.setup();
+    render(<USRPTelemetry />);
+
+    expect(await screen.findByRole('button', { name: '獨立採樣模式' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('switch', { name: 'Bind services' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByText('裝置就緒')).toBeInTheDocument();
+    expect(screen.getByText('任務狀態')).toBeInTheDocument();
+    expect(screen.getByText('無人機 GPS 採樣')).toBeInTheDocument();
+    expect(screen.getByText('USRP 干擾採樣')).toBeInTheDocument();
+
+    // Chinese buttons
+    expect(screen.getByText('開始 GPS 採樣')).toBeInTheDocument();
+    expect(screen.getByText('開始 Noise 採樣')).toBeInTheDocument();
+    expect(screen.getByText('重新整理狀態')).toBeInTheDocument();
+
+    // Grouped progress steps
+    const uavProgress = screen.getByLabelText('無人機 GPS 採樣 progress');
+    const usrpProgress = screen.getByLabelText('USRP 干擾採樣 progress');
+    expect(within(uavProgress).getByText(/準備 —/)).toBeInTheDocument();
+    expect(within(uavProgress).getByText(/錄製 —/)).toBeInTheDocument();
+    expect(within(uavProgress).getByText(/收尾 —/)).toBeInTheDocument();
+    expect(within(usrpProgress).getByText(/連線與設定 —/)).toBeInTheDocument();
+    expect(within(usrpProgress).getByText(/收尾與上傳 —/)).toBeInTheDocument();
+
+    // Switch to Bound mode
+    await user.click(screen.getByRole('switch', { name: 'Bind services' }));
+    expect(screen.getByRole('button', { name: '獨立採樣模式' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('switch', { name: 'Bind services' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('開始綁定任務')).toBeInTheDocument();
+    expect(screen.getByText('停止綁定任務')).toBeInTheDocument();
   });
 });

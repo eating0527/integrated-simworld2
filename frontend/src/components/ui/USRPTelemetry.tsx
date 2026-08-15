@@ -315,6 +315,11 @@ function isPollingPhase(phase?: PhaseDisplay): boolean {
 }
 
 const STEP_PHASES: Record<string, CapturePhase[]> = {
+  '準備': ['preflight', 'starting_service'],
+  '錄製': ['recording'],
+  '收尾': ['stopping', 'stopping_service', 'finalizing_file', 'completed', 'stopped'],
+  '連線與設定': ['preflight', 'connecting', 'configuring', 'starting_service'],
+  '收尾與上傳': ['stopping', 'stopping_service', 'finalizing_file', 'upload_pending', 'uploading', 'completed', 'stopped'],
   'Start recorder': ['starting_service'],
   'Record': ['recording'],
   'Stop recorder': ['stopping_service'],
@@ -327,6 +332,14 @@ const STEP_PHASES: Record<string, CapturePhase[]> = {
   'Complete': ['completed'],
 };
 
+const STEP_STATE_LABELS: Record<string, string> = {
+  completed: '已完成',
+  current: '進行中',
+  waiting: '等待中',
+  warning: '注意',
+  error: '異常',
+};
+
 function stepState(step: string, child: ChildState, index: number, steps: string[]): 'completed' | 'current' | 'waiting' | 'warning' | 'error' {
   if (child.error || child.phase === 'failed' || child.file === 'failed' || child.service === 'failed') return 'error';
   if (child.service === 'presumed_running' || child.phase === 'reconciling') return 'warning';
@@ -335,7 +348,7 @@ function stepState(step: string, child: ChildState, index: number, steps: string
   const currentIndex = steps.findIndex(item => (STEP_PHASES[item] ?? []).includes(phase));
   if (phase === 'completed' || (child.file === 'uploaded' && index === steps.length - 1)) return 'completed';
   if (phase === 'upload_pending' || phase === 'uploading') {
-    if (step === 'Upload') return 'current';
+    if (step === 'Upload' || step === '收尾與上傳') return 'current';
     if (step === 'Complete') return 'waiting';
   }
   if (currentIndex >= 0) return index < currentIndex ? 'completed' : index === currentIndex ? 'current' : 'waiting';
@@ -899,6 +912,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     const raspiUnavailable = target === 'usrp' && !raspiReady;
     const disabled = busy || stopped || (retry ? raspiUnavailable : !canStop(child.service));
     const label = stopped ? 'Stopped' : retry ? 'Retry Stop' : target === 'uav' ? 'Stop UAV' : 'Stop USRP';
+    const text = stopped ? '已停止' : retry ? (target === 'uav' ? '重試停止 GPS 採樣' : '重試停止 Noise 採樣') : (target === 'uav' ? '停止 GPS 採樣' : '停止 Noise 採樣');
     const path = retry
       ? `/api/capture/${target}/retry-stop?mission_id=${encodeURIComponent(childMissionId)}`
       : `/api/capture/${target}/stop?mission_id=${encodeURIComponent(childMissionId)}`;
@@ -911,7 +925,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         title={retry && raspiUnavailable ? 'Reconnect Raspberry Pi before retrying stop.' : undefined}
         onClick={() => void request(path)}
       >
-        {label}
+        {text}
       </button>
       {retry && raspiUnavailable ? (
         <div aria-live="polite" style={S.error}>Reconnect Raspberry Pi before retrying stop.</div>
@@ -951,7 +965,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       <div style={S.steps} aria-label={`${title} progress`}>
         {steps.map((step, index) => {
           const state = stepState(step, child, index, steps);
-          return <div key={step} data-step-state={state}>{STEP_MARKERS[state]} {step} — {state}</div>;
+          return <div key={step} data-step-state={state}>{STEP_MARKERS[state]} {step} — {STEP_STATE_LABELS[state] ?? state}</div>;
         })}
       </div>
       {child.error ? <div role="alert" style={S.error}>{child.error}</div> : null}
@@ -962,7 +976,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>Stopped; upload pending.</div> : null}
       {retryLabel ? <div aria-live="polite" style={S.error}>{retryLabel}</div> : null}
       {progressLabel ? <div aria-live="polite" style={S.error}>{progressLabel}</div> : null}
-      {child.file === 'upload_pending' && title.includes('USRP') && !autoRetryActive ? <button type="button" style={S.button} disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>Retry upload</button> : null}
+      {child.file === 'upload_pending' && title.includes('USRP') && !autoRetryActive ? <button type="button" style={S.button} aria-label="Retry upload" disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>重試上傳</button> : null}
       {actions}
     </section>
   };
@@ -975,21 +989,53 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     >
       <div style={S.control}>
         <div style={S.topRow}>
-          <strong>裝置綁定</strong>
-          <button type="button" style={S.button} disabled={busy} onClick={() => void loadStatus()}>Refresh status</button>
+          <div style={{ ...S.modes, flex: 1 }} aria-label="控制模式">
+            <button
+              type="button"
+              aria-label="獨立採樣模式"
+              aria-pressed={!bind}
+              disabled={modeDisabled}
+              style={{
+                ...S.button,
+                ...(!bind ? S.active : null),
+                ...disabledStyle(modeDisabled),
+                flex: 1,
+              }}
+              onClick={() => {
+                if (bind) switchMode();
+              }}
+            >
+              獨立採樣模式
+            </button>
+            <button
+              type="button"
+              role="switch"
+              aria-label="Bind services"
+              aria-checked={bind}
+              disabled={modeDisabled}
+              style={{
+                ...S.button,
+                ...(bind ? S.active : null),
+                ...disabledStyle(modeDisabled),
+                flex: 1,
+              }}
+              onClick={switchMode}
+            >
+              綁定任務模式
+            </button>
+          </div>
           <button
             type="button"
-            role="switch"
-            aria-label="Bind services"
-            aria-checked={bind}
-            disabled={modeDisabled}
-            style={{ ...S.button, ...(bind ? S.active : null), ...disabledStyle(modeDisabled) }}
-            onClick={switchMode}
+            style={S.button}
+            aria-label="Refresh status"
+            disabled={busy}
+            onClick={() => void loadStatus()}
           >
-            {bind ? '啟用' : '關閉'}
+            重新整理狀態
           </button>
         </div>
 
+        <div style={S.sectionTitle}>裝置就緒</div>
         <div style={S.health} aria-label="Device Health">
           {(['ap3', 'raspi'] as const).map((device) => {
             const item = health[device];
@@ -1006,6 +1052,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           })}
         </div>
 
+        <div style={S.sectionTitle}>任務狀態</div>
+
         {childSection(
           '無人機 GPS 採樣',
           gpsHistory,
@@ -1015,13 +1063,14 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
               type="button"
               style={{ ...S.button, ...disabledStyle(!canStartUav) }}
               disabled={!canStartUav}
+              aria-label="Start UAV"
               onClick={() => void request('/api/capture/uav/start')}
             >
-              Start UAV
+              開始 GPS 採樣
             </button>
             {stopAction('uav', uav, uavMissionId)}
           </div>,
-          ['Start recorder', 'Record', 'Stop recorder', 'Finalize CSV', 'Complete'],
+          ['準備', '錄製', '收尾'],
         )}
 
         {childSection(
@@ -1053,14 +1102,15 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
                 type="button"
                 style={{ ...S.button, ...disabledStyle(bind || busy || !usrpKnown || isUnresolved(usrp) || !raspiReady) }}
                 disabled={bind || busy || !usrpKnown || isUnresolved(usrp) || !raspiReady}
+                aria-label="Start USRP"
                 onClick={() => void request('/api/capture/usrp/start', startBody)}
               >
-                Start USRP
+                開始 Noise 採樣
               </button>
               {stopAction('usrp', usrp, usrpMissionId)}
             </div>
           </>,
-          ['Connect', 'Configure', 'Start service', 'Record', 'Stop service', 'Finalize CSV', 'Upload', 'Complete'],
+          ['連線與設定', '錄製', '收尾與上傳'],
         )}
 
         {bind ? (
@@ -1069,17 +1119,19 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
               type="button"
               style={{ ...S.button, ...S.active, ...disabledStyle(controlsLocked || !bothReady) }}
               disabled={controlsLocked || !bothReady}
+              aria-label="Start Bound Capture"
               onClick={() => void request('/api/capture/bind/start', startBody)}
             >
-              Start Bound Capture
+              開始綁定任務
             </button>
             <button
               type="button"
               style={{ ...S.button, ...S.stop, ...disabledStyle(busy || !missionId || !anyActive || Boolean(status?.stop_requested_at)) }}
               disabled={busy || !missionId || !anyActive || Boolean(status?.stop_requested_at)}
+              aria-label="Stop All"
               onClick={() => void request(`/api/capture/bind/stop?mission_id=${encodeURIComponent(missionId)}`)}
             >
-              Stop All
+              停止綁定任務
             </button>
           </div>
         ) : null}

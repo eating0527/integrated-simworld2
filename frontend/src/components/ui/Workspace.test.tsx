@@ -136,7 +136,7 @@ describe('Workspace', () => {
     await user.click(trigger);
 
     const dialog = screen.getByRole('dialog', { name: '左側工作區' });
-    const first = within(dialog).getByRole('button', { name: '左側第一項' });
+    const first = within(dialog).getByRole('button', { name: '關閉左側抽屜' });
     const last = within(dialog).getByRole('button', { name: '左側最後項' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(first).toHaveFocus();
@@ -174,5 +174,25 @@ describe('Workspace', () => {
 
     await user.click(screen.getByRole('button', { name: '關閉側欄' }));
     expect(right).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('provides a visible close button in the mobile drawer header that closes the drawer and restores focus', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    const trigger = screen.getByRole('button', { name: '開啟左側工作區' });
+    expect(trigger).toHaveTextContent('控制');
+    const rightTrigger = screen.getByRole('button', { name: '開啟右側工作區' });
+    expect(rightTrigger).toHaveTextContent('歷史');
+
+    await user.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: '左側工作區' });
+    const closeBtn = within(dialog).getByRole('button', { name: '關閉左側抽屜' });
+    expect(closeBtn).toBeInTheDocument();
+
+    await user.click(closeBtn);
+    expect(screen.queryByRole('dialog', { name: '左側工作區' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

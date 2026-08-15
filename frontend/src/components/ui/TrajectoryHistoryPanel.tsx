@@ -82,13 +82,34 @@ function formatDate(value?: string | number | null): string {
   return date.toLocaleString();
 }
 
-function labelsFor(bundle: MissionBundle): string[] {
-  if (Array.isArray(bundle.labels) && bundle.labels.length > 0) return bundle.labels;
-  const labels = [
-    bundle.gps?.healthy ? '[GPS]' : '',
-    bundle.noise?.healthy ? '[NOISE]' : '',
-  ].filter(Boolean);
-  return labels.length > 0 ? labels : ['[N/A]'];
+interface ArtifactBadge {
+  key: string;
+  label: string;
+  tone: 'healthy' | 'invalid' | 'missing';
+}
+
+function getSingleArtifactBadge(key: 'gps' | 'noise', artifact?: MissionBundleArtifact | null): ArtifactBadge {
+  const name = key === 'gps' ? 'GPS' : 'NOISE';
+  if (artifact?.healthy) {
+    return { key, label: `[${name}]`, tone: 'healthy' };
+  }
+  if (artifact?.exists) {
+    return { key, label: `[${name} 無效]`, tone: 'invalid' };
+  }
+  return { key, label: `[無 ${name}]`, tone: 'missing' };
+}
+
+function artifactBadges(bundle: MissionBundle): ArtifactBadge[] {
+  return [
+    getSingleArtifactBadge('gps', bundle.gps),
+    getSingleArtifactBadge('noise', bundle.noise),
+  ];
+}
+
+function badgeColor(tone: 'healthy' | 'invalid' | 'missing'): string {
+  if (tone === 'healthy') return '#67e8f9';
+  if (tone === 'invalid') return '#fbbf24';
+  return 'rgba(255, 255, 255, 0.4)';
 }
 
 async function fetchBundles(): Promise<MissionBundle[]> {
@@ -134,6 +155,7 @@ export function TrajectoryHistoryPanel({
   selectedBundleId,
   onApplyToSimulation,
 }: TrajectoryHistoryPanelProps) {
+  const [minimized, setMinimized] = useState(true);
   const [bundles, setBundles] = useState<MissionBundle[]>([]);
   const [selectedBundle, setSelectedBundle] = useState<MissionBundle | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -181,6 +203,7 @@ export function TrajectoryHistoryPanel({
       await importBundles();
       setBundles(await fetchBundles());
       setStatus('idle');
+      setMinimized(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus('error');
@@ -215,6 +238,12 @@ export function TrajectoryHistoryPanel({
     }
   }, [onApplyToSimulation, selectedBundle]);
 
+  const sortedBundles = [...bundles].sort((a, b) => {
+    const timeA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+    const timeB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    return timeB - timeA;
+  });
+
   const activeBundleId = selectedBundleId ?? selectedBundle?.mission_id ?? null;
   const selected = bundles.find(bundle => bundle.mission_id === activeBundleId) ?? selectedBundle;
 
@@ -222,31 +251,42 @@ export function TrajectoryHistoryPanel({
     <MinPanel
       title="歷史任務清單"
       className="panel-ui trajectory-history-panel"
-      defaultMinimized
+      minimized={minimized}
+      onMinimizedChange={setMinimized}
       actions={
         <>
-          <button type="button" className="trajectory-history-panel__icon-btn" onClick={() => void importIncoming()}>
-            Import incoming
+          <button
+            type="button"
+            className="trajectory-history-panel__icon-btn"
+            aria-label="Import incoming"
+            onClick={() => void importIncoming()}
+          >
+            匯入傳入任務
           </button>
-          <button type="button" className="trajectory-history-panel__icon-btn" onClick={() => void refresh()}>
-            Refresh
+          <button
+            type="button"
+            className="trajectory-history-panel__icon-btn"
+            aria-label="Refresh"
+            onClick={() => void refresh()}
+          >
+            重新整理
           </button>
         </>
       }
     >
       <PanelGrid>
-        <PanelField label="Missions" value={bundles.length} />
-        <PanelField label="Selected" value={selected ? selected.mission_id : '-'} />
+        <PanelField label="任務總數" value={bundles.length} />
+        <PanelField label="目前選取" value={selected ? selected.mission_id : '-'} />
       </PanelGrid>
 
       {status === 'error' && <PanelEmpty>{error}</PanelEmpty>}
-      {bundles.length === 0 && status !== 'loading' && <PanelEmpty>No mission bundles found.</PanelEmpty>}
+      {bundles.length === 0 && status !== 'loading' && <PanelEmpty>未找到歷史任務包。</PanelEmpty>}
       {status === 'loading' && <PanelStatus label="Loading" tone="waiting" />}
 
       <div className="trajectory-history-panel__list">
-        {bundles.map(bundle => {
+        {sortedBundles.map(bundle => {
           const active = bundle.mission_id === activeBundleId || bundle.mission_id === selectedEventId;
-          const labels = labelsFor(bundle);
+          const badges = artifactBadges(bundle);
           return (
             <button
               key={bundle.mission_id}
@@ -258,18 +298,18 @@ export function TrajectoryHistoryPanel({
                 {bundle.mission_id}
               </span>
               <span className="trajectory-history-panel__item-meta">
-                {labels.map(label => (
+                {badges.map(badge => (
                   <span
-                    key={label}
+                    key={badge.key}
                     style={{
-                      color: label === '[N/A]' ? 'rgba(255,255,255,.4)' : '#67e8f9',
+                      color: badgeColor(badge.tone),
                       marginRight: 6,
+                      fontWeight: 600,
                     }}
                   >
-                    {label}
+                    {badge.label}
                   </span>
                 ))}
-                {bundle.metadata_only && <span>metadata-only</span>}
               </span>
               <span className="trajectory-history-panel__item-meta">
                 {formatDate(bundle.updated_at)}
@@ -279,9 +319,30 @@ export function TrajectoryHistoryPanel({
         })}
       </div>
 
+      {selected && (
+        <div style={{ padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', fontSize: '11px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div><strong>已選取任務：</strong>{selected.mission_id}</div>
+          <div>
+            <strong>GPS: </strong>
+            <span style={{ color: selected.gps?.healthy ? '#67e8f9' : selected.gps?.exists ? '#fbbf24' : 'rgba(255,255,255,.4)' }}>
+              {selected.gps?.healthy ? '有效' : selected.gps?.exists ? '異常' : '缺少'}
+            </span>
+            {' · '}
+            <strong>Noise: </strong>
+            <span style={{ color: selected.noise?.healthy ? '#67e8f9' : selected.noise?.exists ? '#fbbf24' : 'rgba(255,255,255,.4)' }}>
+              {selected.noise?.healthy ? '有效' : selected.noise?.exists ? '異常' : '缺少'}
+            </span>
+          </div>
+          <div>
+            <strong>軌跡預覽：</strong>
+            <span>{selectedEventId === selected.mission_id ? 'GPS 軌跡預覽中' : '未預覽軌跡'}</span>
+          </div>
+        </div>
+      )}
+
       <PanelFooter>
-        <button type="button" className="trajectory-history-panel__link-btn" onClick={() => onSelectEvent(null)}>
-          Clear overlay
+        <button type="button" className="trajectory-history-panel__link-btn" aria-label="Clear overlay" onClick={() => onSelectEvent(null)}>
+          清除軌跡
         </button>
         {selected && onApplyToSimulation && (
           <button
@@ -293,7 +354,7 @@ export function TrajectoryHistoryPanel({
             {applying ? '套用中…' : '套用至模擬'}
           </button>
         )}
-        <span>{applyMessage || (selected ? selected.mission_id : 'No overlay')}</span>
+        <span>{applyMessage || (selected ? selected.mission_id : '未套用資料')}</span>
       </PanelFooter>
     </MinPanel>
   );

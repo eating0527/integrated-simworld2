@@ -94,7 +94,22 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
           tabIndex={mobileRail === 'left' ? -1 : undefined}
           className={`workspace__rail workspace__rail--left ${leftOpen ? 'is-open' : ''} ${mobileRail === 'left' ? 'is-mobile-open' : ''}`}
         >
-          {left}
+          {mobileRail === 'left' && (
+            <div className="workspace__drawer-header">
+              <span className="workspace__drawer-title">控制</span>
+              <button
+                type="button"
+                className="workspace__drawer-close"
+                aria-label="關閉左側抽屜"
+                onClick={() => setMobileRail(null)}
+              >
+                關閉 ✕
+              </button>
+            </div>
+          )}
+          <div className="workspace__rail-body">
+            {left}
+          </div>
         </aside>
       )}
       {right && (
@@ -107,13 +122,28 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
           tabIndex={mobileRail === 'right' ? -1 : undefined}
           className={`workspace__rail workspace__rail--right ${rightOpen ? 'is-open' : ''} ${mobileRail === 'right' ? 'is-mobile-open' : ''}`}
         >
-          {right}
+          {mobileRail === 'right' && (
+            <div className="workspace__drawer-header">
+              <span className="workspace__drawer-title">歷史</span>
+              <button
+                type="button"
+                className="workspace__drawer-close"
+                aria-label="關閉右側抽屜"
+                onClick={() => setMobileRail(null)}
+              >
+                關閉 ✕
+              </button>
+            </div>
+          )}
+          <div className="workspace__rail-body">
+            {right}
+          </div>
         </aside>
       )}
 
       <div className="workspace__drawer-controls" aria-label="行動工作區控制">
         {left && <button ref={leftTriggerRef} type="button" aria-label={mobileRail === 'left' ? '關閉左側工作區' : '開啟左側工作區'} aria-expanded={mobileRail === 'left'} aria-controls={leftRailId} onClick={() => toggleMobile('left')}>控制</button>}
-        {right && <button ref={rightTriggerRef} type="button" aria-label={mobileRail === 'right' ? '關閉右側工作區' : '開啟右側工作區'} aria-expanded={mobileRail === 'right'} aria-controls={rightRailId} onClick={() => toggleMobile('right')}>狀態</button>}
+        {right && <button ref={rightTriggerRef} type="button" aria-label={mobileRail === 'right' ? '關閉右側工作區' : '開啟右側工作區'} aria-expanded={mobileRail === 'right'} aria-controls={rightRailId} onClick={() => toggleMobile('right')}>歷史</button>}
       </div>
 
       {mobileRail && <button type="button" className="workspace__backdrop" aria-label="關閉側欄" onClick={() => setMobileRail(null)} />}

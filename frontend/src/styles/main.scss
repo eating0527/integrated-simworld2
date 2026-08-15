@@ -1784,15 +1784,72 @@ canvas {
   transform: rotate(-90deg);
 }
 
-@media (max-width: 1099px) {
+.workspace__drawer-header {
+  display: none;
+}
+
+.workspace__rail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+@media (max-width: 1199px) {
   .workspace__rail {
     z-index: 45;
     top: 12px;
     bottom: 12px;
-    width: min(var(--rail-width), calc(100vw - 44px));
-    padding: 6px;
+    padding: 0;
+    overflow: hidden;
     opacity: 0;
     pointer-events: none;
+    background: rgba(10, 15, 26, 0.92);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  }
+
+  .workspace__drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: rgba(15, 23, 42, 0.95);
+    border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+    flex-shrink: 0;
+  }
+
+  .workspace__drawer-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e2e8f0;
+    letter-spacing: 0.04em;
+  }
+
+  .workspace__drawer-close {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #94a3b8;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.16s ease;
+
+    &:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+    }
+  }
+
+  .workspace__rail-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px;
+    scrollbar-width: thin;
   }
 
   .workspace__rail--left:not(.is-mobile-open) {
@@ -1809,10 +1866,12 @@ canvas {
 
   .workspace__rail--left {
     left: 12px;
+    width: min(320px, calc(100vw - 44px));
   }
 
   .workspace__rail--right {
     right: 12px;
+    width: min(360px, calc(100vw - 44px));
   }
 
   .workspace__rail.is-mobile-open {
@@ -1936,7 +1995,7 @@ canvas {
   }
 }
 
-@media (max-width: 1099px) {
+@media (max-width: 1199px) {
   .workspace__rail {
     top: 12px;
   }
