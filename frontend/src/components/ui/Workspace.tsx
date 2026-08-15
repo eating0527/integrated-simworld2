@@ -2,6 +2,19 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 type Rail = 'left' | 'right';
 
+const FOCUSABLE_SELECTOR = 'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+function getFocusable(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter((element) => !element.closest('[inert], [aria-hidden="true"], [hidden]'));
+}
+
+function matchesDrawerMode(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 1199px)').matches;
+}
+
 interface WorkspaceProps {
   top?: ReactNode;
   left?: ReactNode;
@@ -12,6 +25,7 @@ interface WorkspaceProps {
 export function Workspace({ top, left, right, children }: WorkspaceProps) {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [drawerMode, setDrawerMode] = useState(matchesDrawerMode);
   const [mobileRail, setMobileRail] = useState<Rail | null>(null);
   const leftRailId = `workspace-left-${useId()}`;
   const rightRailId = `workspace-right-${useId()}`;
@@ -22,12 +36,26 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
   const returnFocusRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia('(max-width: 1199px)');
+    const handleModeChange = (event: MediaQueryListEvent) => {
+      setDrawerMode(event.matches);
+      setMobileRail(null);
+    };
+    setDrawerMode(query.matches);
+    query.addEventListener?.('change', handleModeChange);
+    query.addListener?.(handleModeChange);
+    return () => {
+      query.removeEventListener?.('change', handleModeChange);
+      query.removeListener?.(handleModeChange);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!mobileRail) return;
 
     const rail = mobileRail === 'left' ? leftRailRef.current : rightRailRef.current;
-    const focusable = rail?.querySelector<HTMLElement>(
-      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-    );
+    const focusable = rail ? getFocusable(rail)[0] : null;
     (focusable ?? rail)?.focus();
 
     const handleDrawerKey = (event: KeyboardEvent) => {
@@ -37,9 +65,7 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
       }
       if (event.key !== 'Tab' || !rail) return;
 
-      const focusableElements = Array.from(rail.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      ));
+      const focusableElements = getFocusable(rail);
       if (focusableElements.length === 0) {
         event.preventDefault();
         rail.focus();
@@ -75,6 +101,9 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
     });
   };
 
+  const leftVisible = drawerMode ? mobileRail === 'left' : leftOpen;
+  const rightVisible = drawerMode ? mobileRail === 'right' : rightOpen;
+
   return (
     <div className="workspace">
       <main className="workspace__stage">{children}</main>
@@ -89,9 +118,11 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
           ref={leftRailRef}
           id={leftRailId}
           aria-label="左側工作區"
+          aria-hidden={!leftVisible}
           aria-modal={mobileRail === 'left' ? true : undefined}
           role={mobileRail === 'left' ? 'dialog' : undefined}
           tabIndex={mobileRail === 'left' ? -1 : undefined}
+          inert={!leftVisible ? true : undefined}
           className={`workspace__rail workspace__rail--left ${leftOpen ? 'is-open' : ''} ${mobileRail === 'left' ? 'is-mobile-open' : ''}`}
         >
           {mobileRail === 'left' && (
@@ -117,9 +148,11 @@ export function Workspace({ top, left, right, children }: WorkspaceProps) {
           ref={rightRailRef}
           id={rightRailId}
           aria-label="右側工作區"
+          aria-hidden={!rightVisible}
           aria-modal={mobileRail === 'right' ? true : undefined}
           role={mobileRail === 'right' ? 'dialog' : undefined}
           tabIndex={mobileRail === 'right' ? -1 : undefined}
+          inert={!rightVisible ? true : undefined}
           className={`workspace__rail workspace__rail--right ${rightOpen ? 'is-open' : ''} ${mobileRail === 'right' ? 'is-mobile-open' : ''}`}
         >
           {mobileRail === 'right' && (

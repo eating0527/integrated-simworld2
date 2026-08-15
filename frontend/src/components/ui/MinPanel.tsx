@@ -14,6 +14,8 @@ interface MinPanelProps {
   minimized?: boolean;
   onMinimizedChange?: (minimized: boolean) => void;
   headerContent?: React.ReactNode;
+  toggleLabel?: (minimized: boolean) => string;
+  showActionsWhenMinimized?: boolean;
 }
 
 export function MinPanel({
@@ -29,6 +31,8 @@ export function MinPanel({
   minimized: controlledMinimized,
   onMinimizedChange,
   headerContent,
+  toggleLabel,
+  showActionsWhenMinimized = false,
 }: MinPanelProps) {
   const [uncontrolledMinimized, setUncontrolledMinimized] = useState(defaultMinimized);
   const minimized = controlledMinimized ?? uncontrolledMinimized;
@@ -44,7 +48,7 @@ export function MinPanel({
         <button
           type="button"
           className="min-panel__title-btn"
-          aria-label={`${minimized ? 'Restore' : 'Minimize'} ${title}`}
+          aria-label={toggleLabel?.(minimized) ?? `${minimized ? 'Restore' : 'Minimize'} ${title}`}
           aria-expanded={!minimized}
           aria-controls={bodyId}
           onClick={() => {
@@ -56,7 +60,7 @@ export function MinPanel({
           {headerContent ?? <span>{title}</span>}
           <span className="min-panel__chevron" aria-hidden="true">⌄</span>
         </button>
-        {!minimized && actions}
+        {(!minimized || showActionsWhenMinimized) && actions}
       </div>
       <div
         id={bodyId}

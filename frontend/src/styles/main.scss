@@ -1828,6 +1828,11 @@ canvas {
   }
 
   .workspace__drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    min-height: 34px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.15);
     color: #94a3b8;
@@ -1846,22 +1851,29 @@ canvas {
 
   .workspace__rail-body {
     flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 8px;
     scrollbar-width: thin;
   }
 
+  .workspace__rail > .workspace__rail-body {
+    flex: 1 1 auto;
+  }
+
   .workspace__rail--left:not(.is-mobile-open) {
     transform: translateX(calc(-100% - 24px));
     opacity: 0;
     pointer-events: none;
+    visibility: hidden;
   }
 
   .workspace__rail--right:not(.is-mobile-open) {
     transform: translateX(calc(100% + 24px));
     opacity: 0;
     pointer-events: none;
+    visibility: hidden;
   }
 
   .workspace__rail--left {
@@ -1878,6 +1890,17 @@ canvas {
     transform: translateX(0);
     opacity: 1;
     pointer-events: auto;
+    visibility: visible;
+  }
+
+  .workspace__rail .min-panel {
+    max-height: none;
+    overflow: visible;
+    resize: none;
+  }
+
+  .workspace__rail .min-panel:not(.is-min) .min-panel__body-inner {
+    overflow: visible;
   }
 
   .workspace__top-control {

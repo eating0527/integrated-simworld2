@@ -77,9 +77,28 @@ interface TrajectoryHistoryPanelProps {
 
 function formatDate(value?: string | number | null): string {
   if (!value) return '-';
-  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
+  const date = parseDate(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === type)?.value ?? '00';
+  return `${part('month')}/${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+}
+
+function parseDate(value?: string | number | null): Date {
+  if (typeof value === 'number') return new Date(value * 1000);
+  if (!value) return new Date(Number.NaN);
+  const text = value.trim();
+  const isNaiveIso = /^\d{4}-\d{2}-\d{2}T/.test(text)
+    && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  return new Date(isNaiveIso ? `${text}+08:00` : text);
 }
 
 interface ArtifactBadge {
@@ -100,6 +119,9 @@ function getSingleArtifactBadge(key: 'gps' | 'noise', artifact?: MissionBundleAr
 }
 
 function artifactBadges(bundle: MissionBundle): ArtifactBadge[] {
+  if (!bundle.gps?.exists && !bundle.noise?.exists) {
+    return [{ key: 'none', label: '[N/A]', tone: 'missing' }];
+  }
   return [
     getSingleArtifactBadge('gps', bundle.gps),
     getSingleArtifactBadge('noise', bundle.noise),
@@ -112,39 +134,97 @@ function badgeColor(tone: 'healthy' | 'invalid' | 'missing'): string {
   return 'rgba(255, 255, 255, 0.4)';
 }
 
-async function fetchBundles(): Promise<MissionBundle[]> {
+function payloadError(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = payload as { detail?: unknown; errors?: unknown };
+  if (typeof value.detail === 'string') return value.detail;
+  if (Array.isArray(value.errors)) {
+    const messages = value.errors
+      .map(error => {
+        if (typeof error === 'string') return error;
+        if (error && typeof error === 'object' && 'error' in error && typeof error.error === 'string') {
+          return error.error;
+        }
+        return null;
+      })
+      .filter((message): message is string => Boolean(message));
+    if (messages.length > 0) return messages.join('、');
+  }
+  return null;
+}
+
+function hasFailed(payload: unknown): boolean {
+  return Boolean(payload && typeof payload === 'object' && 'success' in payload && payload.success === false);
+}
+
+function requestError(action: string, res: Response, payload?: unknown): Error {
+  const detail = payloadError(payload);
+  const suffix = detail ? `：${detail}` : res.status ? `（${res.status}）` : '';
+  return new Error(`${action}失敗${suffix}`);
+}
+
+async function readPayload(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+interface BundleListResult {
+  bundles: MissionBundle[];
+  warning: string | null;
+}
+
+async function fetchBundles(): Promise<BundleListResult> {
   const res = await fetch(`${API}/api/mission-bundles`);
-  if (!res.ok) throw new Error(`Failed to load mission bundles: ${res.status}`);
-  const payload = await res.json();
-  return Array.isArray(payload?.bundles)
-    ? payload.bundles as MissionBundle[]
-    : Array.isArray(payload?.missions) ? payload.missions as MissionBundle[] : [];
+  const payload = await readPayload(res);
+  const value = payload && typeof payload === 'object'
+    ? payload as { bundles?: unknown; missions?: unknown }
+    : {};
+  const bundles = Array.isArray(value.bundles)
+    ? value.bundles as MissionBundle[]
+    : Array.isArray(value.missions) ? value.missions as MissionBundle[] : [];
+  if (!res.ok || (hasFailed(payload) && bundles.length === 0)) {
+    throw requestError('讀取歷史任務', res, payload);
+  }
+  return {
+    bundles,
+    warning: hasFailed(payload) ? requestError('讀取歷史任務', res, payload).message : null,
+  };
 }
 
 async function fetchBundle(id: string): Promise<MissionBundle> {
   const res = await fetch(`${API}/api/mission-bundles/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error(`Failed to load mission bundle: ${res.status}`);
-  const payload = await res.json();
-  return (payload?.bundle ?? payload) as MissionBundle;
+  const payload = await readPayload(res);
+  if (!res.ok || hasFailed(payload)) throw requestError('讀取歷史任務', res, payload);
+  const value = payload && typeof payload === 'object' && 'bundle' in payload
+    ? payload.bundle
+    : payload;
+  return value as MissionBundle;
 }
 
 async function importBundles(): Promise<void> {
   const res = await fetch(`${API}/api/mission-bundles/import`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Failed to import mission bundles: ${res.status}`);
+  const payload = await readPayload(res);
+  if (!res.ok || hasFailed(payload)) throw requestError('匯入傳入任務', res, payload);
 }
 
 function artifactFetchUrl(url: string): string {
   // The URL is supplied by the backend.  Restrict it to the CSV artifact API
   // before concatenating VITE_API_URL so an imported metadata value cannot turn
   // the Apply action into an arbitrary browser fetch.
-  if (!url.startsWith('/api/mission-bundles/')) throw new Error('Invalid mission artifact URL');
+  const match = /^\/api\/mission-bundles\/([A-Za-z0-9_.-]+)\/artifacts\/(?:gps|noise)$/.exec(url);
+  if (!match || match[1] === '.' || match[1] === '..') {
+    throw new Error('任務資料網址無效');
+  }
   return `${API}${url}`;
 }
 
 async function fetchArtifactFile(artifact: MissionBundleArtifact): Promise<File> {
-  if (!artifact.url || !artifact.healthy) throw new Error(`${artifact.kind} artifact is not healthy`);
+  if (!artifact.url || !artifact.healthy) throw new Error(`${artifact.kind === 'gps' ? 'GPS' : 'Noise'} 資料不可用`);
   const res = await fetch(artifactFetchUrl(artifact.url));
-  if (!res.ok) throw new Error(`Failed to download ${artifact.filename}: ${res.status}`);
+  if (!res.ok) throw new Error(`無法下載 ${artifact.filename}（${res.status}）`);
   const blob = await res.blob();
   return new File([blob], artifact.filename, { type: blob.type || 'text/csv' });
 }
@@ -160,17 +240,22 @@ export function TrajectoryHistoryPanel({
   const [selectedBundle, setSelectedBundle] = useState<MissionBundle | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setStatus('loading');
     setError(null);
+    setWarning(null);
     try {
-      setBundles(await fetchBundles());
+      const next = await fetchBundles();
+      setBundles(next.bundles);
+      setWarning(next.warning);
       setStatus('idle');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setWarning(null);
       setStatus('error');
     }
   }, []);
@@ -179,9 +264,17 @@ export function TrajectoryHistoryPanel({
     void refresh();
   }, [refresh]);
 
+  const activeBundleId = selectedBundleId ?? selectedBundle?.mission_id ?? null;
+  const selected = activeBundleId
+    ? selectedBundle?.mission_id === activeBundleId
+      ? selectedBundle
+      : bundles.find(bundle => bundle.mission_id === activeBundleId) ?? null
+    : selectedBundle;
+
   const selectBundle = useCallback(async (id: string) => {
     setStatus('loading');
     setError(null);
+    setWarning(null);
     setApplyMessage(null);
     try {
       const bundle = await fetchBundle(id);
@@ -192,6 +285,7 @@ export function TrajectoryHistoryPanel({
       setStatus('idle');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setWarning(null);
       setStatus('error');
     }
   }, [onSelectEvent]);
@@ -201,7 +295,9 @@ export function TrajectoryHistoryPanel({
     setError(null);
     try {
       await importBundles();
-      setBundles(await fetchBundles());
+      const next = await fetchBundles();
+      setBundles(next.bundles);
+      setWarning(next.warning);
       setStatus('idle');
       setMinimized(false);
     } catch (err) {
@@ -211,41 +307,46 @@ export function TrajectoryHistoryPanel({
   }, []);
 
   const applyToSimulation = useCallback(async () => {
-    if (!selectedBundle || !onApplyToSimulation) return;
+    if (!selected || !onApplyToSimulation) return;
     setApplying(true);
     setApplyMessage(null);
     const files: { missionId: string; gpsFile?: File; noiseFile?: File } = {
-      missionId: selectedBundle.mission_id,
+      missionId: selected.mission_id,
     };
     const failures: string[] = [];
     try {
       const downloads: Array<Promise<void>> = [];
-      if (selectedBundle.gps?.healthy) {
-        downloads.push(fetchArtifactFile(selectedBundle.gps).then(file => { files.gpsFile = file; }).catch(err => {
-          failures.push(err instanceof Error ? err.message : String(err));
-        }));
+      if (selected.gps?.healthy) {
+        downloads.push(Promise.resolve()
+          .then(() => fetchArtifactFile(selected.gps!))
+          .then(file => { files.gpsFile = file; })
+          .catch(err => {
+            failures.push(err instanceof Error ? err.message : String(err));
+          }));
       }
-      if (selectedBundle.noise?.healthy) {
-        downloads.push(fetchArtifactFile(selectedBundle.noise).then(file => { files.noiseFile = file; }).catch(err => {
-          failures.push(err instanceof Error ? err.message : String(err));
-        }));
+      if (selected.noise?.healthy) {
+        downloads.push(Promise.resolve()
+          .then(() => fetchArtifactFile(selected.noise!))
+          .then(file => { files.noiseFile = file; })
+          .catch(err => {
+            failures.push(err instanceof Error ? err.message : String(err));
+          }));
       }
       await Promise.all(downloads);
       if (files.gpsFile || files.noiseFile) onApplyToSimulation(files);
-      setApplyMessage(failures.length > 0 ? failures.join('; ') : '已套用健康資料');
+      setApplyMessage(failures.length > 0 ? `套用資料失敗：${failures.join('；')}` : '已套用健康資料');
     } finally {
       setApplying(false);
     }
-  }, [onApplyToSimulation, selectedBundle]);
+  }, [onApplyToSimulation, selected]);
 
   const sortedBundles = [...bundles].sort((a, b) => {
-    const timeA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-    const timeB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    const timeA = parseDate(a.updated_at).getTime() || 0;
+    const timeB = parseDate(b.updated_at).getTime() || 0;
     return timeB - timeA;
   });
 
-  const activeBundleId = selectedBundleId ?? selectedBundle?.mission_id ?? null;
-  const selected = bundles.find(bundle => bundle.mission_id === activeBundleId) ?? selectedBundle;
+  const isPreviewing = Boolean(selected?.trajectory?.id && selected.trajectory.id === selectedEventId);
 
   return (
     <MinPanel
@@ -253,12 +354,14 @@ export function TrajectoryHistoryPanel({
       className="panel-ui trajectory-history-panel"
       minimized={minimized}
       onMinimizedChange={setMinimized}
+      toggleLabel={(isMinimized) => `${isMinimized ? '展開' : '收合'} 歷史任務清單`}
+      showActionsWhenMinimized
       actions={
         <>
           <button
             type="button"
             className="trajectory-history-panel__icon-btn"
-            aria-label="Import incoming"
+            aria-label="匯入傳入任務"
             onClick={() => void importIncoming()}
           >
             匯入傳入任務
@@ -266,7 +369,7 @@ export function TrajectoryHistoryPanel({
           <button
             type="button"
             className="trajectory-history-panel__icon-btn"
-            aria-label="Refresh"
+            aria-label="重新整理歷史任務"
             onClick={() => void refresh()}
           >
             重新整理
@@ -280,12 +383,15 @@ export function TrajectoryHistoryPanel({
       </PanelGrid>
 
       {status === 'error' && <PanelEmpty>{error}</PanelEmpty>}
+      {warning && <div role="status"><PanelStatus label={warning} tone="warning" /></div>}
       {bundles.length === 0 && status !== 'loading' && <PanelEmpty>未找到歷史任務包。</PanelEmpty>}
-      {status === 'loading' && <PanelStatus label="Loading" tone="waiting" />}
+      {status === 'loading' && <PanelStatus label="載入中" tone="waiting" />}
 
       <div className="trajectory-history-panel__list">
         {sortedBundles.map(bundle => {
-          const active = bundle.mission_id === activeBundleId || bundle.mission_id === selectedEventId;
+          const active = bundle.mission_id === activeBundleId
+            || bundle.trajectory?.id === selectedEventId
+            || (selectedBundle?.mission_id === bundle.mission_id && selectedBundle.trajectory?.id === selectedEventId);
           const badges = artifactBadges(bundle);
           return (
             <button
@@ -335,13 +441,13 @@ export function TrajectoryHistoryPanel({
           </div>
           <div>
             <strong>軌跡預覽：</strong>
-            <span>{selectedEventId === selected.mission_id ? 'GPS 軌跡預覽中' : '未預覽軌跡'}</span>
+            <span>{isPreviewing ? 'GPS 軌跡預覽中' : '未預覽軌跡'}</span>
           </div>
         </div>
       )}
 
       <PanelFooter>
-        <button type="button" className="trajectory-history-panel__link-btn" aria-label="Clear overlay" onClick={() => onSelectEvent(null)}>
+        <button type="button" className="trajectory-history-panel__link-btn" aria-label="清除軌跡" onClick={() => onSelectEvent(null)}>
           清除軌跡
         </button>
         {selected && onApplyToSimulation && (

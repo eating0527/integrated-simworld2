@@ -10,6 +10,7 @@ type ChildOverrides = {
   file?: string;
   phase?: string;
   error?: string;
+  last_sample_at?: string | null;
   upload_state?: string;
   upload_mode?: string;
   upload_started_at?: string | null;
@@ -105,15 +106,15 @@ describe('USRPTelemetry capture controls', () => {
   it('defaults Bind off and exposes independent UAV and USRP controls', async () => {
     render(<USRPTelemetry />);
 
-    expect(screen.getByRole('button', { name: 'Minimize 採樣控制面板' }))
+    expect(screen.getByRole('button', { name: '收合 採樣控制面板' }))
       .toHaveAttribute('aria-expanded', 'true');
 
     expect(await screen.findByText('無人機 GPS 採樣')).toBeInTheDocument();
-    expect(screen.getByText('USRP 干擾採樣')).toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: 'Bind services' }))
-      .toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
+    expect(screen.getByText('Noise 採樣')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(await screen.findByRole('button', { name: '開始 GPS 採樣' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: '開始 Noise 採樣' })).toBeEnabled();
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/capture/status?usrp_mode=test',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -140,14 +141,14 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByLabelText('AP3 Device Health')).toHaveTextContent('Offline');
-    expect(screen.getByLabelText('Raspberry Pi Device Health')).toHaveTextContent('Ready');
+    expect(await screen.findByLabelText('AP3 裝置就緒')).toHaveTextContent('離線');
+    expect(screen.getByLabelText('Raspberry Pi 裝置就緒')).toHaveTextContent('就緒');
     expect(screen.getByText('USB disconnected')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
-    const healthGrid = screen.getByLabelText('Device Health');
+    expect(screen.getByRole('button', { name: '開始 GPS 採樣' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '開始 Noise 採樣' })).toBeEnabled();
+    const healthGrid = screen.getByLabelText('裝置就緒');
     expect(healthGrid).toHaveStyle({ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' });
-    expect(screen.getByLabelText('AP3 Device Health')).toHaveStyle({ minWidth: '0', overflowWrap: 'anywhere' });
+    expect(screen.getByLabelText('AP3 裝置就緒')).toHaveStyle({ minWidth: '0', overflowWrap: 'anywhere' });
   });
 
   it('treats stale health as unknown and keeps it separate from a terminal child', async () => {
@@ -170,8 +171,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByLabelText('AP3 Device Health')).toHaveTextContent('Unknown');
-    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+    expect(await screen.findByLabelText('AP3 裝置就緒')).toHaveTextContent('未知');
+    expect(screen.getByText('已完成')).toBeInTheDocument();
     expect(screen.getByText('ap3 health result is stale')).toBeInTheDocument();
   });
 
@@ -183,8 +184,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('button', { name: 'Start UAV' })).toBeDisabled();
-    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Offline');
+    expect(await screen.findByRole('button', { name: '開始 GPS 採樣' })).toBeDisabled();
+    expect(screen.getByLabelText('AP3 裝置就緒')).toHaveTextContent('離線');
   });
 
   it('marks a hanging health probe unknown after its timeout', async () => {
@@ -205,8 +206,8 @@ describe('USRPTelemetry capture controls', () => {
       await vi.advanceTimersByTimeAsync(8000);
     });
 
-    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Unknown');
-    expect(screen.getByLabelText('Raspberry Pi Device Health')).toHaveTextContent('Unknown');
+    expect(screen.getByLabelText('AP3 裝置就緒')).toHaveTextContent('未知');
+    expect(screen.getByLabelText('Raspberry Pi 裝置就緒')).toHaveTextContent('未知');
     vi.useRealTimers();
   });
 
@@ -230,13 +231,13 @@ describe('USRPTelemetry capture controls', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Offline');
+    expect(screen.getByLabelText('AP3 裝置就緒')).toHaveTextContent('離線');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10000);
     });
 
-    expect(screen.getByLabelText('AP3 Device Health')).toHaveTextContent('Ready');
+    expect(screen.getByLabelText('AP3 裝置就緒')).toHaveTextContent('就緒');
     expect(healthCalls).toBeGreaterThanOrEqual(2);
     vi.useRealTimers();
   });
@@ -258,8 +259,8 @@ describe('USRPTelemetry capture controls', () => {
     });
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('button', { name: 'USRP mode' }));
-    await user.click(screen.getByRole('button', { name: 'Start USRP' }));
+    await user.click(await screen.findByRole('button', { name: 'USRP 模式' }));
+    await user.click(screen.getByRole('button', { name: '開始 Noise 採樣' }));
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/capture/usrp/start',
@@ -273,15 +274,15 @@ describe('USRPTelemetry capture controls', () => {
   it('uses a shared Bind start only when both services are ready', async () => {
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
-    await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
+    await user.click(await screen.findByRole('button', { name: '綁定任務模式' }));
+    await user.click(screen.getByRole('button', { name: '開始綁定任務' }));
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/capture/bind/start',
       expect.objectContaining({ method: 'POST' }),
     ));
-    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '開始 GPS 採樣' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '開始 Noise 採樣' })).toBeNull();
   });
 
   it('keeps mode switching interactive and explains an active Noise task', async () => {
@@ -293,15 +294,15 @@ describe('USRPTelemetry capture controls', () => {
 
     const user = await openTelemetry();
 
-    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    const bindSwitch = await screen.findByRole('button', { name: '綁定任務模式' });
     expect(bindSwitch).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '測試模式' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'USRP 模式' })).toBeDisabled();
 
     await user.click(bindSwitch);
 
     expect(screen.getByRole('alert')).toHaveTextContent('請先停止 Noise 任務。');
-    expect(bindSwitch).toHaveAttribute('aria-checked', 'false');
+    expect(bindSwitch).toHaveAttribute('aria-pressed', 'false');
     expect(vi.mocked(globalThis.fetch).mock.calls.some(([input]) => String(input).includes('/stop'))).toBe(false);
   });
 
@@ -316,7 +317,7 @@ describe('USRPTelemetry capture controls', () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
     const user = await openTelemetry();
 
-    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    const bindSwitch = await screen.findByRole('button', { name: '綁定任務模式' });
     expect(bindSwitch).toBeEnabled();
     await user.click(bindSwitch);
 
@@ -336,10 +337,10 @@ describe('USRPTelemetry capture controls', () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus(overrides)));
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
+    await user.click(await screen.findByRole('button', { name: '綁定任務模式' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(notice);
-    expect(screen.getByRole('switch', { name: 'Bind services' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('button', { name: '綁定任務模式' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('uses the Bound task blocker while an active Bound Mission is displayed', async () => {
@@ -352,12 +353,12 @@ describe('USRPTelemetry capture controls', () => {
     })));
     const user = await openTelemetry();
 
-    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
-    expect(bindSwitch).toHaveAttribute('aria-checked', 'true');
+    const bindSwitch = await screen.findByRole('button', { name: '綁定任務模式' });
+    expect(bindSwitch).toHaveAttribute('aria-pressed', 'true');
     await user.click(bindSwitch);
 
     expect(screen.getByRole('alert')).toHaveTextContent('請先停止當前任務。');
-    expect(bindSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(bindSwitch).toHaveAttribute('aria-pressed', 'true');
   });
 
   it.each([
@@ -371,10 +372,10 @@ describe('USRPTelemetry capture controls', () => {
     })));
     const user = await openTelemetry();
 
-    const bindSwitch = await screen.findByRole('switch', { name: 'Bind services' });
+    const bindSwitch = await screen.findByRole('button', { name: '綁定任務模式' });
     await user.click(bindSwitch);
 
-    expect(bindSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(bindSwitch).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -391,9 +392,9 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('Presumed running')).toBeInTheDocument();
-    expect(screen.getByText('Pending upload')).toBeInTheDocument();
-    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+    expect(await screen.findByText('推定執行中')).toBeInTheDocument();
+    expect(screen.getByText('等待上傳')).toBeInTheDocument();
+    expect(screen.queryByText('已完成')).not.toBeInTheDocument();
   });
 
   it('drives the mission badge from the canonical overall state', async () => {
@@ -407,7 +408,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('DEGRADED · GPS FAILED · NOISE RECORDING')).toBeInTheDocument();
+    expect(await screen.findByText('狀態異常')).toBeInTheDocument();
+    expect(screen.getByText('GPS 失敗')).toBeInTheDocument();
   });
 
   it('prioritizes offline over uncertain degraded reasons', async () => {
@@ -421,7 +423,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText(/^DEGRADED · NOISE OFFLINE/)).toBeInTheDocument();
+    expect(await screen.findByText('狀態異常')).toBeInTheDocument();
+    expect(screen.getByText('Noise 離線')).toBeInTheDocument();
   });
 
   it('keeps Noise mode selection enabled while GPS is recording', async () => {
@@ -433,9 +436,9 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('button', { name: 'Test mode' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'USRP mode' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Start USRP' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: '測試模式' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'USRP 模式' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '開始 Noise 採樣' })).toBeEnabled();
   });
 
   it('shows GPS offline while Noise keeps recording after freshness loss', async () => {
@@ -455,9 +458,10 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('DEGRADED · GPS OFFLINE · NOISE RECORDING')).toBeInTheDocument();
+    expect(await screen.findByText('狀態異常')).toBeInTheDocument();
+    expect(screen.getByText('GPS 離線')).toBeInTheDocument();
     expect(screen.getAllByText('GPS sample is stale').length).toBeGreaterThan(0);
-    expect(screen.getByText('Presumed running')).toBeInTheDocument();
+    expect(screen.getByText('推定執行中')).toBeInTheDocument();
   });
 
   it('shows AP3 Resume Timeout and the available Partial GPS Result while Noise continues', async () => {
@@ -476,9 +480,47 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('DEGRADED · GPS RESUME TIMEOUT · NOISE RECORDING')).toBeInTheDocument();
-    expect(screen.getByText('Partial GPS file available.')).toBeInTheDocument();
+    expect(await screen.findByText('狀態異常')).toBeInTheDocument();
+    expect(screen.getByText('可用的部分 GPS 檔案。')).toBeInTheDocument();
     expect(screen.getByText('AP3 Resume Timeout; partial GPS file available')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '恢復 GPS 採樣' })).toBeNull();
+  });
+
+  it('offers GPS recovery for a resume-timeout mission', async () => {
+    const status = captureStatus({
+      missionId: 'resume_recovery',
+      uav: {
+        service: 'failed',
+        file: 'ready',
+        phase: 'resume_timeout',
+      },
+    });
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '恢復 GPS 採樣' }));
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/uav/resume?mission_id=resume_recovery',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('does not send a stop request for a presumed-running child', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      missionId: 'uncertain_gps',
+      uav: { service: 'presumed_running', file: 'recording', phase: 'reconciling' },
+    })));
+
+    await openTelemetry();
+
+    const stop = await screen.findByRole('button', { name: '停止 GPS 採樣' });
+    expect(stop).toBeDisabled();
+    expect(stop).toHaveAttribute('aria-describedby');
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      '/api/capture/uav/stop?mission_id=uncertain_gps',
+      expect.anything(),
+    );
   });
 
   it('shows completed-with-warning child context', async () => {
@@ -492,7 +534,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('COMPLETED WITH WARNING · NOISE FAILED')).toBeInTheDocument();
+    expect(await screen.findByText('已完成（有注意事項）')).toBeInTheDocument();
+    expect(screen.getByText('Noise 失敗')).toBeInTheDocument();
   });
 
   it('shows a failed GPS reason for completed-with-warning missions', async () => {
@@ -506,7 +549,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('COMPLETED WITH WARNING · GPS FAILED')).toBeInTheDocument();
+    expect(await screen.findByText('已完成（有注意事項）')).toBeInTheDocument();
+    expect(screen.getByText('GPS 失敗')).toBeInTheDocument();
   });
 
   it('normalizes unknown child contract values safely', async () => {
@@ -518,11 +562,11 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
+    expect((await screen.findAllByText('未知')).length).toBeGreaterThan(0);
     const gps = screen.getByText('無人機 GPS 採樣').closest('section');
     expect(gps).not.toBeNull();
-    expect(within(gps as HTMLElement).getAllByText('Unknown')).toHaveLength(4);
-    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeDisabled();
+    expect(within(gps as HTMLElement).getAllByText('未知')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: '開始 GPS 採樣' })).toBeDisabled();
   });
 
   it('keeps legacy children without phase idle and operable', async () => {
@@ -532,11 +576,11 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    await screen.findByText('Mission: legacy_child');
+    await screen.findByText('任務：legacy_child');
     const gps = screen.getByText('無人機 GPS 採樣').closest('section');
     expect(gps).not.toBeNull();
-    expect(within(gps as HTMLElement).getByText('Phase').nextElementSibling).toHaveTextContent('Idle');
-    expect(screen.getByRole('button', { name: 'Start UAV' })).toBeEnabled();
+    expect(within(gps as HTMLElement).getByText('階段').nextElementSibling).toHaveTextContent('閒置');
+    expect(screen.getByRole('button', { name: '開始 GPS 採樣' })).toBeEnabled();
   });
 
   it('shows unknown for missing or unsupported overall states', async () => {
@@ -547,8 +591,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
-    expect(screen.queryByText(/Mission: future_state · ready/i)).not.toBeInTheDocument();
+    expect(await screen.findByText('未知')).toBeInTheDocument();
+    expect(screen.queryByText(/任務：future_state · 就緒/i)).not.toBeInTheDocument();
   });
 
   it('does not default a missing overall state to ready', async () => {
@@ -558,10 +602,10 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
+    expect(await screen.findByText('未知')).toBeInTheDocument();
   });
 
-  it('restores active Bind missions and offers individual stop plus Stop All', async () => {
+  it('restores active Bound missions with one common stop control', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'bound_1',
       bind: true,
@@ -572,14 +616,16 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('switch', { name: 'Bind services' }))
-      .toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('button', { name: 'Stop UAV' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Stop USRP' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Stop All' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: '停止 GPS 採樣' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '停止 Noise 採樣' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '測試模式' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'USRP 模式' })).toBeNull();
+    expect(screen.getByRole('button', { name: '停止綁定任務' })).toBeEnabled();
   });
 
-  it('keeps Stop All consumed after restoring a mission', async () => {
+  it('keeps common Bound stop consumed after restoring a mission', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'bound_stopping',
       bind: true,
@@ -591,10 +637,10 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('button', { name: 'Stop All' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: '停止綁定任務' })).toBeDisabled();
   });
 
-  it('offers Retry Stop only for the failed child and keeps a stopped sibling disabled', async () => {
+  it('offers Retry Stop only for the failed child and hides a stopped sibling action', async () => {
     const status = captureStatus({
       missionId: 'retry_child',
       bind: true,
@@ -611,13 +657,13 @@ describe('USRPTelemetry capture controls', () => {
     });
     const user = await openTelemetry();
 
-    await screen.findByRole('button', { name: 'Retry Stop' });
+    await screen.findByRole('button', { name: '重試停止 GPS 採樣' });
     const gps = screen.getByText('無人機 GPS 採樣').closest('section') as HTMLElement;
-    const noise = screen.getByText('USRP 干擾採樣').closest('section') as HTMLElement;
-    expect(within(gps).getByRole('button', { name: 'Retry Stop' })).toBeEnabled();
-    expect(within(noise).getByRole('button', { name: 'Stopped' })).toBeDisabled();
+    const noise = screen.getByText('Noise 採樣').closest('section') as HTMLElement;
+    expect(within(gps).getByRole('button', { name: '重試停止 GPS 採樣' })).toBeEnabled();
+    expect(within(noise).queryByRole('button', { name: /停止 Noise 採樣/ })).toBeNull();
 
-    await user.click(within(gps).getByRole('button', { name: 'Retry Stop' }));
+    await user.click(within(gps).getByRole('button', { name: '重試停止 GPS 採樣' }));
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/capture/uav/retry-stop?mission_id=retry_child',
       expect.objectContaining({ method: 'POST' }),
@@ -647,15 +693,15 @@ describe('USRPTelemetry capture controls', () => {
 
     const gps = await screen.findByText('無人機 GPS 採樣');
     const gpsSection = gps.closest('section') as HTMLElement;
-    expect(within(gpsSection).getAllByText('Idle').length).toBeGreaterThanOrEqual(2);
-    expect(within(gpsSection).getByText('None')).toBeInTheDocument();
-    expect(within(gpsSection).getByLabelText('無人機 GPS 採樣 last mission'))
+    expect(within(gpsSection).getAllByText('閒置').length).toBeGreaterThanOrEqual(2);
+    expect(within(gpsSection).getByText('無檔案')).toBeInTheDocument();
+    expect(within(gpsSection).getByLabelText('無人機 GPS 採樣 上次任務'))
       .toHaveTextContent('08/14 00:00:00 #12345');
-    const noise = screen.getByText('USRP 干擾採樣').closest('section') as HTMLElement;
-    expect(within(noise).getByLabelText('USRP 干擾採樣 last mission')).toHaveTextContent('—');
+    const noise = screen.getByText('Noise 採樣').closest('section') as HTMLElement;
+    expect(within(noise).getByLabelText('Noise 採樣 上次任務')).toHaveTextContent('—');
     expect(screen.queryByText('old terminal error')).toBeNull();
-    expect(screen.getByRole('switch', { name: 'Bind services' }))
-      .toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'false');
   });
 
   it('restores the active projection instead of terminal compatibility fields', async () => {
@@ -684,10 +730,10 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('switch', { name: 'Bind services' }))
-      .toHaveAttribute('aria-checked', 'true');
-    expect(screen.getAllByText('Recording').length).toBeGreaterThanOrEqual(2);
-    expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getAllByText('錄製中').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('已停止')).not.toBeInTheDocument();
     expect(screen.getAllByText(/08\/14 01:00:00 #ctive/).length).toBe(2);
   });
 
@@ -713,16 +759,45 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('switch', { name: 'Bind services' }))
-      .toHaveAttribute('aria-checked', 'false');
-    expect(screen.getAllByText('Recording').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByRole('button', { name: 'Stop UAV' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Stop USRP' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getAllByText('錄製中').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole('button', { name: '停止 GPS 採樣' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '停止 Noise 採樣' })).toBeEnabled();
   });
 
   it('formats mission and health timestamps in Asia/Taipei', () => {
     expect(formatTaipeiTime('2026-08-13T16:00:00Z')).toBe('08/14 00:00:00');
+    expect(formatTaipeiTime('2026-08-13T16:00:00')).toBe('08/13 16:00:00');
     expect(formatTaipeiTime('bad timestamp')).toBe('—');
+  });
+
+  it('labels the last sample according to its child domain', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
+      usrp: { last_sample_at: '2026-08-13T16:00:00Z' },
+    })));
+
+    const user = await openTelemetry();
+
+    const noise = screen.getByText('Noise 採樣').closest('section') as HTMLElement;
+    await user.click(within(noise).getByText('歷史任務與詳細進度'));
+    expect(within(noise).getByText('最後 Noise')).toBeInTheDocument();
+    expect(within(noise).queryByText('最後 GPS')).toBeNull();
+  });
+
+  it('clears a child operation error after a successful status refresh', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/capture/uav/start')) return jsonResponse({ detail: 'AP3 unavailable' }, false);
+      return jsonResponse(captureStatus());
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '開始 GPS 採樣' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('AP3 unavailable');
+
+    await user.click(screen.getByRole('button', { name: '重新整理狀態' }));
+    await waitFor(() => expect(screen.queryByText('AP3 unavailable')).toBeNull());
   });
 
   it('disables USRP Retry Stop while Raspberry Pi is offline and enables it after recovery', async () => {
@@ -750,12 +825,12 @@ describe('USRPTelemetry capture controls', () => {
     vi.useFakeTimers();
     render(<USRPTelemetry />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    const noise = screen.getByText('USRP 干擾採樣').closest('section') as HTMLElement;
-    expect(within(noise).getByRole('button', { name: 'Retry Stop' })).toBeDisabled();
-    expect(within(noise).getByText(/Reconnect Raspberry Pi/i)).toBeInTheDocument();
+    const noise = screen.getByText('Noise 採樣').closest('section') as HTMLElement;
+    expect(within(noise).getByRole('button', { name: '重試停止 Noise 採樣' })).toBeDisabled();
+    expect(within(noise).getByText(/請先重新連線 Raspberry Pi/)).toBeInTheDocument();
 
     await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
-    expect(within(noise).getByRole('button', { name: 'Retry Stop' })).toBeEnabled();
+    expect(within(noise).getByRole('button', { name: '重試停止 Noise 採樣' })).toBeEnabled();
     vi.useRealTimers();
   });
 
@@ -770,8 +845,8 @@ describe('USRPTelemetry capture controls', () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('button', { name: 'Stop UAV' }));
-    await user.click(screen.getByRole('button', { name: 'Stop USRP' }));
+    await user.click(await screen.findByRole('button', { name: '停止 GPS 採樣' }));
+    await user.click(screen.getByRole('button', { name: '停止 Noise 採樣' }));
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/capture/uav/stop?mission_id=gps_job',
@@ -794,8 +869,8 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    const uavProgress = await screen.findByLabelText('無人機 GPS 採樣 progress');
-    const usrpProgress = screen.getByLabelText('USRP 干擾採樣 progress');
+    const uavProgress = await screen.findByLabelText('無人機 GPS 採樣 進度');
+    const usrpProgress = screen.getByLabelText('Noise 採樣 進度');
     expect(within(uavProgress).getByText(/收尾 — 進行中/)).toBeInTheDocument();
     expect(within(usrpProgress).getByText(/收尾與上傳 — 進行中/)).toBeInTheDocument();
     expect(within(usrpProgress).getByText(/連線與設定 — 已完成/)).toBeInTheDocument();
@@ -813,7 +888,7 @@ describe('USRPTelemetry capture controls', () => {
     })));
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('button', { name: 'Retry upload' }));
+    await user.click(await screen.findByRole('button', { name: '重試上傳' }));
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/capture/usrp/upload/retry?mission_id=noise_pending',
@@ -835,9 +910,9 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByText('Reconciling presumed-running state')).toHaveAttribute('aria-live', 'polite');
+    expect(await screen.findByText('目前推定仍在執行，請先同步狀態再停止。')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('remote command timed out');
-    expect(screen.getByText(/reconcile status before stopping/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '停止 Noise 採樣' })).toBeDisabled();
   });
 
   it('shows plain text start failures without a JSON parse error', async () => {
@@ -849,7 +924,7 @@ describe('USRPTelemetry capture controls', () => {
     });
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('button', { name: 'Start USRP' }));
+    await user.click(await screen.findByRole('button', { name: '開始 Noise 採樣' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Internal Server Error');
     expect(screen.queryByText(/Unexpected token/)).not.toBeInTheDocument();
@@ -869,7 +944,7 @@ describe('USRPTelemetry capture controls', () => {
     await openTelemetry();
 
     expect(await screen.findByText(/手動重試 \(\d+ s\)/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry upload' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重試上傳' })).toBeDisabled();
   });
 
   it('shows persisted automatic retry countdown and updates it each second', async () => {
@@ -898,7 +973,7 @@ describe('USRPTelemetry capture controls', () => {
       vi.advanceTimersByTime(1000);
     });
     expect(screen.getByText(/自動重試 1\/3 \(4 s\)/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重試上傳' })).not.toBeInTheDocument();
   });
 
   it('shows automatic retry elapsed text and exhaustion without a transient error', async () => {
@@ -915,7 +990,7 @@ describe('USRPTelemetry capture controls', () => {
     })));
     const user = await openTelemetry();
     expect(await screen.findByText(/正在重試 2\/3 \(\d+ s\)/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重試上傳' })).not.toBeInTheDocument();
 
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'noise_auto_done',
@@ -926,7 +1001,7 @@ describe('USRPTelemetry capture controls', () => {
         upload_retry_attempt: 3, upload_retry_max_attempts: 3,
       },
     })));
-    await user.click(screen.getByRole('button', { name: 'Refresh status' }));
+    await user.click(screen.getByRole('button', { name: '重新整理狀態' }));
     expect(await screen.findByText('自動重試已用盡')).toBeInTheDocument();
   });
 
@@ -943,11 +1018,14 @@ describe('USRPTelemetry capture controls', () => {
     });
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
-    await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
+    await user.click(await screen.findByRole('button', { name: '綁定任務模式' }));
+    await user.click(screen.getByRole('button', { name: '開始綁定任務' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('AP3: USB disconnected');
-    expect(screen.getByRole('alert')).toHaveTextContent('Raspberry Pi: SSH timeout');
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts.map(alert => alert.textContent)).toEqual(expect.arrayContaining([
+      'AP3: USB disconnected',
+      'Raspberry Pi: SSH timeout',
+    ]));
   });
 
   it('names AP3 when only AP3 Bound Start preflight fails', async () => {
@@ -959,14 +1037,15 @@ describe('USRPTelemetry capture controls', () => {
     });
     const user = await openTelemetry();
 
-    await user.click(await screen.findByRole('switch', { name: 'Bind services' }));
-    await user.click(screen.getByRole('button', { name: 'Start Bound Capture' }));
+    await user.click(await screen.findByRole('button', { name: '綁定任務模式' }));
+    await user.click(screen.getByRole('button', { name: '開始綁定任務' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('AP3: Forwarding unavailable');
-    expect(screen.getByRole('alert')).not.toHaveTextContent('Raspberry Pi');
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts.map(alert => alert.textContent)).toContain('AP3: Forwarding unavailable');
+    expect(alerts.map(alert => alert.textContent).join(' ')).not.toContain('Raspberry Pi');
   });
 
-  it('keeps the mode switch interactive while a Bound child is finalizing or upload is pending', async () => {
+  it('keeps only common controls while a Bound child is finalizing or upload is pending', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'pending-bound',
       bind: true,
@@ -977,10 +1056,10 @@ describe('USRPTelemetry capture controls', () => {
 
     await openTelemetry();
 
-    expect(await screen.findByRole('switch', { name: 'Bind services' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Test mode' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'USRP mode' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Start Bound Capture' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: '綁定任務模式' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '測試模式' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'USRP 模式' })).toBeNull();
+    expect(screen.getByRole('button', { name: '開始綁定任務' })).toBeDisabled();
   });
 
   it('polls active status single-flight after settle and stops on unmount', async () => {
@@ -1097,7 +1176,7 @@ describe('USRPTelemetry capture controls', () => {
 
     const view = render(<USRPTelemetry />);
     await act(async () => { await Promise.resolve(); });
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh status' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: '重新整理狀態' }));
     expect(statusCalls).toBe(1);
 
     view.unmount();
@@ -1109,11 +1188,11 @@ describe('USRPTelemetry capture controls', () => {
     render(<USRPTelemetry />);
 
     expect(await screen.findByRole('button', { name: '獨立採樣模式' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('switch', { name: 'Bind services' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('button', { name: '綁定任務模式' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByText('裝置就緒')).toBeInTheDocument();
     expect(screen.getByText('任務狀態')).toBeInTheDocument();
     expect(screen.getByText('無人機 GPS 採樣')).toBeInTheDocument();
-    expect(screen.getByText('USRP 干擾採樣')).toBeInTheDocument();
+    expect(screen.getByText('Noise 採樣')).toBeInTheDocument();
 
     // Chinese buttons
     expect(screen.getByText('開始 GPS 採樣')).toBeInTheDocument();
@@ -1121,8 +1200,8 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByText('重新整理狀態')).toBeInTheDocument();
 
     // Grouped progress steps
-    const uavProgress = screen.getByLabelText('無人機 GPS 採樣 progress');
-    const usrpProgress = screen.getByLabelText('USRP 干擾採樣 progress');
+    const uavProgress = screen.getByLabelText('無人機 GPS 採樣 進度');
+    const usrpProgress = screen.getByLabelText('Noise 採樣 進度');
     expect(within(uavProgress).getByText(/準備 —/)).toBeInTheDocument();
     expect(within(uavProgress).getByText(/錄製 —/)).toBeInTheDocument();
     expect(within(uavProgress).getByText(/收尾 —/)).toBeInTheDocument();
@@ -1130,10 +1209,23 @@ describe('USRPTelemetry capture controls', () => {
     expect(within(usrpProgress).getByText(/收尾與上傳 —/)).toBeInTheDocument();
 
     // Switch to Bound mode
-    await user.click(screen.getByRole('switch', { name: 'Bind services' }));
+    await user.click(screen.getByRole('button', { name: '綁定任務模式' }));
     expect(screen.getByRole('button', { name: '獨立採樣模式' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('switch', { name: 'Bind services' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('button', { name: '綁定任務模式' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('開始綁定任務')).toBeInTheDocument();
     expect(screen.getByText('停止綁定任務')).toBeInTheDocument();
+  });
+
+  it('uses Chinese accessible labels and explains an unavailable AP3 blocker', async () => {
+    const status = captureStatus();
+    status.device_health.ap3.state = 'offline';
+    vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(status));
+
+    render(<USRPTelemetry />);
+
+    expect(await screen.findByRole('button', { name: '綁定任務模式' })).toBeInTheDocument();
+    const start = screen.getByRole('button', { name: '開始 GPS 採樣' });
+    expect(start).toBeDisabled();
+    expect(screen.getByText('AP3 尚未就緒。')).toBeInTheDocument();
   });
 });

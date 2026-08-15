@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -15,6 +15,39 @@ function renderWorkspace() {
     </Workspace>,
   );
 }
+
+function stubMatchMedia(matches: boolean) {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const query = {
+    matches,
+    media: '(max-width: 1199px)',
+    onchange: null,
+    addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+    removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+    addListener: (listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+    removeListener: (listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+    dispatchEvent: () => true,
+    emit(next: boolean) {
+      query.matches = next;
+      listeners.forEach(listener => listener({ matches: next, media: query.media } as MediaQueryListEvent));
+    },
+  } as MediaQueryList & { emit: (matches: boolean) => void };
+  const previous = window.matchMedia;
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => query });
+  return () => Object.defineProperty(window, 'matchMedia', { configurable: true, value: previous });
+}
+
+let restoreMobileMatchMedia: (() => void) | null = null;
+
+function useMobileMatchMedia() {
+  restoreMobileMatchMedia?.();
+  restoreMobileMatchMedia = stubMatchMedia(true);
+}
+
+afterEach(() => {
+  restoreMobileMatchMedia?.();
+  restoreMobileMatchMedia = null;
+});
 
 describe('Workspace', () => {
   it('toggles desktop rails independently', async () => {
@@ -85,6 +118,7 @@ describe('Workspace', () => {
   });
 
   it('switches mobile rails mutually exclusively and uses the current action label to close', async () => {
+    useMobileMatchMedia();
     const user = userEvent.setup();
     renderWorkspace();
 
@@ -107,6 +141,7 @@ describe('Workspace', () => {
   });
 
   it('keeps the mobile drawer open for a prevented Escape and otherwise closes it', async () => {
+    useMobileMatchMedia();
     const user = userEvent.setup();
     const preventEscape = (event: KeyboardEvent) => event.preventDefault();
     window.addEventListener('keydown', preventEscape);
@@ -129,6 +164,7 @@ describe('Workspace', () => {
   });
 
   it('opens the mobile rail as a focus-trapped dialog and restores focus on Escape', async () => {
+    useMobileMatchMedia();
     const user = userEvent.setup();
     renderWorkspace();
 
@@ -154,6 +190,7 @@ describe('Workspace', () => {
   });
 
   it('restores focus after closing a mobile drawer from its backdrop', async () => {
+    useMobileMatchMedia();
     const user = userEvent.setup();
     renderWorkspace();
 
@@ -165,6 +202,7 @@ describe('Workspace', () => {
   });
 
   it('closes the mobile drawer from its backdrop', async () => {
+    useMobileMatchMedia();
     const user = userEvent.setup();
     renderWorkspace();
 
@@ -177,6 +215,7 @@ describe('Workspace', () => {
   });
 
   it('provides a visible close button in the mobile drawer header that closes the drawer and restores focus', async () => {
+    useMobileMatchMedia();
     const user = userEvent.setup();
     renderWorkspace();
 
@@ -194,5 +233,48 @@ describe('Workspace', () => {
     await user.click(closeBtn);
     expect(screen.queryByRole('dialog', { name: '左側工作區' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it('removes closed mobile rails from the focus and accessibility trees', async () => {
+    const restoreMatchMedia = stubMatchMedia(true);
+    const user = userEvent.setup();
+
+    try {
+      renderWorkspace();
+
+      const [leftRail, rightRail] = screen.getAllByRole('complementary', { hidden: true });
+      expect(leftRail).toHaveAttribute('aria-hidden', 'true');
+      expect(leftRail).toHaveAttribute('inert');
+      expect(rightRail).toHaveAttribute('aria-hidden', 'true');
+      expect(rightRail).toHaveAttribute('inert');
+
+      await user.click(screen.getByRole('button', { name: '開啟左側工作區' }));
+
+      expect(leftRail).toHaveAttribute('aria-hidden', 'false');
+      expect(leftRail).not.toHaveAttribute('inert');
+      expect(rightRail).toHaveAttribute('aria-hidden', 'true');
+      expect(rightRail).toHaveAttribute('inert');
+    } finally {
+      restoreMatchMedia();
+    }
+  });
+
+  it('closes a mobile drawer when crossing into drawer mode', async () => {
+    const restoreMatchMedia = stubMatchMedia(false);
+    const user = userEvent.setup();
+
+    try {
+      renderWorkspace();
+      await user.click(screen.getByRole('button', { name: '開啟左側工作區' }));
+      expect(screen.getByRole('button', { name: '關閉左側工作區' })).toHaveAttribute('aria-expanded', 'true');
+
+      act(() => {
+        (window.matchMedia('(max-width: 1199px)') as MediaQueryList & { emit: (matches: boolean) => void }).emit(true);
+      });
+
+      expect(screen.getByRole('button', { name: '開啟左側工作區' })).toHaveAttribute('aria-expanded', 'false');
+    } finally {
+      restoreMatchMedia();
+    }
   });
 });

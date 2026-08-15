@@ -76,7 +76,7 @@ describe('TrajectoryHistoryPanel mission bundle import', () => {
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: /restore 歷史任務清單/i }));
+    await user.click(screen.getByRole('button', { name: /展開 歷史任務清單/ }));
     await waitFor(() => expect(screen.getByText('flight-1')).toBeInTheDocument());
     expect(screen.getByText('[GPS]')).toBeInTheDocument();
 
@@ -101,7 +101,7 @@ describe('TrajectoryHistoryPanel mission bundle import', () => {
   it('distinguishes healthy, invalid, and missing artifacts and enables apply for noise-only bundle', async () => {
     const noiseOnlyBundle = {
       mission_id: 'noise-flight-2',
-      updated_at: '2026-08-15T12:00:00Z',
+      updated_at: '2026-08-15T12:00:00',
       labels: [],
       gps: {
         kind: 'gps' as const,
@@ -162,10 +162,11 @@ describe('TrajectoryHistoryPanel mission bundle import', () => {
     );
 
     // Panel is initially collapsed
-    expect(screen.getByRole('button', { name: /restore 歷史任務清單/i })).toHaveAttribute('aria-expanded', 'false');
-    await user.click(screen.getByRole('button', { name: /restore 歷史任務清單/i }));
+    expect(screen.getByRole('button', { name: /展開 歷史任務清單/ })).toHaveAttribute('aria-expanded', 'false');
+    await user.click(screen.getByRole('button', { name: /展開 歷史任務清單/ }));
 
     await waitFor(() => expect(screen.getByText('noise-flight-2')).toBeInTheDocument());
+    expect(screen.getByText('08/15 12:00:00')).toBeInTheDocument();
     expect(screen.getByText('[GPS 無效]')).toBeInTheDocument();
     expect(screen.getByText('[NOISE]')).toBeInTheDocument();
 
@@ -183,6 +184,46 @@ describe('TrajectoryHistoryPanel mission bundle import', () => {
     expect(applied.missionId).toBe('noise-flight-2');
     expect(applied.noiseFile).toBeInstanceOf(File);
     expect(applied.gpsFile).toBeUndefined();
+  });
+
+  it('keeps mission selection separate from the GPS preview state', async () => {
+    const trajectory = {
+      id: 'incoming-flight-1-gps',
+      missionId: 'flight-1',
+      deviceCount: 1,
+      pointCount: 2,
+      devices: [],
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/mission-bundles')) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, bundles: [bundle] }),
+        } as Response;
+      }
+      if (url.endsWith('/api/mission-bundles/flight-1')) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, bundle: { ...bundle, trajectory } }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <TrajectoryHistoryPanel
+        selectedEventId={trajectory.id}
+        onSelectEvent={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /展開 歷史任務清單/ }));
+    await waitFor(() => expect(screen.getByText('flight-1')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /flight-1/i }));
+
+    await waitFor(() => expect(screen.getByText('GPS 軌跡預覽中')).toBeInTheDocument());
   });
 
   it('auto-expands the panel when Import incoming succeeds, but stays collapsed on normal refresh', async () => {
@@ -211,18 +252,122 @@ describe('TrajectoryHistoryPanel mission bundle import', () => {
       />,
     );
 
-    const titleBtn = screen.getByRole('button', { name: /restore 歷史任務清單/i });
+    const titleBtn = screen.getByRole('button', { name: /展開 歷史任務清單/ });
     expect(titleBtn).toHaveAttribute('aria-expanded', 'false');
 
-    // Restore to access Import incoming button
-    await user.click(titleBtn);
-    expect(titleBtn).toHaveAttribute('aria-expanded', 'true');
-
     // Click Import incoming
-    const importBtn = screen.getByRole('button', { name: 'Import incoming' });
+    const importBtn = screen.getByRole('button', { name: '匯入傳入任務' });
     await user.click(importBtn);
 
     // Panel remains expanded after import
     await waitFor(() => expect(titleBtn).toHaveAttribute('aria-expanded', 'true'));
+  });
+
+  it('keeps usable bundles visible when listing reports scan errors', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/mission-bundles')) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: false,
+            bundles: [bundle],
+            errors: [{ error: 'scan failed' }],
+          }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <TrajectoryHistoryPanel
+        selectedEventId={null}
+        onSelectEvent={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /展開 歷史任務清單/ }));
+    await waitFor(() => expect(screen.getByText('flight-1')).toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent('scan failed');
+  });
+
+  it('rejects artifact paths outside the mission artifact endpoint', async () => {
+    const unsafeBundle = {
+      ...bundle,
+      gps: {
+        ...bundle.gps,
+        url: '/api/mission-bundles/../../capture/status',
+      },
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/mission-bundles')) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, bundles: [unsafeBundle] }),
+        } as Response;
+      }
+      if (url.endsWith('/api/mission-bundles/flight-1')) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, bundle: unsafeBundle }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    render(
+      <TrajectoryHistoryPanel
+        selectedEventId={null}
+        onSelectEvent={vi.fn()}
+        onApplyToSimulation={onApply}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /展開 歷史任務清單/ }));
+    await waitFor(() => expect(screen.getByText('flight-1')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /flight-1/i }));
+    await user.click(await screen.findByRole('button', { name: '套用至模擬' }));
+
+    await waitFor(() => expect(screen.getByText(/套用資料失敗：任務資料網址無效/)).toBeInTheDocument());
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('stays collapsed when importing incoming missions reports a partial failure', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/mission-bundles')) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, bundles: [] }),
+        } as Response;
+      }
+      if (url.endsWith('/api/mission-bundles/import')) {
+        return {
+          ok: true,
+          status: 207,
+          json: async () => ({ success: false, errors: [{ error: 'scan failed' }] }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <TrajectoryHistoryPanel
+        selectedEventId={null}
+        onSelectEvent={vi.fn()}
+      />,
+    );
+
+    const titleBtn = screen.getByRole('button', { name: /展開 歷史任務清單/ });
+    expect(titleBtn).toHaveAttribute('aria-expanded', 'false');
+    await user.click(screen.getByRole('button', { name: '匯入傳入任務' }));
+
+    await waitFor(() => expect(screen.getByText(/匯入傳入任務失敗/)).toBeInTheDocument());
+    expect(titleBtn).toHaveAttribute('aria-expanded', 'false');
   });
 });

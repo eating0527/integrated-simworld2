@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { MinPanel } from './MinPanel';
 import { PanelStatus } from './PanelUi';
@@ -38,6 +38,8 @@ interface ChildState {
   upload_retry_next_attempt_at?: string | null;
   upload_retry_active_started_at?: string | null;
   upload_retry_last_error?: string;
+  upload_job_id?: string | null;
+  upload_finished_at?: string | null;
 }
 
 interface DeviceHealth {
@@ -112,40 +114,40 @@ const EMPTY_CHILD: ChildState = {
 };
 
 const PHASE_LABELS: Record<PhaseDisplay, string> = {
-  idle: 'Idle', preflight: 'Preflight', connecting: 'Connecting', configuring: 'Configuring',
-  starting_service: 'Starting service', recording: 'Recording', stopping_service: 'Stopping service',
-  finalizing_file: 'Finalizing CSV', upload_pending: 'Upload pending', uploading: 'Uploading',
-  stopping: 'Stopping', completed: 'Complete', stopped: 'Stopped',
-  reconciling: 'Reconciling presumed-running state', stop_failed: 'Stop failed',
-  resume_timeout: 'Resume timeout', failed: 'Failed', unknown: 'Unknown',
+  idle: '閒置', preflight: '前置檢查', connecting: '連線中', configuring: '設定中',
+  starting_service: '啟動服務中', recording: '錄製中', stopping_service: '停止服務中',
+  finalizing_file: '整理 CSV 中', upload_pending: '等待上傳', uploading: '上傳中',
+  stopping: '停止中', completed: '已完成', stopped: '已停止',
+  reconciling: '同步推定狀態中', stop_failed: '停止失敗',
+  resume_timeout: '恢復逾時', failed: '失敗', unknown: '未知',
 };
 
 const CONNECTION_LABELS: Record<ConnectionState, string> = {
-  ready: 'Ready',
-  offline: 'Offline',
-  unknown: 'Unknown',
+  ready: '就緒',
+  offline: '離線',
+  unknown: '未知',
 };
 
 const SERVICE_LABELS: Record<ServiceDisplay, string> = {
-  idle: 'Idle',
-  starting: 'Starting',
-  running: 'Running',
-  presumed_running: 'Presumed running',
-  stopping: 'Stopping',
-  stopped: 'Stopped',
-  failed: 'Failed',
-  unknown: 'Unknown',
+  idle: '閒置',
+  starting: '啟動中',
+  running: '執行中',
+  presumed_running: '推定執行中',
+  stopping: '停止中',
+  stopped: '已停止',
+  failed: '失敗',
+  unknown: '未知',
 };
 
 const FILE_LABELS: Record<FileDisplay, string> = {
-  none: 'None',
-  recording: 'Recording',
-  finalizing: 'Finalizing',
-  ready: 'Ready',
-  upload_pending: 'Pending upload',
-  uploaded: 'Uploaded',
-  failed: 'Failed',
-  unknown: 'Unknown',
+  none: '無檔案',
+  recording: '錄製中',
+  finalizing: '整理中',
+  ready: '可用',
+  upload_pending: '等待上傳',
+  uploaded: '已上傳',
+  failed: '失敗',
+  unknown: '未知',
 };
 
 const OVERALL_STATES = new Set<OverallState>([
@@ -154,9 +156,9 @@ const OVERALL_STATES = new Set<OverallState>([
 ]);
 
 const OVERALL_LABELS: Record<DisplayState, string> = {
-  ready: 'READY', starting: 'STARTING', running: 'RUNNING', degraded: 'DEGRADED',
-  stopping: 'STOPPING', finalizing: 'FINALIZING', completed: 'COMPLETED',
-  completed_with_warning: 'COMPLETED WITH WARNING', failed: 'FAILED', unknown: 'UNKNOWN',
+  ready: '就緒', starting: '啟動中', running: '執行中', degraded: '狀態異常',
+  stopping: '停止中', finalizing: '整理中', completed: '已完成',
+  completed_with_warning: '已完成（有注意事項）', failed: '失敗', unknown: '未知',
 };
 
 const S: Record<string, React.CSSProperties> = {
@@ -217,9 +219,11 @@ const S: Record<string, React.CSSProperties> = {
     marginTop: 8,
   },
   button: {
-    minHeight: 30,
+    minHeight: 34,
     padding: '0 8px',
-    border: '1px solid rgba(140, 205, 255, 0.22)',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'rgba(140, 205, 255, 0.22)',
     borderRadius: 6,
     background: 'rgba(99, 199, 255, 0.12)',
     color: '#e8f2ff',
@@ -235,11 +239,21 @@ const S: Record<string, React.CSSProperties> = {
     background: 'rgba(255, 116, 116, 0.14)',
     borderColor: 'rgba(255, 116, 116, 0.26)',
   },
+  primary: {
+    minHeight: 40,
+  },
   error: {
     marginTop: 8,
     color: '#ffb0b0',
     fontSize: 11,
     lineHeight: 1.35,
+  },
+  blocker: {
+    marginTop: 6,
+    color: '#fbbf24',
+    fontSize: 11,
+    lineHeight: 1.35,
+    gridColumn: '1 / -1',
   },
   mission: {
     marginTop: 8,
@@ -320,16 +334,6 @@ const STEP_PHASES: Record<string, CapturePhase[]> = {
   '收尾': ['stopping', 'stopping_service', 'finalizing_file', 'completed', 'stopped'],
   '連線與設定': ['preflight', 'connecting', 'configuring', 'starting_service'],
   '收尾與上傳': ['stopping', 'stopping_service', 'finalizing_file', 'upload_pending', 'uploading', 'completed', 'stopped'],
-  'Start recorder': ['starting_service'],
-  'Record': ['recording'],
-  'Stop recorder': ['stopping_service'],
-  'Finalize CSV': ['finalizing_file'],
-  'Connect': ['connecting'],
-  'Configure': ['configuring', 'preflight'],
-  'Start service': ['starting_service'],
-  'Stop service': ['stopping_service'],
-  'Upload': ['upload_pending', 'uploading'],
-  'Complete': ['completed'],
 };
 
 const STEP_STATE_LABELS: Record<string, string> = {
@@ -348,8 +352,7 @@ function stepState(step: string, child: ChildState, index: number, steps: string
   const currentIndex = steps.findIndex(item => (STEP_PHASES[item] ?? []).includes(phase));
   if (phase === 'completed' || (child.file === 'uploaded' && index === steps.length - 1)) return 'completed';
   if (phase === 'upload_pending' || phase === 'uploading') {
-    if (step === 'Upload' || step === '收尾與上傳') return 'current';
-    if (step === 'Complete') return 'waiting';
+    if (step === '收尾與上傳') return 'current';
   }
   if (currentIndex >= 0) return index < currentIndex ? 'completed' : index === currentIndex ? 'current' : 'waiting';
   if (phase === 'idle') return 'waiting';
@@ -359,7 +362,7 @@ function stepState(step: string, child: ChildState, index: number, steps: string
 const STEP_MARKERS = { completed: '✓', current: '●', waiting: '○', warning: '!', error: '×' };
 
 function canStop(service: ServiceDisplay): boolean {
-  return ['starting', 'running', 'presumed_running'].includes(service);
+  return ['starting', 'running'].includes(service);
 }
 
 function canRetryStop(child: ChildState, stopRequested: boolean): boolean {
@@ -420,6 +423,8 @@ function normalizeChild(value: unknown): ChildState {
     upload_retry_next_attempt_at: typeof child.upload_retry_next_attempt_at === 'string' ? child.upload_retry_next_attempt_at : null,
     upload_retry_active_started_at: typeof child.upload_retry_active_started_at === 'string' ? child.upload_retry_active_started_at : null,
     upload_retry_last_error: typeof child.upload_retry_last_error === 'string' ? child.upload_retry_last_error : '',
+    upload_job_id: typeof child.upload_job_id === 'string' ? child.upload_job_id : null,
+    upload_finished_at: typeof child.upload_finished_at === 'string' ? child.upload_finished_at : null,
   };
 }
 
@@ -432,7 +437,7 @@ function uploadProgressLabel(child: ChildState, now: number): string | null {
     ? `手動重試 (${elapsed} s)`
     : child.upload_retry_attempt && child.upload_retry_attempt > 0
       ? `正在重試 ${child.upload_retry_attempt}/${child.upload_retry_max_attempts ?? 3} (${elapsed} s)`
-    : `Uploading (${elapsed} s)`;
+    : `上傳中 (${elapsed} s)`;
 }
 
 function uploadRetryLabel(child: ChildState, now: number): string | null {
@@ -468,7 +473,10 @@ function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth 
 
 export function formatTaipeiTime(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) return '—';
-  const parsed = new Date(value);
+  const text = value.trim();
+  const isNaiveIso = /^\d{4}-\d{2}-\d{2}T/.test(text)
+    && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const parsed = new Date(isNaiveIso ? `${text}+08:00` : text);
   if (Number.isNaN(parsed.getTime())) return '—';
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Taipei',
@@ -500,53 +508,19 @@ function missionSummaryLabel(summary: MissionSummary | null | undefined): string
   return `${formatTaipeiTime(summary.started_at)} #${summary.mission_id.slice(-5)}`;
 }
 
-function missionIssue(status: CaptureStatus, failuresOnly = false): string | null {
-  const children = [['GPS', status.uav], ['NOISE', status.usrp]] as const;
-  const resumeTimeout = children
-    .find(([, child]) => child.phase === 'resume_timeout');
-  if (resumeTimeout) return `${resumeTimeout[0]} RESUME TIMEOUT`;
-  const failed = children
-    .find(([, child]) => child.service === 'failed' || child.file === 'failed');
-  if (failed) return `${failed[0]} FAILED`;
-  if (failuresOnly) return null;
-  const offline = children.find(([, child]) => child.connection === 'offline');
-  if (offline) return `${offline[0]} OFFLINE`;
-  const uncertain = children.find(([, child]) => (
-    child.service === 'presumed_running' || child.phase === 'reconciling'
-  ));
-  return uncertain ? `${uncertain[0]} UNCERTAIN` : null;
-}
-
-function childAction(name: 'GPS' | 'NOISE', child: ChildState): string | null {
-  if (
-    child.connection !== 'ready'
-    || child.service === 'failed'
-    || child.service === 'presumed_running'
-    || child.file === 'failed'
-  ) return null;
-  if (child.file === 'recording') return `${name} RECORDING`;
-  if (child.service === 'starting') return `${name} STARTING`;
-  if (child.service === 'stopping') return `${name} STOPPING`;
-  if (child.file === 'finalizing' || child.file === 'upload_pending') return `${name} FINALIZING`;
+function childIssue(name: 'GPS' | 'Noise', child: ChildState): string | null {
+  if (child.phase === 'resume_timeout') return `${name} 恢復逾時`;
+  if (child.service === 'failed' || child.file === 'failed') return `${name} 失敗`;
+  if (child.connection === 'offline') return `${name} 離線`;
+  if (child.service === 'presumed_running' || child.phase === 'reconciling') {
+    return `${name} 狀態不確定`;
+  }
   return null;
 }
 
 function missionLabel(status: CaptureStatus | null): string {
-  if (!status) return 'UNKNOWN';
-  const label = OVERALL_LABELS[status.overall_state];
-  if (status.overall_state === 'degraded') {
-    const issue = missionIssue(status);
-    const action = issue?.startsWith('GPS ')
-      ? childAction('NOISE', status.usrp)
-      : childAction('GPS', status.uav);
-    return [label, issue, action].filter(Boolean).join(' · ');
-  }
-  if (status.overall_state === 'completed_with_warning') {
-    return [label, missionIssue(status, true)]
-      .filter(Boolean)
-      .join(' · ');
-  }
-  return label;
+  if (!status) return OVERALL_LABELS.unknown;
+  return OVERALL_LABELS[status.overall_state];
 }
 
 function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
@@ -678,6 +652,21 @@ async function readCaptureResponse(response: Response, fallback: string): Promis
   return data as Partial<CaptureStatus>;
 }
 
+function splitRequestError(path: string, message: string): { gps?: string; noise?: string; common?: string } {
+  if (path.includes('/uav/')) return { gps: message };
+  if (path.includes('/usrp/')) return { noise: message };
+  if (!path.includes('/bind/')) return { common: message };
+  const entries = message.split(';').map(item => item.trim()).filter(Boolean);
+  const gps = entries.filter(item => item.startsWith('AP3:')).join('; ');
+  const noise = entries.filter(item => item.startsWith('Raspberry Pi:')).join('; ');
+  const common = entries.filter(item => !item.startsWith('AP3:') && !item.startsWith('Raspberry Pi:')).join('; ');
+  return {
+    ...(gps ? { gps } : {}),
+    ...(noise ? { noise } : {}),
+    ...(common ? { common } : {}),
+  };
+}
+
 interface USRPTelemetryProps {
   sceneId?: string | null;
 }
@@ -689,7 +678,10 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [health, setHealth] = useState<Record<string, DeviceHealth>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [gpsError, setGpsError] = useState('');
+  const [noiseError, setNoiseError] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  const id = useId();
   const statusFlight = useRef<Promise<void> | null>(null);
   const statusController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
@@ -705,6 +697,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const applyStatus = useCallback((data: Partial<CaptureStatus>) => {
     const next = normalizeStatus(data);
     setStatus(next);
+    setGpsError('');
+    setNoiseError('');
     if (next.device_health) setHealth(next.device_health);
     if ('active' in data || 'control_mode' in data) {
       if (next.active) {
@@ -717,7 +711,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     } else if (next.bind && (isUnresolved(next.uav) || isUnresolved(next.usrp))) {
       setBind(true);
     }
-    if (isActive(next.usrp.service)) {
+    if (isActive(next.usrp.service) || isUnresolved(next.usrp)) {
       setMode(next.selected_usrp_mode);
     }
   }, []);
@@ -727,7 +721,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     const timeout = window.setTimeout(() => controller.abort(), 8000);
     try {
       const response = await fetch(`${API}/api/capture/health?usrp_mode=${mode}`, { signal: controller.signal });
-      const data = await readCaptureResponse(response, 'Device Health request failed') as Partial<{ device_health: Record<string, unknown> }>;
+      const data = await readCaptureResponse(response, '裝置健康檢查失敗') as Partial<{ device_health: Record<string, unknown> }>;
       const values = data.device_health;
       if (values && typeof values === 'object') {
         setHealth({
@@ -743,7 +737,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           stale: true,
           error: requestError instanceof Error && requestError.name === 'AbortError'
             ? `${device} health probe timed out`
-            : requestError instanceof Error ? requestError.message : 'Device Health request failed',
+            : requestError instanceof Error ? requestError.message : '裝置健康檢查失敗',
         }]),
       ));
       if (requestError instanceof Error && requestError.name !== 'AbortError') setError(requestError.message);
@@ -761,13 +755,13 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     flight = (async () => {
       try {
         const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`, { signal: controller.signal });
-        const data = await readCaptureResponse(response, 'Status request failed');
+        const data = await readCaptureResponse(response, '狀態讀取失敗');
         if (!mounted.current) return;
         applyStatus(data);
         setError('');
       } catch (requestError) {
         if (!mounted.current) return;
-        setError(requestError instanceof Error && requestError.name === 'AbortError' ? 'Status request timed out' : requestError instanceof Error ? requestError.message : 'Status request failed');
+        setError(requestError instanceof Error && requestError.name === 'AbortError' ? '狀態讀取逾時' : requestError instanceof Error ? requestError.message : '狀態讀取失敗');
       } finally {
         window.clearTimeout(timeout);
         if (statusController.current === controller) statusController.current = null;
@@ -841,6 +835,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     const timeout = window.setTimeout(() => controller.abort(), 35000);
     setBusy(true);
     setError('');
+    setGpsError('');
+    setNoiseError('');
     try {
       const response = await fetch(`${API}${path}`, {
         method: 'POST', signal: controller.signal,
@@ -848,10 +844,16 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
           : {}),
       });
-      const data = await readCaptureResponse(response, 'Capture request failed');
+      const data = await readCaptureResponse(response, '採樣操作失敗');
       applyStatus(data);
     } catch (requestError) {
-      setError(requestError instanceof Error && requestError.name === 'AbortError' ? 'Capture request timed out; operation status is being reconciled while polling continues.' : requestError instanceof Error ? requestError.message : 'Capture request failed');
+      const message = requestError instanceof Error && requestError.name === 'AbortError'
+        ? '採樣操作逾時，正在同步任務狀態。'
+        : requestError instanceof Error ? requestError.message : '採樣操作失敗';
+      const scoped = splitRequestError(path, message);
+      if (scoped.gps) setGpsError(scoped.gps);
+      if (scoped.noise) setNoiseError(scoped.noise);
+      if (scoped.common) setError(scoped.common);
     } finally {
       window.clearTimeout(timeout);
       setBusy(false);
@@ -877,9 +879,17 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const overallLabel = missionLabel(status);
   const overallTone = status?.overall_state === 'failed'
     ? 'danger'
-    : status?.overall_state === 'degraded' || status?.overall_state === 'completed_with_warning'
+    : status?.overall_state === 'degraded'
+      || status?.overall_state === 'stopping'
+      || status?.overall_state === 'finalizing'
+      || status?.overall_state === 'completed_with_warning'
       ? 'warning'
-      : anyActive ? 'live' : 'waiting';
+      : status?.overall_state === 'ready'
+        || status?.overall_state === 'starting'
+        || status?.overall_state === 'running'
+        || status?.overall_state === 'completed'
+          ? 'live'
+          : anyActive ? 'live' : 'waiting';
   const uavKnown = uav.connection !== 'unknown' && uav.service !== 'unknown'
     && uav.file !== 'unknown' && uav.phase !== 'unknown';
   const usrpKnown = usrp.connection !== 'unknown' && usrp.service !== 'unknown'
@@ -892,7 +902,69 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   // able to announce its blocker even when the sibling health projection is
   // unknown.  Before the first status response there is no mode to switch.
   const modeDisabled = busy || status === null;
+  const modeReason = modeDisabled
+    ? busy ? '操作進行中，請稍候。' : '正在讀取任務狀態。'
+    : null;
   const disabledStyle = (disabled: boolean) => ({ opacity: disabled ? 0.45 : 1 });
+  const uavStartReason = !canStartUav
+    ? !ap3Ready
+      ? 'AP3 尚未就緒。'
+      : bind
+        ? '綁定任務模式請使用「開始綁定任務」。'
+        : busy
+          ? '操作進行中，請稍候。'
+          : !uavKnown
+            ? 'GPS 任務狀態尚未就緒。'
+            : isUnresolved(uav)
+              ? '請先完成目前 GPS 任務。'
+              : null
+    : null;
+  const noiseModeReason = noiseModeLocked || !usrpKnown
+    ? busy
+      ? '操作進行中，請稍候。'
+      : !usrpKnown
+        ? 'Noise 任務狀態尚未就緒。'
+        : isUnresolved(usrp)
+          ? '請先完成目前 Noise 任務。'
+          : 'Raspberry Pi 尚未就緒。'
+    : null;
+  const noiseStartDisabled = bind || busy || !usrpKnown || isUnresolved(usrp) || !raspiReady;
+  const noiseStartReason = noiseStartDisabled
+    ? bind
+      ? '綁定任務模式請使用「開始綁定任務」。'
+      : !raspiReady
+        ? 'Raspberry Pi 尚未就緒。'
+        : busy
+          ? '操作進行中，請稍候。'
+          : !usrpKnown
+            ? 'Noise 任務狀態尚未就緒。'
+            : '請先完成目前 Noise 任務。'
+    : null;
+  const boundStartDisabled = controlsLocked || !bothReady;
+  const boundStartReason = boundStartDisabled
+    ? busy
+      ? '操作進行中，請稍候。'
+      : controlsLocked
+        ? '請先完成目前 GPS 與 Noise 任務。'
+        : '請確認 GPS、Noise 與裝置都已就緒。'
+    : null;
+  const uncertainBound = [uav, usrp].some(child => (
+    child.service === 'presumed_running' || child.phase === 'reconciling'
+  ));
+  const boundStopDisabled = busy || !missionId || !anyActive || uncertainBound || Boolean(status?.stop_requested_at);
+  const boundStopReason = boundStopDisabled
+    ? busy
+      ? '操作進行中，請稍候。'
+      : Boolean(status?.stop_requested_at)
+        ? '已送出停止要求，正在處理。'
+        : uncertainBound
+          ? '任務狀態不確定，請先同步狀態。'
+        : !missionId
+          ? '目前沒有綁定任務。'
+          : '目前沒有可停止的綁定任務。'
+    : null;
+  const gpsIssue = childIssue('GPS', uav);
+  const noiseIssue = childIssue('Noise', usrp);
   const switchMode = () => {
     const notice = modeBlocker(bind, status);
     if (notice) {
@@ -911,72 +983,99 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     const stopped = child.service === 'stopped';
     const raspiUnavailable = target === 'usrp' && !raspiReady;
     const disabled = busy || stopped || (retry ? raspiUnavailable : !canStop(child.service));
-    const label = stopped ? 'Stopped' : retry ? 'Retry Stop' : target === 'uav' ? 'Stop UAV' : 'Stop USRP';
-    const text = stopped ? '已停止' : retry ? (target === 'uav' ? '重試停止 GPS 採樣' : '重試停止 Noise 採樣') : (target === 'uav' ? '停止 GPS 採樣' : '停止 Noise 採樣');
+    const name = target === 'uav' ? 'GPS 採樣' : 'Noise 採樣';
+    const label = stopped ? `${name}已停止` : retry ? `重試停止 ${name}` : `停止 ${name}`;
+    const text = stopped ? `已停止 ${name}` : retry ? `重試停止 ${name}` : `停止 ${name}`;
+    const reason = disabled
+      ? busy
+        ? '操作進行中，請稍候。'
+        : retry && raspiUnavailable
+          ? '請先重新連線 Raspberry Pi，再重試停止。'
+            : stopped
+              ? `${name}已停止。`
+              : child.service === 'presumed_running' || child.phase === 'reconciling'
+                ? `${name}狀態不確定，請先同步狀態。`
+              : child.service === 'unknown'
+                ? `${name}狀態未知。`
+              : `目前沒有可停止的${name}。`
+      : null;
+    const reasonId = `${id}-${target}-stop`;
     const path = retry
       ? `/api/capture/${target}/retry-stop?mission_id=${encodeURIComponent(childMissionId)}`
       : `/api/capture/${target}/stop?mission_id=${encodeURIComponent(childMissionId)}`;
     return <>
       <button
         type="button"
-        style={{ ...S.button, ...S.stop, ...disabledStyle(disabled) }}
+        style={{ ...S.button, ...S.primary, ...S.stop, ...disabledStyle(disabled) }}
         disabled={disabled}
         aria-label={label}
-        title={retry && raspiUnavailable ? 'Reconnect Raspberry Pi before retrying stop.' : undefined}
+        aria-describedby={reason ? reasonId : undefined}
+        title={reason ?? undefined}
         onClick={() => void request(path)}
       >
         {text}
       </button>
-      {retry && raspiUnavailable ? (
-        <div aria-live="polite" style={S.error}>Reconnect Raspberry Pi before retrying stop.</div>
-      ) : null}
+      {reason ? <div id={reasonId} role="status" style={S.blocker}>{reason}</div> : null}
     </>;
   };
 
   const childSection = (
+    kind: 'gps' | 'noise',
     title: string,
     summary: MissionSummary | null | undefined,
     child: ChildState,
+    childError: string,
     actions: React.ReactNode,
     steps: string[],
   ) => {
     const retryLabel = uploadRetryLabel(child, now);
     const progressLabel = uploadProgressLabel(child, now);
+    const name = kind === 'noise' ? 'Noise' : 'GPS';
+    const issue = childIssue(name, child);
     const autoRetryActive = child.upload_retry_mode === 'automatic'
       && ['waiting', 'running'].includes(child.upload_retry_state ?? '');
     return <section style={S.section}>
       <div style={S.sectionTitle}>{title}</div>
       <div style={S.rows}>
-        <span style={S.key}>Connection</span>
+        <span style={S.key}>連線</span>
         <span style={S.value}>{CONNECTION_LABELS[child.connection]}</span>
-        <span style={S.key}>Phase</span>
+        <span style={S.key}>階段</span>
         <span style={S.value} aria-live="polite">{PHASE_LABELS[child.phase ?? 'unknown']}</span>
-        <span style={S.key}>Service</span>
+        <span style={S.key}>服務</span>
         <span style={S.value}>{SERVICE_LABELS[child.service]}</span>
-        <span style={S.key}>File</span>
+        <span style={S.key}>檔案</span>
         <span style={S.value}>{FILE_LABELS[child.file]}</span>
-        <span style={S.key}>Last mission</span>
-        <span style={S.value} aria-label={`${title} last mission`}>{missionSummaryLabel(summary)}</span>
-        {child.last_sample_at ? <>
-          <span style={S.key}>Last GPS</span>
-          <span style={S.value}>{child.last_sample_at}</span>
-        </> : null}
       </div>
-      <div style={S.steps} aria-label={`${title} progress`}>
-        {steps.map((step, index) => {
-          const state = stepState(step, child, index, steps);
-          return <div key={step} data-step-state={state}>{STEP_MARKERS[state]} {step} — {STEP_STATE_LABELS[state] ?? state}</div>;
-        })}
-      </div>
+      <details style={{ marginTop: 8 }}>
+        <summary style={{ cursor: 'pointer', color: 'rgba(210, 230, 255, 0.72)', fontSize: 11 }}>
+          歷史任務與詳細進度
+        </summary>
+        <div style={{ ...S.rows, marginTop: 6 }}>
+          <span style={S.key}>上次任務</span>
+          <span style={S.value} aria-label={`${title} 上次任務`}>{missionSummaryLabel(summary)}</span>
+          {child.last_sample_at ? <>
+            <span style={S.key}>最後 {name}</span>
+            <span style={S.value}>{formatTaipeiTime(child.last_sample_at)}</span>
+          </> : null}
+        </div>
+        <div style={S.steps} aria-label={`${title} 進度`}>
+          {steps.map((step, index) => {
+            const state = stepState(step, child, index, steps);
+            return <div key={step} data-step-state={state}>{STEP_MARKERS[state]} {step} — {STEP_STATE_LABELS[state] ?? state}</div>;
+          })}
+        </div>
+      </details>
+      {issue ? <div role="status" style={S.blocker}>{issue}</div> : null}
+      {childError ? <div role="alert" style={S.error}>{childError}</div> : null}
       {child.error ? <div role="alert" style={S.error}>{child.error}</div> : null}
       {child.phase === 'resume_timeout' && child.file === 'ready' ? (
-        <div style={S.error}>Partial GPS file available.</div>
+        <div style={S.error}>可用的部分 GPS 檔案。</div>
       ) : null}
-      {child.service === 'presumed_running' ? <div style={S.error}>Presumed running; reconcile status before stopping.</div> : null}
-      {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>Stopped; upload pending.</div> : null}
+      {child.service === 'presumed_running' ? <div style={S.error}>目前推定仍在執行，請先同步狀態再停止。</div> : null}
+      {child.service === 'stopped' && child.file === 'upload_pending' ? <div style={S.error}>已停止；等待上傳。</div> : null}
       {retryLabel ? <div aria-live="polite" style={S.error}>{retryLabel}</div> : null}
       {progressLabel ? <div aria-live="polite" style={S.error}>{progressLabel}</div> : null}
-      {child.file === 'upload_pending' && title.includes('USRP') && !autoRetryActive ? <button type="button" style={S.button} aria-label="Retry upload" disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>重試上傳</button> : null}
+      {kind === 'noise' && !bind && child.file === 'upload_pending' && !autoRetryActive ? <button type="button" style={S.button} aria-label="重試上傳" disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>重試上傳</button> : null}
       {actions}
     </section>
   };
@@ -985,11 +1084,17 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     <MinPanel
       title="採樣控制面板"
       className="panel-ui"
+      toggleLabel={(isMinimized) => `${isMinimized ? '展開' : '收合'} 採樣控制面板`}
       actions={<PanelStatus tone={overallTone} label={overallLabel} />}
     >
       <div style={S.control}>
         <div style={S.topRow}>
-          <div style={{ ...S.modes, flex: 1 }} aria-label="控制模式">
+          <div
+            style={{ ...S.modes, flex: 1 }}
+            role="group"
+            aria-label="控制模式"
+            aria-describedby={modeReason ? `${id}-mode-blocker` : undefined}
+          >
             <button
               type="button"
               aria-label="獨立採樣模式"
@@ -1009,9 +1114,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
             </button>
             <button
               type="button"
-              role="switch"
-              aria-label="Bind services"
-              aria-checked={bind}
+              aria-label="綁定任務模式"
+              aria-pressed={bind}
               disabled={modeDisabled}
               style={{
                 ...S.button,
@@ -1027,25 +1131,27 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           <button
             type="button"
             style={S.button}
-            aria-label="Refresh status"
+            aria-label="重新整理狀態"
             disabled={busy}
+            aria-describedby={busy ? `${id}-mode-blocker` : undefined}
             onClick={() => void loadStatus()}
           >
             重新整理狀態
           </button>
         </div>
+        {modeReason ? <div id={`${id}-mode-blocker`} role="status" style={S.blocker}>{modeReason}</div> : null}
 
         <div style={S.sectionTitle}>裝置就緒</div>
-        <div style={S.health} aria-label="Device Health">
+        <div style={S.health} aria-label="裝置就緒">
           {(['ap3', 'raspi'] as const).map((device) => {
             const item = health[device];
             const label = device === 'ap3' ? 'AP3' : 'Raspberry Pi';
             const state = item?.stale ? 'unknown' : item?.state ?? 'unknown';
             return (
-              <div key={device} style={S.healthCard} aria-label={`${label} Device Health`}>
+              <div key={device} style={S.healthCard} aria-label={`${label} 裝置就緒`}>
                 <strong>{label}</strong>
                 <div style={S.value}>{CONNECTION_LABELS[state]}</div>
-                {item?.last_checked_at ? <div>Last check: {formatTaipeiTime(item.last_checked_at)}</div> : null}
+                {item?.last_checked_at ? <div>最後檢查：{formatTaipeiTime(item.last_checked_at)}</div> : null}
                 {item?.error ? <div style={S.error}>{item.error}</div> : null}
               </div>
             );
@@ -1055,37 +1161,58 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
         <div style={S.sectionTitle}>任務狀態</div>
 
         {childSection(
+          'gps',
           '無人機 GPS 採樣',
           gpsHistory,
           uav,
+          gpsError,
           <div style={S.actions}>
-            <button
-              type="button"
-              style={{ ...S.button, ...disabledStyle(!canStartUav) }}
-              disabled={!canStartUav}
-              aria-label="Start UAV"
-              onClick={() => void request('/api/capture/uav/start')}
-            >
-              開始 GPS 採樣
-            </button>
-            {stopAction('uav', uav, uavMissionId)}
+            {!bind ? <>
+              <button
+                type="button"
+                style={{ ...S.button, ...S.primary, ...disabledStyle(!canStartUav) }}
+                disabled={!canStartUav}
+                aria-label="開始 GPS 採樣"
+                aria-describedby={uavStartReason ? `${id}-uav-start` : undefined}
+                onClick={() => void request('/api/capture/uav/start')}
+              >
+                開始 GPS 採樣
+              </button>
+              {uavStartReason ? <div id={`${id}-uav-start`} role="status" style={S.blocker}>{uavStartReason}</div> : null}
+            </> : null}
+            {!bind && uav.phase === 'resume_timeout' ? (
+              <button
+                type="button"
+                style={{ ...S.button, ...S.primary }}
+                aria-label="恢復 GPS 採樣"
+                onClick={() => void request(`/api/capture/uav/resume?mission_id=${encodeURIComponent(uavMissionId)}`)}
+              >
+                恢復 GPS 採樣
+              </button>
+            ) : null}
+            {!bind || canRetryStop(uav, Boolean(status?.stop_requested_at))
+              ? stopAction('uav', uav, uavMissionId)
+              : null}
           </div>,
           ['準備', '錄製', '收尾'],
         )}
 
         {childSection(
-          'USRP 干擾採樣',
+          'noise',
+          'Noise 採樣',
           noiseHistory,
           usrp,
-          <>
-            <div style={S.modes} aria-label="USRP capture mode">
+          noiseError,
+          !bind ? <>
+            <div style={S.modes} aria-label="Noise 採樣模式">
               {(['test', 'usrp'] as SamplingMode[]).map(value => (
                 <button
                   key={value}
                   type="button"
-                  aria-label={value === 'test' ? 'Test mode' : 'USRP mode'}
+                  aria-label={value === 'test' ? '測試模式' : 'USRP 模式'}
                   aria-pressed={mode === value}
                   disabled={noiseModeLocked || !usrpKnown}
+                  aria-describedby={noiseModeReason ? `${id}-noise-mode` : undefined}
                   style={{
                     ...S.button,
                     ...(mode === value ? S.active : null),
@@ -1093,23 +1220,30 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
                   }}
                   onClick={() => setMode(value)}
                 >
-                  {value === 'test' ? 'Test' : 'USRP'}
+                  {value === 'test' ? '測試' : 'USRP'}
                 </button>
               ))}
             </div>
+            {noiseModeReason ? <div id={`${id}-noise-mode`} role="status" style={S.blocker}>{noiseModeReason}</div> : null}
             <div style={S.actions}>
-              <button
-                type="button"
-                style={{ ...S.button, ...disabledStyle(bind || busy || !usrpKnown || isUnresolved(usrp) || !raspiReady) }}
-                disabled={bind || busy || !usrpKnown || isUnresolved(usrp) || !raspiReady}
-                aria-label="Start USRP"
-                onClick={() => void request('/api/capture/usrp/start', startBody)}
-              >
-                開始 Noise 採樣
-              </button>
-              {stopAction('usrp', usrp, usrpMissionId)}
+              <>
+                <button
+                  type="button"
+                  style={{ ...S.button, ...S.primary, ...disabledStyle(noiseStartDisabled) }}
+                  disabled={noiseStartDisabled}
+                  aria-label="開始 Noise 採樣"
+                  aria-describedby={noiseStartReason ? `${id}-noise-start` : undefined}
+                  onClick={() => void request('/api/capture/usrp/start', startBody)}
+                >
+                  開始 Noise 採樣
+                </button>
+                {noiseStartReason ? <div id={`${id}-noise-start`} role="status" style={S.blocker}>{noiseStartReason}</div> : null}
+                {stopAction('usrp', usrp, usrpMissionId)}
+              </>
             </div>
-          </>,
+          </> : canRetryStop(usrp, Boolean(status?.stop_requested_at))
+            ? <div style={S.actions}>{stopAction('usrp', usrp, usrpMissionId)}</div>
+            : null,
           ['連線與設定', '錄製', '收尾與上傳'],
         )}
 
@@ -1117,26 +1251,30 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           <div style={S.actions}>
             <button
               type="button"
-              style={{ ...S.button, ...S.active, ...disabledStyle(controlsLocked || !bothReady) }}
-              disabled={controlsLocked || !bothReady}
-              aria-label="Start Bound Capture"
+              style={{ ...S.button, ...S.primary, ...S.active, ...disabledStyle(boundStartDisabled) }}
+              disabled={boundStartDisabled}
+              aria-label="開始綁定任務"
+              aria-describedby={boundStartReason ? `${id}-bound-start` : undefined}
               onClick={() => void request('/api/capture/bind/start', startBody)}
             >
               開始綁定任務
             </button>
+            {boundStartReason ? <div id={`${id}-bound-start`} role="status" style={S.blocker}>{boundStartReason}</div> : null}
             <button
               type="button"
-              style={{ ...S.button, ...S.stop, ...disabledStyle(busy || !missionId || !anyActive || Boolean(status?.stop_requested_at)) }}
-              disabled={busy || !missionId || !anyActive || Boolean(status?.stop_requested_at)}
-              aria-label="Stop All"
+              style={{ ...S.button, ...S.primary, ...S.stop, ...disabledStyle(boundStopDisabled) }}
+              disabled={boundStopDisabled}
+              aria-label="停止綁定任務"
+              aria-describedby={boundStopReason ? `${id}-bound-stop` : undefined}
               onClick={() => void request(`/api/capture/bind/stop?mission_id=${encodeURIComponent(missionId)}`)}
             >
               停止綁定任務
             </button>
+            {boundStopReason ? <div id={`${id}-bound-stop`} role="status" style={S.blocker}>{boundStopReason}</div> : null}
           </div>
         ) : null}
 
-        {missionId ? <div style={S.mission}>Mission: {missionId}</div> : null}
+        {missionId ? <div style={S.mission}>任務：{missionId}</div> : null}
         {error ? <div role="alert" style={S.error}>{error}</div> : null}
       </div>
 
