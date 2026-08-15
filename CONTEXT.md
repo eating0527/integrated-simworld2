@@ -62,6 +62,46 @@ _Avoid_: 補零、門檻值截斷
 AP3 與 USRP 共用同一個 `mission_id` 的量測任務；兩個裝置仍各自保有獨立的任務子狀態。
 _Avoid_: Bind 模式、綁定裝置
 
+**控制模式（Control Mode）**：
+採樣面板的 Bound 或 Independent 操作視圖；切換只決定控制與狀態投影，不會改寫既有任務或硬體服務。
+_Avoid_: 綁定任務、任務模式
+
+**獨立採樣（Independent Capture）**：
+GPS 與 Noise 各自建立並控制不同 `mission_id` 的採樣。AP3／無人機遙控器與 Raspberry Pi／USRP B210 是獨立硬體，因此任一側的任務狀態不會限制另一側的 Start 或 Stop；各側仍遵守自身的裝置健康與同服務 ownership 檢查。
+_Avoid_: 單人採樣、未綁定任務
+
+**乾淨控制面板（Clean Control Panel）**：
+Bound 或 Independent Control Mode 的閒置操作視圖；它不恢復舊 mission 的 child 狀態、不建立新 mission，也不啟動硬體。沒有未收尾任務時，Independent 的乾淨面板是預設面板。兩種模式的面板都跨 Control Mode 保留各服務上一次 mission 的開始時間與 mission id 最後五碼；同一 Bound Mission 的 GPS 與 Noise 區塊各自顯示相同時間與尾碼。使用者按 Start UAV 或 Start USRP 時才為該服務建立新的 Independent Capture。
+_Avoid_: 重設任務、建立空任務
+
+**操作時間格式（Operational Timestamp Format）**：
+控制面板的上一次 mission 開始時間與既有 Raspberry Pi health 時間欄位都以 `Asia/Taipei` 的 `MM/DD HH:mm:ss` 顯示；沒有上一次 mission 時顯示 `—`。格式化不改變後端紀錄或 probe 判定語意。
+_Avoid_: 完整 ISO 時間、無時區的原始字串
+
+**模式切換停止確認（Mode Switch Stop Confirmation）**：
+切換 Control Mode 前的安全檢查。系統先檢查 GPS 與 Noise 任務；任一服務執行中、停止中或收尾中（包括 Noise Upload Pending）時，維持原模式並提示使用者先停止當前 mission。Completed、Failed 與 Resume Timeout 都視為不再占用服務，可切換到另一個模式的乾淨控制面板。
+_Avoid_: 強制切換、背景停止、切換停止確認
+
+**前端 reload 恢復（Frontend Reload Recovery）**：
+重新整理前端後，未收尾的 GPS、Noise 或 Bound Mission 必須重新顯示其目前狀態與可用控制。此恢復依賴持久化 mission state；backend restart 後接管既有 GPS recorder process 不在此保證範圍。
+_Avoid_: backend process 接管、自動恢復歷史完成任務
+
+**控制模式互斥（Control Mode Exclusivity）**：
+未收尾的 Bound Mission 與未收尾的 Independent Capture 不可同時存在。Bound Mission 任一 child 未收尾時不可建立 Independent Capture；Independent GPS 或 Noise 任一未收尾時不可建立 Bound Mission。此限制不影響 Independent 模式內 GPS 與 Noise 的彼此獨立控制。
+_Avoid_: 混合模式執行、跨模式接續
+
+**Noise 模式獨立性（Noise Mode Independence）**：
+Independent Control Mode 下，Test mode 與 USRP mode 僅受 Noise 自己的 mission 狀態與 Raspberry Pi health 限制；GPS 採樣不會鎖住 Noise mode 控制。
+_Avoid_: GPS 模式、跨服務 mode lock
+
+**模式切換阻擋提示（Mode Switch Blocker Notice）**：
+模式切換因未收尾任務而被拒絕時的可操作說明。GPS、Noise 或兩者執行中時分別提示「請先停止 GPS 任務。」「請先停止 Noise 任務。」「請先停止 GPS 與 Noise 任務。」；Bound Mission 提示「請先停止當前任務。」；Noise 上傳中提示「請先等待 Noise 上傳。」。
+_Avoid_: 一般錯誤、服務不可用
+
+**Test Noise 採樣（Test Noise Capture）**：
+由 Raspberry Pi 上的測試腳本產生的 Noise 採樣，不使用 USRP B210；它仍由 Raspberry Pi 的 Noise 控制平面管理。
+_Avoid_: USRP 測試、模擬 GPS
+
 **裝置健康（Device Health）**：
 裝置目前是否可參與新任務的即時狀態，不會回寫或改變既有任務的結果。
 _Avoid_: 任務狀態、裝置任務狀態
