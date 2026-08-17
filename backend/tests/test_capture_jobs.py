@@ -2036,6 +2036,40 @@ class BindCoordinatorTests(unittest.TestCase):
         self.assertEqual(payload["usrp"]["service"], "running")
         self.assertEqual(payload["uav"]["service"], "idle")
 
+    def test_status_payload_projects_ready_idle_sibling_for_independent_gps(self):
+        gps = self.coordinator.start_uav()
+
+        payload = self.coordinator.status_payload("test")
+
+        self.assertEqual(payload["uav"]["mission_id"], gps.mission_id)
+        self.assertEqual(payload["uav"]["service"], "running")
+        self.assertEqual(payload["usrp"]["mission_id"], "")
+        self.assertEqual(payload["usrp"]["connection"], "ready")
+        self.assertEqual(payload["usrp"]["service"], "idle")
+        self.assertEqual(payload["usrp"]["file"], "none")
+        self.assertEqual(payload["usrp"]["phase"], "idle")
+
+    def test_status_payload_projects_ready_idle_sibling_for_independent_noise(self):
+        noise = self.coordinator.start_usrp("usrp")
+        self.backend.get_capture_job.return_value = {
+            "service_state": "running",
+            "mission_state": {
+                "mission_id": noise.mission_id,
+                "state": "running",
+                "upload_state": "recording",
+            },
+        }
+
+        payload = self.coordinator.status_payload("usrp")
+
+        self.assertEqual(payload["usrp"]["mission_id"], noise.mission_id)
+        self.assertEqual(payload["usrp"]["service"], "running")
+        self.assertEqual(payload["uav"]["mission_id"], "")
+        self.assertEqual(payload["uav"]["connection"], "ready")
+        self.assertEqual(payload["uav"]["service"], "idle")
+        self.assertEqual(payload["uav"]["file"], "none")
+        self.assertEqual(payload["uav"]["phase"], "idle")
+
     def test_status_payload_merges_unresolved_independent_children(self):
         gps = self.coordinator.start_uav()
         noise = self.coordinator.start_usrp("test")

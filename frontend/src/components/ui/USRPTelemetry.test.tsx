@@ -271,6 +271,135 @@ describe('USRPTelemetry capture controls', () => {
     ));
   });
 
+  it('refreshes the full projection after starting GPS', async () => {
+    const idle = captureStatus();
+    const started = captureStatus({
+      missionId: 'gps_1',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { connection: 'unknown' },
+    });
+    const projection = captureStatus({
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { connection: 'ready' },
+    });
+    projection.mission_id = '';
+    projection.uav.mission_id = 'gps_1';
+    let statusCalls = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/capture/uav/start')) return jsonResponse(started);
+      if (url.includes('/api/capture/status')) {
+        statusCalls += 1;
+        return jsonResponse(statusCalls === 1 ? idle : {
+          ...projection,
+          control_mode: 'independent',
+          active: projection,
+        });
+      }
+      return jsonResponse(idle);
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '開始 GPS 採樣' }));
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+    expect(screen.getByRole('button', { name: '開始 Noise 採樣' })).toBeEnabled();
+  });
+
+  it('refreshes the full projection after starting Noise', async () => {
+    const idle = captureStatus();
+    const started = captureStatus({
+      missionId: 'noise_1',
+      mode: 'usrp',
+      uav: { connection: 'unknown' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    const projection = captureStatus({
+      mode: 'usrp',
+      overall: 'running',
+      uav: { connection: 'ready' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    projection.mission_id = '';
+    projection.usrp.mission_id = 'noise_1';
+    let statusCalls = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/capture/usrp/start')) return jsonResponse(started);
+      if (url.includes('/api/capture/status')) {
+        statusCalls += 1;
+        return jsonResponse(statusCalls === 1 ? idle : {
+          ...projection,
+          control_mode: 'independent',
+          active: projection,
+        });
+      }
+      return jsonResponse(idle);
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '開始 Noise 採樣' }));
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+    expect(screen.getByRole('button', { name: '開始 GPS 採樣' })).toBeEnabled();
+  });
+
+  it('queues a fresh status after starting Noise during a status refresh', async () => {
+    const initial = captureStatus({
+      missionId: 'gps_1',
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { connection: 'ready' },
+    });
+    const stale = captureStatus({
+      missionId: 'gps_1',
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { connection: 'unknown' },
+    });
+    const started = captureStatus({
+      missionId: 'noise_1',
+      uav: { connection: 'unknown' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    const merged = captureStatus({
+      overall: 'running',
+      uav: { service: 'running', file: 'recording', phase: 'recording' },
+      usrp: { service: 'running', file: 'recording', phase: 'recording' },
+    });
+    merged.mission_id = '';
+    merged.uav.mission_id = 'gps_1';
+    merged.usrp.mission_id = 'noise_1';
+    let statusCalls = 0;
+    let releaseStale!: () => void;
+    const staleResponse = new Promise<Response>((resolve) => {
+      releaseStale = () => {
+        void jsonResponse({ ...stale, control_mode: 'independent', active: stale }).then(resolve);
+      };
+    });
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/capture/usrp/start')) return jsonResponse(started);
+      if (url.includes('/api/capture/status')) {
+        statusCalls += 1;
+        if (statusCalls === 1) return jsonResponse({ ...initial, control_mode: 'independent', active: initial });
+        if (statusCalls === 2) return staleResponse;
+        return jsonResponse({ ...merged, control_mode: 'independent', active: merged });
+      }
+      return jsonResponse(initial);
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '重新整理狀態' }));
+    await user.click(screen.getByRole('button', { name: '開始 Noise 採樣' }));
+    releaseStale();
+
+    await waitFor(() => expect(statusCalls).toBe(3));
+    expect(screen.getByRole('button', { name: '停止 Noise 採樣' })).toBeEnabled();
+    expect(screen.queryByText('Noise 任務狀態尚未就緒')).toBeNull();
+  });
+
   it('uses a shared Bind start only when both services are ready', async () => {
     const user = await openTelemetry();
 
@@ -283,6 +412,24 @@ describe('USRPTelemetry capture controls', () => {
     ));
     expect(screen.queryByRole('button', { name: '開始 GPS 採樣' })).toBeNull();
     expect(screen.queryByRole('button', { name: '開始 Noise 採樣' })).toBeNull();
+  });
+
+  it('selects Noise mode before starting an idle Bound mission', async () => {
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '綁定任務模式' }));
+    expect(screen.getByRole('button', { name: 'USRP 模式' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'USRP 模式' }));
+    await user.click(screen.getByRole('button', { name: '開始綁定任務' }));
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/capture/bind/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ usrp_mode: 'usrp', scene: 'NTPU', map_type: 'iss' }),
+      }),
+    ));
   });
 
   it('keeps mode switching interactive and explains an active Noise task', async () => {

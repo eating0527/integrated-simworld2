@@ -682,7 +682,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [noiseError, setNoiseError] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const id = useId();
-  const statusFlight = useRef<Promise<void> | null>(null);
+  const statusFlight = useRef<Promise<boolean> | null>(null);
   const statusController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
 
@@ -751,17 +751,20 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     const controller = new AbortController();
     statusController.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 25000);
-    let flight!: Promise<void>;
+    let flight!: Promise<boolean>;
     flight = (async () => {
       try {
         const response = await fetch(`${API}/api/capture/status?usrp_mode=${mode}`, { signal: controller.signal });
         const data = await readCaptureResponse(response, '狀態讀取失敗');
-        if (!mounted.current) return;
+        if (!mounted.current) return false;
         applyStatus(data);
         setError('');
+        return true;
       } catch (requestError) {
-        if (!mounted.current) return;
-        setError(requestError instanceof Error && requestError.name === 'AbortError' ? '狀態讀取逾時' : requestError instanceof Error ? requestError.message : '狀態讀取失敗');
+        if (mounted.current) {
+          setError(requestError instanceof Error && requestError.name === 'AbortError' ? '狀態讀取逾時' : requestError instanceof Error ? requestError.message : '狀態讀取失敗');
+        }
+        return false;
       } finally {
         window.clearTimeout(timeout);
         if (statusController.current === controller) statusController.current = null;
@@ -771,6 +774,13 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     statusFlight.current = flight;
     return flight;
   }, [applyStatus, mode]);
+
+  const refreshStatus = useCallback(async () => {
+    const pending = statusFlight.current;
+    if (pending) await pending;
+    if (!mounted.current) return false;
+    return loadStatus();
+  }, [loadStatus]);
 
   useEffect(() => {
     void loadStatus();
@@ -845,7 +855,8 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           : {}),
       });
       const data = await readCaptureResponse(response, '採樣操作失敗');
-      applyStatus(data);
+      const synced = await refreshStatus();
+      if (!synced && mounted.current) applyStatus(data);
     } catch (requestError) {
       const message = requestError instanceof Error && requestError.name === 'AbortError'
         ? '採樣操作逾時，正在同步任務狀態。'
@@ -858,7 +869,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       window.clearTimeout(timeout);
       setBusy(false);
     }
-  }, [applyStatus]);
+  }, [applyStatus, refreshStatus]);
 
   const startBody = useMemo(
     () => ({ usrp_mode: mode, scene: sceneId ?? 'NTPU', map_type: 'iss' }),
@@ -928,6 +939,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           ? '請先完成目前 Noise 任務。'
           : 'Raspberry Pi 尚未就緒。'
     : null;
+  const noiseModeDisabled = noiseModeLocked || !usrpKnown;
   const noiseStartDisabled = bind || busy || !usrpKnown || isUnresolved(usrp) || !raspiReady;
   const noiseStartReason = noiseStartDisabled
     ? bind
@@ -961,8 +973,9 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           ? '任務狀態不確定，請先同步狀態。'
         : !missionId
           ? '目前沒有綁定任務。'
-          : '目前沒有可停止的綁定任務。'
+        : '目前沒有可停止的綁定任務。'
     : null;
+  const boundIdle = bind && !anyActive && !isUnresolved(uav) && !isUnresolved(usrp);
   const gpsIssue = childIssue('GPS', uav);
   const noiseIssue = childIssue('Noise', usrp);
   const switchMode = () => {
@@ -1078,6 +1091,58 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       {kind === 'noise' && !bind && child.file === 'upload_pending' && !autoRetryActive ? <button type="button" style={S.button} aria-label="重試上傳" disabled={busy || child.upload_state === 'running'} onClick={() => void request(`/api/capture/usrp/upload/retry?mission_id=${encodeURIComponent(child.mission_id || missionId)}`)}>重試上傳</button> : null}
       {actions}
     </section>
+  };
+
+  const noiseModePicker = <>
+    <div style={S.modes} aria-label="Noise 採樣模式">
+      {(['test', 'usrp'] as SamplingMode[]).map(value => (
+        <button
+          key={value}
+          type="button"
+          aria-label={value === 'test' ? '測試模式' : 'USRP 模式'}
+          aria-pressed={mode === value}
+          disabled={noiseModeDisabled}
+          aria-describedby={noiseModeReason ? `${id}-noise-mode` : undefined}
+          style={{
+            ...S.button,
+            ...(mode === value ? S.active : null),
+            ...disabledStyle(noiseModeDisabled),
+          }}
+          onClick={() => setMode(value)}
+        >
+          {value === 'test' ? '測試' : 'USRP'}
+        </button>
+      ))}
+    </div>
+    {noiseModeReason ? <div id={`${id}-noise-mode`} role="status" style={S.blocker}>{noiseModeReason}</div> : null}
+  </>;
+
+  const noiseControls = () => {
+    if (bind) {
+      if (boundIdle) return noiseModePicker;
+      return canRetryStop(usrp, Boolean(status?.stop_requested_at))
+        ? <div style={S.actions}>{stopAction('usrp', usrp, usrpMissionId)}</div>
+        : null;
+    }
+    return <>
+      {noiseModePicker}
+      <div style={S.actions}>
+        <>
+          <button
+            type="button"
+            style={{ ...S.button, ...S.primary, ...disabledStyle(noiseStartDisabled) }}
+            disabled={noiseStartDisabled}
+            aria-label="開始 Noise 採樣"
+            aria-describedby={noiseStartReason ? `${id}-noise-start` : undefined}
+            onClick={() => void request('/api/capture/usrp/start', startBody)}
+          >
+            開始 Noise 採樣
+          </button>
+          {noiseStartReason ? <div id={`${id}-noise-start`} role="status" style={S.blocker}>{noiseStartReason}</div> : null}
+          {stopAction('usrp', usrp, usrpMissionId)}
+        </>
+      </div>
+    </>;
   };
 
   return (
@@ -1203,47 +1268,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
           noiseHistory,
           usrp,
           noiseError,
-          !bind ? <>
-            <div style={S.modes} aria-label="Noise 採樣模式">
-              {(['test', 'usrp'] as SamplingMode[]).map(value => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-label={value === 'test' ? '測試模式' : 'USRP 模式'}
-                  aria-pressed={mode === value}
-                  disabled={noiseModeLocked || !usrpKnown}
-                  aria-describedby={noiseModeReason ? `${id}-noise-mode` : undefined}
-                  style={{
-                    ...S.button,
-                    ...(mode === value ? S.active : null),
-                    ...disabledStyle(noiseModeLocked || !usrpKnown),
-                  }}
-                  onClick={() => setMode(value)}
-                >
-                  {value === 'test' ? '測試' : 'USRP'}
-                </button>
-              ))}
-            </div>
-            {noiseModeReason ? <div id={`${id}-noise-mode`} role="status" style={S.blocker}>{noiseModeReason}</div> : null}
-            <div style={S.actions}>
-              <>
-                <button
-                  type="button"
-                  style={{ ...S.button, ...S.primary, ...disabledStyle(noiseStartDisabled) }}
-                  disabled={noiseStartDisabled}
-                  aria-label="開始 Noise 採樣"
-                  aria-describedby={noiseStartReason ? `${id}-noise-start` : undefined}
-                  onClick={() => void request('/api/capture/usrp/start', startBody)}
-                >
-                  開始 Noise 採樣
-                </button>
-                {noiseStartReason ? <div id={`${id}-noise-start`} role="status" style={S.blocker}>{noiseStartReason}</div> : null}
-                {stopAction('usrp', usrp, usrpMissionId)}
-              </>
-            </div>
-          </> : canRetryStop(usrp, Boolean(status?.stop_requested_at))
-            ? <div style={S.actions}>{stopAction('usrp', usrp, usrpMissionId)}</div>
-            : null,
+          noiseControls(),
           ['連線與設定', '錄製', '收尾與上傳'],
         )}
 

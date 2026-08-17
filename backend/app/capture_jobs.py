@@ -578,11 +578,12 @@ class CaptureCoordinator:
     def status_payload(self, mode: UsrpMode = "test") -> dict:
         with self._lock:
             self.status(mode)
-            projection, active = self._status_projection_locked(mode)
+            health = self.health_monitor.as_dict()
+            projection, active = self._status_projection_locked(mode, health)
             control_mode = "bound" if active is not None and active.bind else "independent"
             return {
                 **projection.model_dump(),
-                "device_health": self.health_monitor.as_dict(),
+                "device_health": health,
                 "control_mode": control_mode,
                 "active": active.model_dump() if active is not None else None,
                 "history": self._mission_history_locked(),
@@ -616,7 +617,17 @@ class CaptureCoordinator:
             return None
         return max(candidates, key=self._state_order)
 
-    def _active_projection_locked(self, states: list[CaptureState]) -> CaptureState | None:
+    def _idle_child(self, health: dict[str, Any], device: str) -> ChildState:
+        snapshot = health.get(device) or {}
+        value = snapshot.get("state")
+        connection: ConnectionState = value if value in {"ready", "offline", "unknown"} else "unknown"
+        return ChildState(connection=connection)
+
+    def _active_projection_locked(
+        self,
+        states: list[CaptureState],
+        health: dict[str, Any],
+    ) -> CaptureState | None:
         """Build the current projection without importing terminal history.
 
         Bound missions remain one shared state. Independent GPS and Noise
@@ -639,9 +650,13 @@ class CaptureCoordinator:
         if gps is None and noise is None:
             return None
         if gps is not None and noise is None:
-            return gps
+            projection = gps.model_copy(deep=True)
+            projection.usrp = self._idle_child(health, "raspi")
+            return projection
         if noise is not None and gps is None:
-            return noise
+            projection = noise.model_copy(deep=True)
+            projection.uav = self._idle_child(health, "ap3")
+            return projection
 
         assert gps is not None and noise is not None
         started = [item.started_at for item in (gps, noise) if item.started_at]
@@ -661,15 +676,6 @@ class CaptureCoordinator:
     def _clean_projection(self, mode: UsrpMode, health: dict[str, Any]) -> CaptureState:
         """Return idle controls while retaining current device health."""
 
-        def idle_child(device: str) -> ChildState:
-            snapshot = health.get(device) or {}
-            value = snapshot.get("state")
-            connection: ConnectionState = value if value in {"ready", "offline", "unknown"} else "unknown"
-            # Device Health errors remain in the dedicated health cards; do
-            # not copy them into an idle child and make them look like a
-            # historical mission error in the clean panel.
-            return ChildState(connection=connection)
-
         return CaptureState(
             mission_id="",
             target="bind",
@@ -677,19 +683,20 @@ class CaptureCoordinator:
             selected_usrp_mode=mode,
             overall_state="ready",
             created_at="",
-            uav=idle_child("ap3"),
-            usrp=idle_child("raspi"),
+            uav=self._idle_child(health, "ap3"),
+            usrp=self._idle_child(health, "raspi"),
         )
 
     def _status_projection_locked(
         self,
         mode: UsrpMode,
+        health: dict[str, Any],
     ) -> tuple[CaptureState, CaptureState | None]:
         states = self.store.list()
-        active = self._active_projection_locked(states)
+        active = self._active_projection_locked(states, health)
         if active is not None:
             return active, active
-        return self._clean_projection(mode, self.health_monitor.as_dict()), None
+        return self._clean_projection(mode, health), None
 
     def _mission_history_locked(self) -> dict[str, dict[str, str] | None]:
         """Return the latest started mission involving each service."""
