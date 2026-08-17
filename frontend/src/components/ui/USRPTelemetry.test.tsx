@@ -432,6 +432,36 @@ describe('USRPTelemetry capture controls', () => {
     ));
   });
 
+  it('keeps Bound mode when switching Noise mode while idle', async () => {
+    const status = captureStatus();
+    let statusCalls = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).includes('/api/capture/status')) {
+        statusCalls += 1;
+        return jsonResponse({
+          ...status,
+          selected_usrp_mode: statusCalls === 1 ? 'test' : 'usrp',
+          control_mode: 'independent',
+          active: null,
+        });
+      }
+      return jsonResponse(status);
+    });
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '綁定任務模式' }));
+    expect(screen.getByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'USRP 模式' }));
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+    expect(screen.getByRole('button', { name: '綁定任務模式' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '開始綁定任務' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '開始 GPS 採樣' })).toBeNull();
+  });
+
   it('keeps mode switching interactive and explains an active Noise task', async () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => jsonResponse(captureStatus({
       missionId: 'noise_2',

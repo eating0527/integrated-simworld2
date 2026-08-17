@@ -523,11 +523,15 @@ function missionLabel(status: CaptureStatus | null): string {
   return OVERALL_LABELS[status.overall_state];
 }
 
+function isProjection(value: Partial<CaptureStatus>): boolean {
+  return 'active' in value || 'control_mode' in value;
+}
+
 function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
   const activeValue = value.active && typeof value.active === 'object'
     ? value.active
     : null;
-  const hasProjection = 'active' in value || 'control_mode' in value;
+  const projected = isProjection(value);
   const cleanChild = (child: unknown) => {
     const raw = child && typeof child === 'object' ? child as Record<string, unknown> : {};
     return {
@@ -550,7 +554,7 @@ function normalizeStatus(value: Partial<CaptureStatus>): CaptureStatus {
   // the top level without rehydrating those fields into the panel.
   const source = activeValue
     ? { ...value, ...activeValue, device_health: value.device_health, history: value.history }
-    : hasProjection
+    : projected
       ? {
         ...value,
         mission_id: '',
@@ -700,15 +704,11 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     setGpsError('');
     setNoiseError('');
     if (next.device_health) setHealth(next.device_health);
-    if ('active' in data || 'control_mode' in data) {
-      if (next.active) {
-        setBind(next.control_mode === 'bound' || next.bind);
-      } else {
-        // The backend deliberately returns Independent for an idle
-        // projection; terminal history must never rehydrate Bound mode.
-        setBind(false);
-      }
-    } else if (next.bind && (isUnresolved(next.uav) || isUnresolved(next.usrp))) {
+    const projected = isProjection(data);
+    // Idle projections default to Independent; only an active projection changes control mode.
+    if (projected && next.active) {
+      setBind(next.control_mode === 'bound' || next.bind);
+    } else if (!projected && next.bind && (isUnresolved(next.uav) || isUnresolved(next.usrp))) {
       setBind(true);
     }
     if (isActive(next.usrp.service) || isUnresolved(next.usrp)) {
