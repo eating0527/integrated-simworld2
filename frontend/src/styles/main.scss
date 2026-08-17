@@ -1610,7 +1610,8 @@ canvas {
   pointer-events: auto;
 }
 
-.workspace__rail > * {
+.workspace__rail > *,
+.workspace__rail-body > * {
   position: static !important;
   inset: auto !important;
   z-index: auto !important;
