@@ -139,17 +139,17 @@ if (Test-Path $EnvFile) {
 }
 
 # Preflight checks
-# Prefer the rebuilt Python 3.12 environment.  Keep the legacy .venv as a
-# fallback so existing local setups remain untouched while they migrate.
+# Use the rebuilt Python 3.12 environment. Keep .venv312 as a fallback for
+# existing local setups during the transition.
 $pythonCandidates = @(
-    (Join-Path $BackendDir ".venv312\Scripts\python.exe"),
-    (Join-Path $BackendDir ".venv\Scripts\python.exe")
+    (Join-Path $BackendDir ".venv\Scripts\python.exe"),
+    (Join-Path $BackendDir ".venv312\Scripts\python.exe")
 )
 $pythonExe = $pythonCandidates |
     Where-Object { Test-Path $_ } |
     Select-Object -First 1
 if (-not $pythonExe) {
-    Err "Missing backend Python environment, run: cd backend; py -3.12 -m venv .venv312; .venv312\Scripts\python -m pip install -r requirements.txt"
+    Err "Missing backend Python environment, run: cd backend; py -3.12 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
 }
 $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
@@ -170,7 +170,7 @@ $checkEnvScript = Join-Path $ToolsDir "check_env.py"
 & $pythonExe $checkEnvScript
 if ($LASTEXITCODE -ne 0) {
     Err "Environment check failed; backend startup cancelled."
-    Err "Update the selected environment: cd backend; .venv312\Scripts\python -m pip install -r requirements.txt"
+    Err "Update the selected environment: cd backend; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
 }
 
