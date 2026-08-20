@@ -2222,10 +2222,15 @@ class GpsSyncPointRequest(BaseModel):
     lat: float
     lon: float
     alt: float = 0.0
+    accuracy: float = 999.0
     alt_mode: str = "relative"
     device_id: str = "align-m4p-top-aircraft"
     device_name: str = "M4P TOP Aircraft"
     device_type: str = "uav"
+
+
+class GpsSyncTestRequest(BaseModel):
+    mission_id: str | None = None
 
 
 def _safe_incoming_bundle_id(mission_id: str) -> str:
@@ -2250,6 +2255,50 @@ def _tail_text_file(path: Path, limit: int) -> list[str]:
         return []
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return lines[-max(1, min(limit, 500)):]
+
+
+def _post_gps_sync_json(api_url: str, payload: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        api_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "integrated-simworld-gps-sync-test/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                data = {"raw": raw}
+            return {
+                "success": 200 <= response.status < 300,
+                "status": response.status,
+                "response": data,
+            }
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            data = {"raw": raw}
+        return {
+            "success": False,
+            "status": exc.code,
+            "error": data.get("detail") or data.get("error") or raw or str(exc),
+            "response": data,
+        }
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {
+            "success": False,
+            "status": None,
+            "error": str(exc),
+        }
 
 
 def _incoming_mission_summary(bundle_dir: Path) -> dict[str, Any] | None:
@@ -2931,6 +2980,7 @@ async def _sync_gps_point(point: GpsSyncPointRequest, bundle_id: str):
         "lat": point.lat,
         "lon": point.lon,
         "alt": point.alt,
+        "accuracy": point.accuracy,
         "timestamp": point.time_stamp,
         "missionId": bundle_id,
     }
@@ -3000,6 +3050,88 @@ async def usrp_sync_gps_point_post(point: GpsSyncPointRequest):
     ):
         return JSONResponse({"success": False, "error": "lat, lon, and alt must be finite numbers"}, status_code=422)
     return await _sync_gps_point(point, bundle_id)
+
+
+@app.post("/api/usrp/gps-sync/test-point")
+async def usrp_gps_sync_test_point_post(req: GpsSyncTestRequest):
+    mission_id = req.mission_id or f"frontend_ap3_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        bundle_id = _safe_incoming_bundle_id(mission_id)
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+
+    point = GpsSyncPointRequest(
+        mission_id=bundle_id,
+        time_stamp="2026-07-31T16:10:53.433+08:00",
+        lat=24.8503362,
+        lon=120.9281077,
+        alt=-0.523,
+        accuracy=3.5,
+        alt_mode="relative",
+        device_id="fake-ap3-tunnel-test",
+        device_name="Fake AP3 Tunnel Test",
+        device_type="uav",
+    )
+    payload = point.model_dump()
+
+    try:
+        health = await asyncio.to_thread(capture_coordinator.health_status, "test")
+    except Exception as exc:
+        health = {
+            "device_health": {
+                "ap3": {
+                    "device": "ap3",
+                    "state": "unknown",
+                    "error": str(exc) or "AP3 health probe failed",
+                    "stale": True,
+                }
+            }
+        }
+
+    local_response = await usrp_sync_gps_point_post(point)
+    if isinstance(local_response, JSONResponse):
+        local_body = json.loads(local_response.body.decode("utf-8"))
+        local_result = {
+            "success": False,
+            "status": local_response.status_code,
+            "response": local_body,
+            "error": local_body.get("error") or local_body.get("detail") or "local GPS sync failed",
+        }
+    else:
+        local_result = {
+            "success": bool(local_response.get("success")),
+            "status": 200,
+            "response": local_response,
+            "gps_csv": local_response.get("gps_csv"),
+        }
+
+    remote_url = os.environ.get("GPS_SYNC_API_URL", "").strip()
+    remote_result = {
+        "configured": bool(remote_url),
+        "url": remote_url,
+        "success": False,
+        "skipped": not bool(remote_url),
+        "error": "" if remote_url else "GPS_SYNC_API_URL is not configured",
+    }
+    if remote_url:
+        remote_post = await asyncio.to_thread(_post_gps_sync_json, remote_url, payload)
+        remote_result = {
+            "configured": True,
+            "url": remote_url,
+            "skipped": False,
+            **remote_post,
+        }
+
+    return {
+        "success": bool(local_result.get("success")) and (
+            bool(remote_result.get("success")) if remote_result.get("configured") else True
+        ),
+        "mission_id": bundle_id,
+        "payload": payload,
+        "device_health": health.get("device_health", health),
+        "local": local_result,
+        "remote": remote_result,
+    }
 
 
 @app.get("/api/usrp/gps-sync/logs")

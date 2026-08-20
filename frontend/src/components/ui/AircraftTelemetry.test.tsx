@@ -47,6 +47,28 @@ describe('AircraftTelemetry', () => {
     expect(screen.getByLabelText('GPS 狀態摘要')).toHaveTextContent('N/A');
   });
 
+  it('does not crash when a GPS payload omits accuracy', () => {
+    render(
+      <AircraftTelemetry
+        device={{
+          lat: 24.1234567,
+          lon: 121.7654321,
+          alt: 88.4,
+          accuracy: undefined,
+          deviceId: 'uav-1',
+          deviceName: 'M4P TOP Aircraft',
+          deviceType: 'uav',
+          timestamp: 1,
+          lastUpdateTime: Date.now(),
+        } as unknown as import('@/hooks/useGPSSync').GPSDevice}
+        isTracked={false}
+      />,
+    );
+
+    expect(screen.getByText('Accuracy')).toBeInTheDocument();
+    expect(screen.getByText('N/A')).toBeInTheDocument();
+  });
+
   it('shows a collapsed coordinate summary and expands telemetry details', async () => {
     const user = userEvent.setup();
     render(

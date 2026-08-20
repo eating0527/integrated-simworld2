@@ -79,6 +79,25 @@ interface MissionSummary {
   mission_id: string;
 }
 
+interface GpsSyncTestResult {
+  success: boolean;
+  mission_id: string;
+  device_health?: Record<string, DeviceHealth>;
+  local?: {
+    success?: boolean;
+    gps_csv?: string;
+    error?: string;
+  };
+  remote?: {
+    configured?: boolean;
+    success?: boolean;
+    skipped?: boolean;
+    url?: string;
+    status?: number | null;
+    error?: string;
+  };
+}
+
 type DeviceErrorMap = Record<string, string>;
 
 interface CaptureDeviceError {
@@ -288,6 +307,22 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 11,
     overflowWrap: 'anywhere',
     wordBreak: 'break-word',
+  },
+  testBox: {
+    marginTop: 8,
+    padding: '8px',
+    borderRadius: 6,
+    background: 'rgba(0, 0, 0, 0.16)',
+    border: '1px solid rgba(120, 180, 255, 0.12)',
+    fontSize: 11,
+    lineHeight: 1.45,
+    overflowWrap: 'anywhere',
+  },
+  success: {
+    marginTop: 6,
+    color: '#8ef3c5',
+    fontSize: 11,
+    lineHeight: 1.35,
   },
 };
 
@@ -656,6 +691,21 @@ async function readCaptureResponse(response: Response, fallback: string): Promis
   return data as Partial<CaptureStatus>;
 }
 
+async function readJsonResponse<T>(response: Response, fallback: string): Promise<T> {
+  const raw = await response.text();
+  let data: unknown = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (parseError) {
+      if (!response.ok) throw new Error(raw);
+      throw parseError;
+    }
+  }
+  if (!response.ok) throw new Error(responseMessage(data, raw || fallback));
+  return data as T;
+}
+
 function splitRequestError(path: string, message: string): { gps?: string; noise?: string; common?: string } {
   if (path.includes('/uav/')) return { gps: message };
   if (path.includes('/usrp/')) return { noise: message };
@@ -684,6 +734,9 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const [error, setError] = useState('');
   const [gpsError, setGpsError] = useState('');
   const [noiseError, setNoiseError] = useState('');
+  const [gpsSyncTest, setGpsSyncTest] = useState<GpsSyncTestResult | null>(null);
+  const [gpsSyncTesting, setGpsSyncTesting] = useState(false);
+  const [gpsSyncTestError, setGpsSyncTestError] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const id = useId();
   const statusFlight = useRef<Promise<boolean> | null>(null);
@@ -870,6 +923,40 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
       setBusy(false);
     }
   }, [applyStatus, refreshStatus]);
+
+  const runGpsSyncTest = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20000);
+    setGpsSyncTesting(true);
+    setGpsSyncTestError('');
+    setGpsSyncTest(null);
+    try {
+      const response = await fetch(`${API}/api/usrp/gps-sync/test-point`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await readJsonResponse<GpsSyncTestResult>(response, 'GPS tunnel 測試失敗');
+      if (!mounted.current) return;
+      setGpsSyncTest(data);
+      if (data.device_health && typeof data.device_health === 'object') {
+        setHealth({
+          ap3: normalizeHealth(data.device_health.ap3, 'ap3'),
+          raspi: normalizeHealth(data.device_health.raspi, 'raspi'),
+        });
+      }
+      void refreshStatus();
+    } catch (requestError) {
+      if (!mounted.current) return;
+      setGpsSyncTestError(requestError instanceof Error && requestError.name === 'AbortError'
+        ? 'GPS tunnel 測試逾時'
+        : requestError instanceof Error ? requestError.message : 'GPS tunnel 測試失敗');
+    } finally {
+      window.clearTimeout(timeout);
+      if (mounted.current) setGpsSyncTesting(false);
+    }
+  }, [refreshStatus]);
 
   const startBody = useMemo(
     () => ({ usrp_mode: mode, scene: sceneId ?? 'NTPU', map_type: 'iss' }),
@@ -1221,6 +1308,35 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
               </div>
             );
           })}
+        </div>
+        <div style={S.testBox}>
+          <div style={S.sectionTitle}>AP3 / A→B 假資料測試</div>
+          <button
+            type="button"
+            style={{ ...S.button, ...S.primary, ...disabledStyle(gpsSyncTesting) }}
+            disabled={gpsSyncTesting}
+            aria-label="產生假 AP3 GPS 並測試 A 到 B"
+            onClick={() => void runGpsSyncTest()}
+          >
+            {gpsSyncTesting ? '測試中…' : '產生假 GPS 測試 A→B'}
+          </button>
+          {gpsSyncTest ? (
+            <div role="status" style={gpsSyncTest.success ? S.success : S.blocker}>
+              <div>任務：{gpsSyncTest.mission_id}</div>
+              <div>AP3：{CONNECTION_LABELS[normalizeHealth(gpsSyncTest.device_health?.ap3, 'ap3').state]}</div>
+              <div>本機寫入：{gpsSyncTest.local?.success ? '成功' : `失敗 ${gpsSyncTest.local?.error ?? ''}`}</div>
+              <div>
+                B 端同步：{
+                  gpsSyncTest.remote?.configured
+                    ? gpsSyncTest.remote.success
+                      ? `成功 (${gpsSyncTest.remote.status ?? 'OK'})`
+                      : `失敗 ${gpsSyncTest.remote.error ?? ''}`
+                    : '略過，未設定 GPS_SYNC_API_URL'
+                }
+              </div>
+            </div>
+          ) : null}
+          {gpsSyncTestError ? <div role="alert" style={S.error}>{gpsSyncTestError}</div> : null}
         </div>
 
         <div style={S.sectionTitle}>任務狀態</div>

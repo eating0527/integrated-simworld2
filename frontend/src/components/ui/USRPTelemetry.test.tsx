@@ -151,6 +151,40 @@ describe('USRPTelemetry capture controls', () => {
     expect(screen.getByLabelText('AP3 裝置就緒')).toHaveStyle({ minWidth: '0', overflowWrap: 'anywhere' });
   });
 
+  it('runs a fake AP3 GPS tunnel test and shows A to B result', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/usrp/gps-sync/test-point')) {
+        expect(init?.method).toBe('POST');
+        return jsonResponse({
+          success: true,
+          mission_id: 'frontend_ap3_test_1',
+          device_health: captureStatus().device_health,
+          local: { success: true, gps_csv: 'incoming/frontend_ap3_test_1/gps.csv' },
+          remote: {
+            configured: true,
+            success: true,
+            status: 200,
+            url: 'https://backend.simworld.website/api/usrp/sync-gps-point',
+          },
+        });
+      }
+      return jsonResponse(captureStatus());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = await openTelemetry();
+
+    await user.click(await screen.findByRole('button', { name: '產生假 AP3 GPS 並測試 A 到 B' }));
+
+    expect(await screen.findByText('任務：frontend_ap3_test_1')).toBeInTheDocument();
+    expect(screen.getByText('本機寫入：成功')).toBeInTheDocument();
+    expect(screen.getByText('B 端同步：成功 (200)')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/usrp/gps-sync/test-point',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
   it('treats stale health as unknown and keeps it separate from a terminal child', async () => {
     const status = captureStatus({ missionId: 'history_2', overall: 'completed' });
     status.uav.service = 'stopped';

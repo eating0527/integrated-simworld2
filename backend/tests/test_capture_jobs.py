@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 from io import BytesIO
 import json
+import os
 import sys
 import threading
 import time
@@ -3157,6 +3158,41 @@ class GpsSyncTests(unittest.TestCase):
         self.assertTrue(response["missions"][0]["has_gps"])
         self.assertTrue(response["missions"][0]["has_noise"])
         self.assertIn("mission=flight_visible", response["missions"][0]["last_log"])
+
+    def test_sync_test_point_writes_local_and_posts_configured_remote(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"success": true}'
+
+        with (
+            patch.object(self.main, "INCOMING_CSV_DIR", self.root),
+            patch.dict(os.environ, {"GPS_SYNC_API_URL": "https://backend.example.test/api/usrp/sync-gps-point"}),
+            patch.object(self.main.urllib.request, "urlopen", return_value=FakeResponse()) as urlopen,
+        ):
+            response = asyncio.run(self.main.usrp_gps_sync_test_point_post(self.main.GpsSyncTestRequest()))
+
+        self.assertTrue(response["success"])
+        self.assertTrue(response["local"]["success"])
+        self.assertTrue(response["remote"]["success"])
+        gps_lines = (self.root / response["mission_id"] / "gps.csv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(gps_lines, [
+            "time_stamp,lat,lon,alt,alt_mode",
+            "2026-07-31T16:10:53.433+08:00,24.8503362,120.9281077,-0.523,relative",
+        ])
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://backend.example.test/api/usrp/sync-gps-point")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["mission_id"], response["mission_id"])
+        self.assertEqual(payload["device_id"], "fake-ap3-tunnel-test")
+        self.assertEqual(payload["accuracy"], 3.5)
 
 
 class GpsUploadTests(unittest.TestCase):

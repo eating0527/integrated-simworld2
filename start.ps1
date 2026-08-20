@@ -255,7 +255,17 @@ Info "   Frontend PID: $($frontendJob.Id)  log: .logs\frontend.log"
 # --- Cloudflare Tunnel ---
 if (-not $NoTunnel) {
     $cfBin = Get-Command cloudflared -ErrorAction SilentlyContinue
+    $cfPath = $null
     if ($cfBin) {
+        $cfPath = $cfBin.Source
+    } else {
+        $repoCfBin = Join-Path $ScriptDir "cloudflared\cloudflared.exe"
+        if (Test-Path $repoCfBin) {
+            $cfPath = $repoCfBin
+        }
+    }
+
+    if ($cfPath) {
         Info "Starting Cloudflare Tunnel..."
         $token = [System.Environment]::GetEnvironmentVariable("CLOUDFLARED_TOKEN","Process")
         $tunnelLog = Join-Path $LogDir "tunnel.log"
@@ -277,13 +287,13 @@ ingress:
 "@ | Set-Content $winConfigPath -Encoding UTF8
 
         if ($token) {
-            $tunnelJob = Start-Process -FilePath $cfBin.Source `
+            $tunnelJob = Start-Process -FilePath $cfPath `
                 -ArgumentList "tunnel","--protocol","http2","run","--token",$token `
                 -RedirectStandardOutput $tunnelLog `
                 -RedirectStandardError  ($tunnelLog + ".err") `
                 -NoNewWindow -PassThru
         } else {
-            $tunnelJob = Start-Process -FilePath $cfBin.Source `
+            $tunnelJob = Start-Process -FilePath $cfPath `
                 -ArgumentList "tunnel","--config",$winConfigPath,"run" `
                 -RedirectStandardOutput $tunnelLog `
                 -RedirectStandardError  ($tunnelLog + ".err") `

@@ -19,6 +19,10 @@ function ageSeconds(device?: GPSDevice | null): number | null {
   return Math.max(0, Math.round((Date.now() - device.lastUpdateTime) / 1000));
 }
 
+function formatTelemetryValue(value: unknown, digits: number, suffix = ''): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : 'N/A';
+}
+
 const S: Record<string, React.CSSProperties> = {
   name: {
     fontSize: 15,
@@ -104,10 +108,10 @@ export function AircraftTelemetry({
         <>
           <div style={S.name}>{device.deviceName || 'M4P TOP Aircraft'}</div>
           <PanelGrid>
-            <PanelField label="Latitude" value={device.lat.toFixed(7)} />
-            <PanelField label="Longitude" value={device.lon.toFixed(7)} />
-            <PanelField label="Altitude" value={`${device.alt.toFixed(2)} m`} />
-            <PanelField label="Accuracy" value={`${device.accuracy.toFixed(1)} m`} />
+            <PanelField label="Latitude" value={formatTelemetryValue(device.lat, 7)} />
+            <PanelField label="Longitude" value={formatTelemetryValue(device.lon, 7)} />
+            <PanelField label="Altitude" value={formatTelemetryValue(device.alt, 2, ' m')} />
+            <PanelField label="Accuracy" value={formatTelemetryValue(device.accuracy, 1, ' m')} />
           </PanelGrid>
           <PanelFooter>
             <span style={S.id}>
