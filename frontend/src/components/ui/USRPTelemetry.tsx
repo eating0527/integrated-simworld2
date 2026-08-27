@@ -471,6 +471,42 @@ function normalizeHealth(value: unknown, device: 'ap3' | 'raspi'): DeviceHealth 
   };
 }
 
+function healthTimestamp(value: DeviceHealth | undefined): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value.last_checked_at || value.checked_at || '');
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function mergeHealthResult(
+  current: DeviceHealth | undefined,
+  incoming: DeviceHealth,
+): DeviceHealth {
+  const currentTime = healthTimestamp(current);
+  const incomingTime = healthTimestamp(incoming);
+  if (current && incomingTime < currentTime) return current;
+  if (
+    current
+    && incomingTime === currentTime
+    && current.state === 'ready'
+    && !current.stale
+    && incoming.stale
+  ) {
+    return current;
+  }
+  return incoming;
+}
+
+function mergeHealth(
+  current: Record<string, DeviceHealth>,
+  incoming: Record<string, DeviceHealth>,
+): Record<string, DeviceHealth> {
+  return {
+    ...current,
+    ap3: mergeHealthResult(current.ap3, incoming.ap3),
+    raspi: mergeHealthResult(current.raspi, incoming.raspi),
+  };
+}
+
 export function formatTaipeiTime(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) return '—';
   const text = value.trim();
@@ -703,7 +739,7 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
     setStatus(next);
     setGpsError('');
     setNoiseError('');
-    if (next.device_health) setHealth(next.device_health);
+    if (next.device_health) setHealth((previous) => mergeHealth(previous, next.device_health ?? {}));
     const projected = isProjection(data);
     // Idle projections default to Independent; only an active projection changes control mode.
     if (projected && next.active) {
@@ -718,18 +754,20 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
 
   const loadHealth = useCallback(async () => {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    const timeout = window.setTimeout(() => controller.abort(), 20000);
     try {
       const response = await fetch(`${API}/api/capture/health?usrp_mode=${mode}`, { signal: controller.signal });
       const data = await readCaptureResponse(response, '裝置健康檢查失敗') as Partial<{ device_health: Record<string, unknown> }>;
       const values = data.device_health;
       if (values && typeof values === 'object') {
-        setHealth({
+        const nextHealth = {
           ap3: normalizeHealth(values.ap3, 'ap3'),
           raspi: normalizeHealth(values.raspi, 'raspi'),
-        });
+        };
+        setHealth((previous) => mergeHealth(previous, nextHealth));
       }
     } catch (requestError) {
+      if (requestError instanceof Error && requestError.name === 'AbortError') return;
       setHealth((previous) => Object.fromEntries(
         (['ap3', 'raspi'] as const).map((device) => [device, {
           ...(previous[device] ?? normalizeHealth({}, device)),
@@ -884,7 +922,12 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const raspiHealth = health.raspi;
   const gpsHistory = status?.history?.gps;
   const noiseHistory = status?.history?.noise;
-  const ap3Ready = ap3Health?.state === 'ready' && !ap3Health.stale;
+  // Status already contains the AP3 probe result.  Health polling also probes
+  // Raspberry Pi, so a slow Raspberry Pi response must not strand an otherwise
+  // ready independent GPS capture behind a stale health-panel value.
+  const statusAp3Health = status?.device_health?.ap3;
+  const ap3Ready = (ap3Health?.state === 'ready' && !ap3Health.stale)
+    || (statusAp3Health?.state === 'ready' && !statusAp3Health.stale);
   const raspiReady = raspiHealth?.state === 'ready' && !raspiHealth.stale;
   const anyActive = isActive(uav.service) || isActive(usrp.service);
   const overallLabel = missionLabel(status);
@@ -908,7 +951,10 @@ export function USRPTelemetry({ sceneId = 'NTPU' }: USRPTelemetryProps) {
   const controlsLocked = busy || isUnresolved(uav) || isUnresolved(usrp);
   const noiseModeLocked = busy || isUnresolved(usrp) || !raspiReady;
   const bothReady = uavKnown && usrpKnown && ap3Ready && raspiReady;
-  const canStartUav = uavKnown && !bind && !busy && !isUnresolved(uav) && ap3Ready;
+  // Starting is safe whenever AP3 is ready and no GPS capture is unresolved.
+  // The start endpoint remains the authority for conflicts; requiring every
+  // display field to have arrived first only leaves this button falsely locked.
+  const canStartUav = !bind && !busy && !isUnresolved(uav) && ap3Ready;
   // Control Mode is only a projection switch; an unresolved child must be
   // able to announce its blocker even when the sibling health projection is
   // unknown.  Before the first status response there is no mode to switch.

@@ -3,7 +3,7 @@ import os
 import shlex
 import time
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Callable, Literal
 
 
@@ -587,6 +587,42 @@ def stop_capture_job(mode: str, mission_id: str, state_dir: str | None = None) -
         status["mission_state"] = mission_state
     status["message"] = f"{target.service_name} stopped"
     return status
+
+
+def download_capture_noise(
+    mode: str,
+    mission_id: str,
+    local_path: str | Path,
+    state_dir: str | None = None,
+) -> Path:
+    """Copy the finalized Pi noise artifact to the local mission bundle."""
+
+    _service_target(mode)
+    mission_state = _read_mission_state(mission_id, state_dir)
+    remote_path = str(mission_state.get("noise_csv") or "/home/user/rx_sampling/noise.csv")
+    destination = Path(local_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+
+    client = _ssh_client(_config_from_env())
+    try:
+        sftp = client.open_sftp()
+        try:
+            sftp.get(remote_path, str(temporary))
+        finally:
+            sftp.close()
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise UsrpControlError("remote noise.csv is missing or empty")
+        temporary.replace(destination)
+        return destination
+    except UsrpControlError:
+        raise
+    except Exception as exc:
+        raise UsrpControlError(_redact(f"failed to download noise.csv: {exc}")) from exc
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
+        client.close()
 
 
 def _run_capture_upload(mode: str, mission_id: str, state_dir: str | None = None) -> dict:

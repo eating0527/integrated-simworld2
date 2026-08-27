@@ -67,7 +67,7 @@ function Initialize-GpsCsvTarget {
     $gpsCsvPath = Join-Path $missionDir "gps.csv"
     New-Item -ItemType Directory -Force -Path $missionDir | Out-Null
     if (-not (Test-Path $gpsCsvPath)) {
-        Set-Content -Path $gpsCsvPath -Value "time_stamp,lat,lon,alt" -Encoding ASCII
+        Set-Content -Path $gpsCsvPath -Value "time_stamp,lat,lon,alt,alt_mode" -Encoding ASCII
     }
     return $gpsCsvPath
 }
@@ -143,11 +143,23 @@ if (Test-Path $EnvFile) {
 # existing local setups during the transition.
 $pythonCandidates = @(
     (Join-Path $BackendDir ".venv\Scripts\python.exe"),
-    (Join-Path $BackendDir ".venv312\Scripts\python.exe")
+    (Join-Path $BackendDir ".venv312\Scripts\python.exe"),
+    (Join-Path $ScriptDir "..\v\Scripts\python.exe")
 )
-$pythonExe = $pythonCandidates |
-    Where-Object { Test-Path $_ } |
-    Select-Object -First 1
+$checkEnvScript = Join-Path $ToolsDir "check_env.py"
+$pythonExe = $null
+foreach ($candidate in $pythonCandidates) {
+    if (-not (Test-Path $candidate)) {
+        continue
+    }
+    Info "Checking Python candidate: $candidate"
+    & $candidate $checkEnvScript
+    if ($LASTEXITCODE -eq 0) {
+        $pythonExe = $candidate
+        break
+    }
+    Warn "   Python candidate failed environment check, trying next candidate..."
+}
 if (-not $pythonExe) {
     Err "Missing backend Python environment, run: cd backend; py -3.12 -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt"
     exit 1
@@ -164,15 +176,7 @@ if (-not (Test-Path $viteScript)) {
 }
 
 # Check environment versions
-Info "Checking environment versions..."
 Info "   Python: $pythonExe"
-$checkEnvScript = Join-Path $ToolsDir "check_env.py"
-& $pythonExe $checkEnvScript
-if ($LASTEXITCODE -ne 0) {
-    Err "Environment check failed; backend startup cancelled."
-    Err "Update the selected environment: cd backend; .venv\Scripts\python -m pip install -r requirements.txt"
-    exit 1
-}
 
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
     Err "Missing node_modules, run: cd frontend; npm install"
@@ -328,7 +332,11 @@ function Start-Ap3GpsCsvWriter {
         [string]$MissionId,
         [string]$IncomingDir,
         [string]$Altitude,
-        [string]$MavlinkUrl
+        [string]$MavlinkUrl,
+        [string]$SyncApiUrl,
+        [string]$SyncDeviceId,
+        [string]$SyncDeviceName,
+        [string]$SyncDeviceType
     )
 
     $writerArgs = @(
@@ -343,6 +351,18 @@ function Start-Ap3GpsCsvWriter {
     )
     if ($MavlinkUrl) {
         $writerArgs += @("--mavlink-url", $MavlinkUrl)
+    }
+    if ($SyncApiUrl) {
+        $writerArgs += @(
+            "--sync-api-url",
+            $SyncApiUrl,
+            "--sync-device-id",
+            $SyncDeviceId,
+            "--sync-device-name",
+            $SyncDeviceName,
+            "--sync-device-type",
+            $SyncDeviceType
+        )
     }
     return Start-Process -FilePath $PythonExe `
         -ArgumentList $writerArgs `
@@ -393,6 +413,16 @@ if ($enableGpsCsv) {
     if (Test-Path $gpsCsvScript) {
         $gpsCsvTarget = Initialize-GpsCsvTarget -IncomingRoot $IncomingDir -MissionId $GpsMissionId
         Info "Starting AP3 GPS CSV writer..."
+        $gpsSyncApiUrl = [System.Environment]::GetEnvironmentVariable("GPS_SYNC_API_URLS","Process")
+        if (-not $gpsSyncApiUrl) {
+            $gpsSyncApiUrl = [System.Environment]::GetEnvironmentVariable("GPS_SYNC_API_URL","Process")
+        }
+        $gpsSyncDeviceId = [System.Environment]::GetEnvironmentVariable("GPS_SYNC_DEVICE_ID","Process")
+        if (-not $gpsSyncDeviceId) { $gpsSyncDeviceId = "align-m4p-top-aircraft" }
+        $gpsSyncDeviceName = [System.Environment]::GetEnvironmentVariable("GPS_SYNC_DEVICE_NAME","Process")
+        if (-not $gpsSyncDeviceName) { $gpsSyncDeviceName = "M4P TOP Aircraft" }
+        $gpsSyncDeviceType = [System.Environment]::GetEnvironmentVariable("GPS_SYNC_DEVICE_TYPE","Process")
+        if (-not $gpsSyncDeviceType) { $gpsSyncDeviceType = "uav" }
         $gpsCsvJob = Start-Ap3GpsCsvWriter `
             -PythonExe $pythonExe `
             -WriterScript $gpsCsvScript `
@@ -401,10 +431,17 @@ if ($enableGpsCsv) {
             -MissionId $GpsMissionId `
             -IncomingDir $IncomingDir `
             -Altitude $GpsAltitude `
-            -MavlinkUrl $GpsMavlinkUrl
+            -MavlinkUrl $GpsMavlinkUrl `
+            -SyncApiUrl $gpsSyncApiUrl `
+            -SyncDeviceId $gpsSyncDeviceId `
+            -SyncDeviceName $gpsSyncDeviceName `
+            -SyncDeviceType $gpsSyncDeviceType
         $jobs += $gpsCsvJob
         Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
         Info "   GPS CSV target: $gpsCsvTarget"
+        if ($gpsSyncApiUrl) {
+            Info "   GPS sync target: $gpsSyncApiUrl"
+        }
         if ($gpsCsvJob.HasExited) {
             Warn "AP3 GPS CSV writer exited immediately; it will be restarted by the monitor loop."
         } else {
@@ -478,7 +515,11 @@ try {
                     -MissionId $GpsMissionId `
                     -IncomingDir $IncomingDir `
                     -Altitude $GpsAltitude `
-                    -MavlinkUrl $GpsMavlinkUrl
+                    -MavlinkUrl $GpsMavlinkUrl `
+                    -SyncApiUrl $gpsSyncApiUrl `
+                    -SyncDeviceId $gpsSyncDeviceId `
+                    -SyncDeviceName $gpsSyncDeviceName `
+                    -SyncDeviceType $gpsSyncDeviceType
                 $jobs += $gpsCsvJob
                 Info "   AP3 GPS CSV PID: $($gpsCsvJob.Id)  log: .logs\ap3_gps_csv.log"
             }
