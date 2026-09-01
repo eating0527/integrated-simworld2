@@ -18,6 +18,7 @@ tools/platform-tools/
 tools/platform-tools-latest-windows.zip
 tools/scrcpy/scrcpy-win64-*/
 tools/scrcpy/*.zip
+/cloudflared/cloudflared.exe
 
 ## IDE、代理與作業系統設定
 .DS_Store
@@ -54,10 +55,12 @@ __pycache__/
 
 ## Runtime mission 與暫存輸出
 *mission_*/
+/incoming/
 /tmp/
 /.tmp/
 /outputs/
 /work/
+backend/app/uploads/trajectory_events/
 
 ## 生成圖、地圖、場景與索引
 *.blend
