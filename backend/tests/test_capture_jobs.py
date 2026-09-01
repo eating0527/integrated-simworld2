@@ -814,7 +814,7 @@ class Ap3FreshnessTests(unittest.TestCase):
         self.assertEqual(dashboard.usrp.mission_id, state.mission_id)
         self.assertEqual(dashboard.overall_state, "degraded")
 
-    def test_fresh_sample_does_not_resume_health_reconciling_independent_child(self):
+    def test_ready_health_recovers_reconciling_independent_child(self):
         state = self.coordinator.start_uav()
         from app.device_health import HealthResult
 
@@ -825,20 +825,21 @@ class Ap3FreshnessTests(unittest.TestCase):
         }
         degraded = self.coordinator.status("test")
         self.assertEqual(degraded.uav.phase, "reconciling")
-        deadline = degraded.uav.resume_deadline_at
 
         self.now[0] += timedelta(seconds=1)
-        observed = self.coordinator.record_gps_sample(
-            state.mission_id,
-            self.now[0].isoformat(),
-        )
+        self.health.poll.return_value = {
+            "ap3": HealthResult("ap3", "ready", 0.0, ""),
+            "raspi": HealthResult("raspi", "ready", 0.0, ""),
+        }
+        observed = self.coordinator.status("test")
 
         self.assertEqual(observed.mission_id, state.mission_id)
-        self.assertEqual(observed.uav.service, "presumed_running")
-        self.assertEqual(observed.uav.phase, "reconciling")
-        self.assertEqual(observed.uav.connection, "offline")
-        self.assertEqual(observed.uav.last_sample_at, "2026-08-12T00:00:12+00:00")
-        self.assertEqual(observed.uav.resume_deadline_at, deadline)
+        self.assertEqual(observed.uav.service, "running")
+        self.assertEqual(observed.uav.phase, "recording")
+        self.assertEqual(observed.uav.connection, "ready")
+        self.assertEqual(observed.uav.error, "")
+        self.assertIsNone(observed.uav.disconnected_at)
+        self.assertIsNone(observed.uav.resume_deadline_at)
         self.assertEqual(len(self.coordinator.store.list()), 1)
 
     def test_fresh_sample_and_live_process_remain_running(self):
@@ -1527,6 +1528,37 @@ class BindCoordinatorTests(unittest.TestCase):
 
         self.popen.assert_not_called()
         self.backend.start_capture_job.assert_not_called()
+
+    def test_startup_cleanup_releases_stale_bound_capture_lock(self):
+        state = self.coordinator.store.create(
+            bind=True,
+            selected_usrp_mode="usrp",
+            target="bind",
+            mission_id="stale_bound",
+        )
+        state.started_at = "2026-08-20T06:51:08+00:00"
+        state.uav.connection = "offline"
+        state.uav.service = "failed"
+        state.uav.file = "failed"
+        state.uav.phase = "failed"
+        state.uav.error = "UAV capture process is no longer owned by the backend"
+        state.usrp.connection = "offline"
+        state.usrp.service = "presumed_running"
+        state.usrp.file = "recording"
+        state.usrp.phase = "reconciling"
+        state.usrp.error = "SSH failed: timed out"
+        self.coordinator.store.save(state)
+
+        cleared = self.coordinator.clear_startup_locks()
+        started = self.coordinator.start_uav()
+
+        stale = self.coordinator.store.load("stale_bound")
+        self.assertEqual(len(cleared), 1)
+        self.assertEqual(stale.usrp.service, "failed")
+        self.assertEqual(stale.usrp.file, "failed")
+        self.assertEqual(stale.usrp.phase, "failed")
+        self.assertIn("startup", stale.usrp.error)
+        self.assertEqual(started.uav.service, "running")
 
     def test_bind_preflight_reports_each_device_without_creating_mission(self):
         from app.capture_jobs import CapturePreflightError
@@ -2674,6 +2706,47 @@ class NoiseUploadTests(unittest.TestCase):
         completed = self.coordinator.store.load("noise_upload")
         self.assertEqual(completed.usrp.file, "uploaded")
         self.assertEqual(completed.usrp.upload_state, "success")
+
+    def test_usrp_upload_keeps_a_local_noise_copy_before_remote_delivery(self):
+        current = self.coordinator.store.load("noise_upload")
+        current.usrp.service = "running"
+        current.usrp.file = "recording"
+        self.coordinator.store.save(current)
+        self.coordinator.usrp_backend.stop_capture_job.return_value = {
+            "service_state": "stopped",
+            "mission_state": {
+                "mission_id": "noise_upload",
+                "state": "stopped",
+                "upload_state": "upload_pending",
+            },
+        }
+
+        def download(mode, mission_id, local_path):
+            self.assertEqual(mode, "usrp")
+            self.assertEqual(mission_id, "noise_upload")
+            Path(local_path).write_text("time_stamp,power\\n", encoding="utf-8")
+            return local_path
+
+        self.coordinator.usrp_backend.download_capture_noise.side_effect = download
+        self.coordinator.usrp_backend.upload_capture_job.return_value = {
+            "mission_state": {"mission_id": "noise_upload", "upload_state": "uploaded"},
+        }
+
+        self.coordinator.stop_usrp("noise_upload")
+        completed = None
+        for _ in range(50):
+            try:
+                completed = self.coordinator.store.load("noise_upload")
+            except PermissionError:
+                time.sleep(0.01)
+                continue
+            if completed.usrp.file == "uploaded":
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(completed)
+        assert completed is not None
+        self.assertEqual(completed.usrp.path, str(self.root / "noise_upload" / "noise.csv"))
+        self.assertTrue((self.root / "noise_upload" / "noise.csv").is_file())
 
     def test_usrp_status_reconciles_orphaned_upload_job(self):
         current = self.coordinator.store.load("noise_upload")

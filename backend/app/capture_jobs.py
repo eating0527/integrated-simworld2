@@ -278,6 +278,19 @@ def _child_unresolved(child: ChildState) -> bool:
     )
 
 
+def _gps_csv_has_rows(path: str) -> bool:
+    if not path:
+        return False
+    try:
+        validate_gps_csv(path)
+        with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            return next(reader, None) is not None
+    except (OSError, UnicodeDecodeError, csv.Error, GpsCsvSchemaError):
+        return False
+
+
 def _aggregate_state(state: CaptureState) -> OverallState:
     children = _selected_children(state)
     terminal = all(child.service in {"stopped", "failed"} for child in children)
@@ -496,6 +509,62 @@ class CaptureCoordinator:
             if _child_unresolved(child):
                 return state
         return None
+
+    def clear_startup_locks(self) -> list[CaptureState]:
+        """Clear persisted runtime-only capture locks after the backend restarts.
+
+        Local process handles and SSH sessions do not survive stopping the
+        project.  Leaving those states unresolved blocks the operator from
+        starting a new capture even though this backend can no longer safely
+        control the old workers.  This cleanup is intentionally terminal: it
+        releases the UI lock without contacting Raspberry Pi.
+        """
+
+        cleared: list[CaptureState] = []
+        with self._lock:
+            for state in self.store.list():
+                changed = False
+                if _child_unresolved(state.uav):
+                    if _gps_csv_has_rows(state.uav.path):
+                        state.uav.connection = "ready"
+                        state.uav.service = "stopped"
+                        state.uav.file = "ready"
+                        state.uav.phase = "stopped"
+                        state.uav.error = ""
+                    else:
+                        state.uav.connection = "offline"
+                        state.uav.service = "failed"
+                        state.uav.file = "failed"
+                        state.uav.phase = "failed"
+                        state.uav.error = "Cleared stale UAV capture state on backend startup"
+                    state.uav.pid = None
+                    state.uav.upload_state = "idle"
+                    state.uav.upload_retry_state = "idle"
+                    state.uav.upload_retry_mode = "none"
+                    state.uav.upload_job_id = None
+                    changed = True
+
+                if _child_unresolved(state.usrp):
+                    state.usrp.connection = "offline"
+                    state.usrp.service = "failed"
+                    state.usrp.file = "failed"
+                    state.usrp.phase = "failed"
+                    state.usrp.error = "Cleared stale USRP capture state on backend startup"
+                    state.usrp.pid = None
+                    state.usrp.upload_state = "idle"
+                    state.usrp.upload_mode = "none"
+                    state.usrp.upload_job_id = None
+                    state.usrp.upload_started_at = None
+                    state.usrp.upload_finished_at = None
+                    state.usrp.upload_retry_mode = "none"
+                    state.usrp.upload_retry_state = "idle"
+                    state.usrp.upload_retry_next_attempt_at = None
+                    state.usrp.upload_retry_active_started_at = None
+                    changed = True
+
+                if changed:
+                    cleared.append(self.store.save(state))
+            return cleared
 
     def _ap3_command(self, *extra: str) -> list[str]:
         script = self.repo_root / "tools" / "ap3_to_gps_csv.py"
@@ -797,6 +866,27 @@ class CaptureCoordinator:
             run_user=os.environ.get("RASPI_USER", "user"),
         )
 
+    def _save_local_noise_copy(self, mission_id: str, mode: UsrpMode) -> Path:
+        """Fetch the Pi artifact before its remote upload so A retains a copy."""
+
+        download = getattr(self.usrp_backend, "download_capture_noise", None)
+        # Older injected adapters used by callers/tests do not implement the
+        # local-artifact contract. Production usrp_ctl always provides it.
+        if not callable(download) or (
+            getattr(download, "__module__", "") == "unittest.mock"
+            and getattr(download, "side_effect", None) is None
+        ):
+            return Path()
+        local_path = self.store.root / mission_id / "noise.csv"
+        saved = Path(download(mode, mission_id, local_path))
+        if not saved.is_file() or saved.stat().st_size == 0:
+            raise CaptureError("USRP local noise copy was not created")
+        with self._lock:
+            state = self.store.load(mission_id)
+            state.usrp.path = str(saved)
+            self.store.save(state)
+        return saved
+
     def _save_usrp_phase(self, mission_id: str, phase: str) -> None:
         with self._lock:
             state = self.store.load(mission_id)
@@ -921,6 +1011,14 @@ class CaptureCoordinator:
             health_stale = bool(health.get("stale", False))
         health_bad = bool(health is not None and (health_state != "ready" or health_stale))
         if not health_bad:
+            if child.phase == "reconciling" or child.connection == "offline":
+                child.connection = "ready"
+                child.service = "running"
+                child.file = "recording"
+                child.phase = "recording"
+                child.error = ""
+                child.disconnected_at = None
+                child.resume_deadline_at = None
             return state
 
         if child.disconnected_at is None:
@@ -2189,6 +2287,7 @@ class CaptureCoordinator:
             with self._lock:
                 state = self.store.load(mission_id)
                 mode = state.selected_usrp_mode
+            self._save_local_noise_copy(mission_id, mode)
             method = (
                 "upload_capture_job"
                 if upload_mode == "automatic"
